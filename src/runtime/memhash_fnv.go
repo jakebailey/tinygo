@@ -1,7 +1,8 @@
-//go:build (!wasip1 && !runtime_memhash_tsip && !runtime_memhash_leveldb) || (wasip1 && runtime_memhash_fnv)
+//go:build runtime_memhash_fnv
 
-// This is the default for all targets except WASI, unless a more specific build
-// tag is set.
+// FNV-1a hash, processing one byte at a time. This produces the smallest
+// code but is slower than LevelDB's hash for keys longer than a few bytes.
+// Use the runtime_memhash_fnv build tag to select this implementation.
 
 package runtime
 
