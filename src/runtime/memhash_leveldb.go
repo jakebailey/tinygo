@@ -1,4 +1,4 @@
-//go:build !runtime_memhash_fnv && !runtime_memhash_tsip
+//go:build !runtime_memhash_fnv && !runtime_memhash_tsip && !runtime_memhash_wyhash
 
 // LevelDB's hash function, processing 4 bytes at a time. This is the
 // default hash for all targets.
