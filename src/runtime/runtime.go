@@ -79,9 +79,20 @@ func memequal(x, y unsafe.Pointer, n uintptr) bool {
 	if x == y {
 		return true
 	}
-	// Compare word-sized chunks when both pointers are aligned.
+
+	// Compare word-sized chunks when the pointers can be advanced to the same
+	// alignment. This keeps strict-alignment targets safe while still handling
+	// common unaligned slices into the same allocation efficiently.
 	const wordSize = unsafe.Sizeof(uintptr(0))
-	if uintptr(x)%wordSize == 0 && uintptr(y)%wordSize == 0 {
+	if uintptr(x)&(wordSize-1) == uintptr(y)&(wordSize-1) {
+		for n > 0 && uintptr(x)&(wordSize-1) != 0 {
+			if *(*uint8)(x) != *(*uint8)(y) {
+				return false
+			}
+			x = unsafe.Add(x, 1)
+			y = unsafe.Add(y, 1)
+			n--
+		}
 		for n >= wordSize {
 			if *(*uintptr)(x) != *(*uintptr)(y) {
 				return false
@@ -91,7 +102,27 @@ func memequal(x, y unsafe.Pointer, n uintptr) bool {
 			n -= wordSize
 		}
 	}
-	// Compare remaining bytes (or all bytes if unaligned).
+
+	if n >= 4 && uintptr(x)&3 == 0 && uintptr(y)&3 == 0 {
+		for n >= 4 {
+			if *(*uint32)(x) != *(*uint32)(y) {
+				return false
+			}
+			x = unsafe.Add(x, 4)
+			y = unsafe.Add(y, 4)
+			n -= 4
+		}
+	}
+	if n >= 2 && uintptr(x)&1 == 0 && uintptr(y)&1 == 0 {
+		for n >= 2 {
+			if *(*uint16)(x) != *(*uint16)(y) {
+				return false
+			}
+			x = unsafe.Add(x, 2)
+			y = unsafe.Add(y, 2)
+			n -= 2
+		}
+	}
 	for n > 0 {
 		if *(*uint8)(x) != *(*uint8)(y) {
 			return false
