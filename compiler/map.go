@@ -11,7 +11,10 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-const hashArrayUnrollLimit = 4
+const (
+	hashArrayUnrollLimit = 4
+	maxInlineMemEqual    = 64
+)
 
 const (
 	hashmapBucketSlots  = 8
@@ -52,7 +55,12 @@ func (b *builder) createMakeMap(expr *ssa.MakeMap) (llvm.Value, error) {
 		equalFn = b.getRuntimeFunctionValue("hashmapStringEqual", hashmapKeyEqualSignature())
 	} else if hashmapIsBinaryKey(keyType) {
 		hashFn = b.getRuntimeFunctionValue("hash32", hashmapKeyHashSignature())
-		equalFn = b.getRuntimeFunctionValue("memequal", hashmapKeyEqualSignature())
+		if keySize <= maxInlineMemEqual {
+			fn := b.getOrGenerateKeyEqualFunc(keyType)
+			equalFn = b.createFuncValue(fn, llvm.ConstNull(b.dataPtrType), hashmapKeyEqualSignature())
+		} else {
+			equalFn = b.getRuntimeFunctionValue("memequal", hashmapKeyEqualSignature())
+		}
 	} else {
 		fn := b.getOrGenerateKeyHashFunc(keyType)
 		hashFn = b.createFuncValue(fn, llvm.ConstNull(b.dataPtrType), hashmapKeyHashSignature())
@@ -435,6 +443,55 @@ func (b *builder) getOrGenerateKeyEqualFunc(keyType types.Type) llvm.Value {
 	return fn
 }
 
+// createMemoryEqual emits inline raw-memory equality for small fixed-size
+// regions. Larger comparisons are left to runtime.memequal.
+func (b *builder) createMemoryEqual(xPtr, yPtr llvm.Value, size uint64) llvm.Value {
+	if size == 0 {
+		return llvm.ConstInt(b.ctx.Int1Type(), 1, false)
+	}
+	if size > maxInlineMemEqual {
+		llvmSize := llvm.ConstInt(b.uintptrType, size, false)
+		return b.createRuntimeCall("memequal", []llvm.Value{xPtr, yPtr, llvmSize}, "eq")
+	}
+
+	result := llvm.ConstInt(b.ctx.Int1Type(), 1, false)
+	offset := uint64(0)
+	chunks := []struct {
+		size uint64
+		typ  llvm.Type
+	}{
+		{8, b.ctx.Int64Type()},
+		{4, b.ctx.Int32Type()},
+		{2, b.ctx.Int16Type()},
+		{1, b.ctx.Int8Type()},
+	}
+	maxLoadSize := uint64(b.uintptrType.IntTypeWidth() / 8)
+	for _, chunk := range chunks {
+		if chunk.size > maxLoadSize {
+			continue
+		}
+		for size-offset >= chunk.size {
+			x := b.createMemoryEqualLoad(xPtr, offset, chunk.typ)
+			y := b.createMemoryEqualLoad(yPtr, offset, chunk.typ)
+			eq := b.CreateICmp(llvm.IntEQ, x, y, "")
+			result = b.CreateAnd(result, eq, "")
+			offset += chunk.size
+		}
+	}
+	return result
+}
+
+func (b *builder) createMemoryEqualLoad(ptr llvm.Value, offset uint64, typ llvm.Type) llvm.Value {
+	if offset != 0 {
+		ptr = b.CreateInBoundsGEP(b.ctx.Int8Type(), ptr, []llvm.Value{
+			llvm.ConstInt(b.uintptrType, offset, false),
+		}, "")
+	}
+	value := b.CreateLoad(typ, ptr, "")
+	value.SetAlignment(1)
+	return value
+}
+
 // generateKeyHash generates IR that hashes a key value. Returns the i32 hash.
 func (b *builder) generateKeyHash(keyType types.Type, llvmKeyType llvm.Type, keyPtr llvm.Value, seed llvm.Value) llvm.Value {
 	switch keyType := keyType.Underlying().(type) {
@@ -563,6 +620,10 @@ func (b *builder) generateKeyHash(keyType types.Type, llvmKeyType llvm.Type, key
 // generateKeyEqual generates IR that compares two key values for equality.
 // Returns an i1 result.
 func (b *builder) generateKeyEqual(keyType types.Type, llvmKeyType llvm.Type, xPtr, yPtr llvm.Value, fn llvm.Value) llvm.Value {
+	if hashmapIsBinaryKey(keyType) {
+		return b.createMemoryEqual(xPtr, yPtr, b.targetData.TypeAllocSize(llvmKeyType))
+	}
+
 	switch keyType := keyType.Underlying().(type) {
 	case *types.Basic:
 		if keyType.Info()&types.IsString != 0 {
@@ -599,13 +660,11 @@ func (b *builder) generateKeyEqual(keyType types.Type, llvmKeyType llvm.Type, xP
 			imagEq := b.CreateFCmp(llvm.FloatOEQ, xImag, yImag, "eq.imag")
 			return b.CreateAnd(realEq, imagEq, "")
 		}
-		// Integer/boolean: compare raw bytes.
-		size := llvm.ConstInt(b.uintptrType, b.targetData.TypeAllocSize(llvmKeyType), false)
-		return b.createRuntimeCall("memequal", []llvm.Value{xPtr, yPtr, size}, "eq")
-	case *types.Pointer, *types.Chan:
-		// Pointers and channels: compare as raw pointer-sized bytes.
-		size := llvm.ConstInt(b.uintptrType, b.targetData.TypeAllocSize(llvmKeyType), false)
-		return b.createRuntimeCall("memequal", []llvm.Value{xPtr, yPtr, size}, "eq")
+		panic(fmt.Sprintf("unhandled basic type for equal generation: %s", keyType.String()))
+	case *types.Pointer:
+		panic(fmt.Sprintf("unhandled binary type for equal generation: %s", keyType.String()))
+	case *types.Chan:
+		return b.createMemoryEqual(xPtr, yPtr, b.targetData.TypeAllocSize(llvmKeyType))
 	case *types.Interface:
 		// Interface: use runtime interface equality.
 		size := llvm.ConstInt(b.uintptrType, b.targetData.TypeAllocSize(llvmKeyType), false)
@@ -633,11 +692,6 @@ func (b *builder) generateKeyEqual(keyType types.Type, llvmKeyType llvm.Type, xP
 		elemType := keyType.Elem()
 		llvmElemType := b.getLLVMType(elemType)
 		arrayLen := keyType.Len()
-		if hashmapIsBinaryKey(elemType) {
-			// All elements are binary-comparable; compare the entire array.
-			size := llvm.ConstInt(b.uintptrType, b.targetData.TypeAllocSize(llvmKeyType), false)
-			return b.createRuntimeCall("memequal", []llvm.Value{xPtr, yPtr, size}, "eq")
-		}
 		if arrayLen == 0 {
 			return llvm.ConstInt(b.ctx.Int1Type(), 1, false)
 		}
