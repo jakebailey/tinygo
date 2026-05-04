@@ -18,6 +18,7 @@ func TestInterp(t *testing.T) {
 		"copy",
 		"interface",
 		"revert",
+		"external",
 		"alloc",
 	} {
 		name := name // make local to this closure
