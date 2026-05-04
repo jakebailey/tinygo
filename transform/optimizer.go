@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go/token"
 	"os"
+	"strings"
 
 	"github.com/tinygo-org/tinygo/compileopts"
 	"github.com/tinygo-org/tinygo/compiler/ircheck"
@@ -167,13 +168,7 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 	// ThinLTO.
 	po := llvm.NewPassBuilderOptions()
 	defer po.Dispose()
-	pipelineLevel := optLevel
-	if llvm.VersionMajor >= 23 && (pipelineLevel == "Os" || pipelineLevel == "Oz") {
-		// LLVM 23 removed the Os/Oz pipeline levels. Use O2 instead, since
-		// the optsize/minsize function attributes are already set elsewhere.
-		pipelineLevel = "O2"
-	}
-	passes := fmt.Sprintf("thinlto-pre-link<%s>", pipelineLevel)
+	passes := finalOptimizationPipeline(config, optLevel)
 	if speedLevel > 0 {
 		// Remove late-folded branches before GC roots make their globals escape.
 		// See https://github.com/tinygo-org/tinygo/pull/6256#issuecomment-6879072850.
@@ -367,6 +362,18 @@ func removeGlobalAllocPromotionMarker(mod llvm.Module) {
 		call.EraseFromParentAsInstruction()
 	}
 	marker.EraseFromParentAsFunction()
+}
+
+func finalOptimizationPipeline(config *compileopts.Config, optLevel string) string {
+	if strings.HasPrefix(config.Triple(), "wasm32-") && optLevel == "O2" {
+		// Wasm is already linked into a single module here, and the O1 default
+		// pipeline is much cheaper while still producing compact output.
+		return "default<O1>"
+	}
+	if llvm.VersionMajor >= 23 && (optLevel == "Os" || optLevel == "Oz") {
+		optLevel = "O2"
+	}
+	return fmt.Sprintf("thinlto-pre-link<%s>", optLevel)
 }
 
 // functionsUsedInTransform is a list of function symbols that may be used
