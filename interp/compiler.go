@@ -468,6 +468,7 @@ var instructionNameMap = [...]string{
 	llvm.Load:          "load",
 	llvm.Store:         "store",
 	llvm.GetElementPtr: "getelementptr",
+	llvm.Fence:         "fence",
 	llvm.AtomicCmpXchg: "cmpxchg",
 	llvm.AtomicRMW:     "atomicrmw",
 
