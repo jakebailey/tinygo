@@ -55,6 +55,11 @@ LLVMValueRef LLVMGoGetInlineAsm(LLVMTypeRef Ty, char *AsmString,
                                 LLVMBool IsAlignStack,
                                 LLVMInlineAsmDialect Dialect, LLVMBool CanThrow);
 
+LLVMBool LLVMGoInstructionMayReadFromMemory(LLVMValueRef Inst);
+LLVMBool LLVMGoInstructionMayWriteToMemory(LLVMValueRef Inst);
+LLVMBool LLVMGoInstructionMayReadOrWriteMemory(LLVMValueRef Inst);
+LLVMBool LLVMGoInstructionMayHaveSideEffects(LLVMValueRef Inst);
+
 #ifdef __cplusplus
 }
 #endif
