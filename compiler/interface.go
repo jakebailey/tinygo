@@ -323,9 +323,11 @@ func (c *context) getTypeCode(typ types.Type) llvm.Value {
 			if depth < compileopts.MaxTypePointerDepth {
 				// For shallow pointers to pointers, increase the pointer by 1.
 				ptr := c.getTypeCode(typ.Elem())
-				return llvm.ConstGEP(c.i8, ptr, []llvm.Value{
+				typeCode := llvm.ConstGEP(c.i8, ptr, []llvm.Value{
 					llvm.ConstInt(c.i32, 1, false),
 				})
+				c.typeCodes.Set(typ, typeCode)
+				return typeCode
 			}
 		}
 	}
