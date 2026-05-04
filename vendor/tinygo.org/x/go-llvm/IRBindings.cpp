@@ -106,3 +106,19 @@ LLVMValueRef LLVMGoGetUnderlyingObject(LLVMValueRef V) {
 unsigned LLVMGoCountInstructions(LLVMValueRef Fn) {
   return unwrap<Function>(Fn)->getInstructionCount();
 }
+
+LLVMBool LLVMGoInstructionMayReadFromMemory(LLVMValueRef Inst) {
+  return unwrap<Instruction>(Inst)->mayReadFromMemory();
+}
+
+LLVMBool LLVMGoInstructionMayWriteToMemory(LLVMValueRef Inst) {
+  return unwrap<Instruction>(Inst)->mayWriteToMemory();
+}
+
+LLVMBool LLVMGoInstructionMayReadOrWriteMemory(LLVMValueRef Inst) {
+  return unwrap<Instruction>(Inst)->mayReadOrWriteMemory();
+}
+
+LLVMBool LLVMGoInstructionMayHaveSideEffects(LLVMValueRef Inst) {
+  return unwrap<Instruction>(Inst)->mayHaveSideEffects();
+}
