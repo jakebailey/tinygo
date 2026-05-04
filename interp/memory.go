@@ -26,6 +26,12 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+const (
+	// These opcodes are in llvm-c/Core.h but are not exposed by x/go-llvm.
+	llvmAtomicCmpXchg llvm.Opcode = 56
+	llvmAtomicRMW     llvm.Opcode = 57
+)
+
 // An object is a memory buffer that may be an already existing global or a
 // global created with runtime.alloc or the alloca instruction. If llvmGlobal is
 // set, that's the global for this object, otherwise it needs to be created (if
@@ -152,35 +158,9 @@ func (mv *memoryView) markExternal(llvmValue llvm.Value, mark uint8) error {
 					}
 				}
 			} else {
-				// This is a function. Go through all instructions and mark all
-				// objects in there.
-				for bb := llvmValue.FirstBasicBlock(); !bb.IsNil(); bb = llvm.NextBasicBlock(bb) {
-					for inst := bb.FirstInstruction(); !inst.IsNil(); inst = llvm.NextInstruction(inst) {
-						opcode := inst.InstructionOpcode()
-						if opcode == llvm.Call {
-							calledValue := inst.CalledValue()
-							if !calledValue.IsAFunction().IsNil() {
-								functionName := calledValue.Name()
-								if functionName == "llvm.dbg.value" || strings.HasPrefix(functionName, "llvm.lifetime.") {
-									continue
-								}
-							}
-						}
-						if opcode == llvm.Br || opcode == llvm.Switch {
-							// These don't affect memory. Skipped here because
-							// they also have a label as operand.
-							continue
-						}
-						numOperands := inst.OperandsCount()
-						for i := 0; i < numOperands; i++ {
-							// Using mark '2' (which means read/write access)
-							// because this might be a store instruction.
-							err := mv.markExternal(inst.Operand(i), 2)
-							if err != nil {
-								return err
-							}
-						}
-					}
+				err := mv.markExternalFunction(llvmValue)
+				if err != nil {
+					return err
 				}
 			}
 		}
@@ -233,6 +213,156 @@ func (mv *memoryView) markExternal(llvmValue llvm.Value, mark uint8) error {
 			}
 		default:
 			return errors.New("interp: unknown type kind in markExternalValue")
+		}
+	}
+	return nil
+}
+
+func (mv *memoryView) markExternalFunction(llvmFn llvm.Value) error {
+	for bb := llvmFn.FirstBasicBlock(); !bb.IsNil(); bb = llvm.NextBasicBlock(bb) {
+		for inst := bb.FirstInstruction(); !inst.IsNil(); inst = llvm.NextInstruction(inst) {
+			err := mv.markExternalInstruction(inst)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (mv *memoryView) markExternalInstruction(inst llvm.Value) error {
+	// TODO: Replace the memory-instruction operand cases with an LLVM
+	// MemoryLocation binding once it is available across supported LLVM
+	// versions. LLVM already knows the pointer operand for loads, stores,
+	// atomics, and va_arg.
+	switch inst.InstructionOpcode() {
+	case llvm.Load:
+		return mv.markExternalPointer(inst.Operand(0), 1)
+	case llvm.Store:
+		return mv.markExternalPointer(inst.Operand(1), 2)
+	case llvm.Call, llvm.Invoke:
+		return mv.markExternalCall(inst)
+	case llvmAtomicCmpXchg, llvmAtomicRMW:
+		return mv.markExternalPointer(inst.Operand(0), 2)
+	case llvm.VAArg:
+		return mv.markExternalPointer(inst.Operand(0), 2)
+	default:
+		// Other instructions don't directly access memory. Pointer operands
+		// are followed when a load, store, or call actually uses their result.
+		return nil
+	}
+}
+
+func (mv *memoryView) markExternalCall(inst llvm.Value) error {
+	calledValue := inst.CalledValue()
+	if ignoreExternalCall(calledValue) {
+		return nil
+	}
+
+	// TODO: Replace this operand walk with CallBase argument and memory-effect
+	// bindings. That would let interp use readonly/readnone attributes instead
+	// of marking every pointer argument as a possible store.
+	numOperands := inst.OperandsCount()
+	for i := 0; i < numOperands-1; i++ {
+		op := inst.Operand(i)
+		if op.Type().TypeKind() == llvm.PointerTypeKind {
+			err := mv.markExternalPointer(op, 2)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if !calledValue.IsAFunction().IsNil() {
+		return mv.markExternalStore(calledValue)
+	}
+	if calledValue.Type().TypeKind() == llvm.PointerTypeKind {
+		return mv.markExternalPointer(calledValue, 2)
+	}
+	return nil
+}
+
+func ignoreExternalCall(calledValue llvm.Value) bool {
+	if calledValue.IsAFunction().IsNil() {
+		return false
+	}
+	functionName := calledValue.Name()
+	return functionName == "llvm.dbg.value" || strings.HasPrefix(functionName, "llvm.lifetime.")
+}
+
+func (mv *memoryView) markExternalPointer(llvmValue llvm.Value, mark uint8) error {
+	return mv.markExternalPointerSeen(llvmValue, mark, make(map[llvm.Value]struct{}))
+}
+
+func (mv *memoryView) markExternalPointerSeen(llvmValue llvm.Value, mark uint8, seen map[llvm.Value]struct{}) error {
+	if llvmValue.IsNil() {
+		return nil
+	}
+	if _, ok := seen[llvmValue]; ok {
+		return nil
+	}
+	seen[llvmValue] = struct{}{}
+
+	// TODO: Consider replacing part of this pointer-origin tracing with LLVM's
+	// getUnderlyingObjects helpers. Interp still needs to keep the final object
+	// marking logic because it tracks its own memory objects.
+	if !llvmValue.IsAInstruction().IsNil() {
+		switch llvmValue.InstructionOpcode() {
+		case llvm.GetElementPtr, llvm.BitCast, llvm.IntToPtr, llvm.PtrToInt:
+			return mv.markExternalPointerSeen(llvmValue.Operand(0), mark, seen)
+		case llvm.Load:
+			return mv.markExternalPointerSeen(llvmValue.Operand(0), 1, seen)
+		case llvm.Select:
+			err := mv.markExternalPointerSeen(llvmValue.Operand(1), mark, seen)
+			if err != nil {
+				return err
+			}
+			return mv.markExternalPointerSeen(llvmValue.Operand(2), mark, seen)
+		case llvm.PHI:
+			for i := 0; i < llvmValue.IncomingCount(); i++ {
+				err := mv.markExternalPointerSeen(llvmValue.IncomingValue(i), mark, seen)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		case llvm.Add, llvm.Sub, llvm.Mul, llvm.UDiv, llvm.SDiv, llvm.URem, llvm.SRem, llvm.Shl, llvm.LShr, llvm.AShr, llvm.And, llvm.Or, llvm.Xor:
+			err := mv.markExternalPointerSeen(llvmValue.Operand(0), mark, seen)
+			if err != nil {
+				return err
+			}
+			return mv.markExternalPointerSeen(llvmValue.Operand(1), mark, seen)
+		case llvm.ExtractValue:
+			return mv.markExternalPointerSeen(llvmValue.Operand(0), mark, seen)
+		case llvm.Call, llvm.Invoke:
+			return mv.markExternalCallResult(llvmValue, mark, seen)
+		default:
+			return nil
+		}
+	}
+	if !llvmValue.IsAArgument().IsNil() {
+		return nil
+	}
+	return mv.markExternal(llvmValue, mark)
+}
+
+func (mv *memoryView) markExternalCallResult(inst llvm.Value, mark uint8, seen map[llvm.Value]struct{}) error {
+	calledValue := inst.CalledValue()
+	if calledValue.IsAFunction().IsNil() || ignoreExternalCall(calledValue) {
+		return nil
+	}
+	if _, ok := seen[calledValue]; ok {
+		return nil
+	}
+	seen[calledValue] = struct{}{}
+	for bb := calledValue.FirstBasicBlock(); !bb.IsNil(); bb = llvm.NextBasicBlock(bb) {
+		for retInst := bb.FirstInstruction(); !retInst.IsNil(); retInst = llvm.NextInstruction(retInst) {
+			if retInst.InstructionOpcode() != llvm.Ret || retInst.OperandsCount() == 0 {
+				continue
+			}
+			err := mv.markExternalPointerSeen(retInst.Operand(0), mark, seen)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
