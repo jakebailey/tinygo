@@ -703,7 +703,21 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 		dependencies: []*compileJob{programJob},
 		result:       objfile,
 		run: func(*compileJob) error {
-			llvmBuf := llvm.WriteThinLTOBitcodeToMemoryBuffer(mod)
+			var llvmBuf llvm.MemoryBuffer
+			if arch := strings.Split(config.Triple(), "-")[0]; arch == "wasm32" {
+				// The Go module has already been linked and optimized. Avoid
+				// running wasm-ld ThinLTO codegen over it again, which is very
+				// expensive for large modules.
+				var err error
+				llvmBuf, err = machine.EmitToMemoryBuffer(mod, llvm.ObjectFile)
+				if err != nil {
+					return err
+				}
+			} else {
+				// Keep ThinLTO for non-wasm targets, where linker LTO is
+				// important for binary size.
+				llvmBuf = llvm.WriteThinLTOBitcodeToMemoryBuffer(mod)
+			}
 			defer llvmBuf.Dispose()
 			return os.WriteFile(objfile, llvmBuf.Bytes(), 0666)
 		},
