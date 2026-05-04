@@ -15,6 +15,7 @@
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -84,4 +85,20 @@ LLVMValueRef LLVMGoGetInlineAsm(LLVMTypeRef Ty, char *AsmString,
                           ConstraintsSize, HasSideEffects,
                           IsAlignStack,
                           Dialect, CanThrow);
+}
+
+LLVMBool LLVMGoInstructionMayReadFromMemory(LLVMValueRef Inst) {
+  return unwrap<Instruction>(Inst)->mayReadFromMemory();
+}
+
+LLVMBool LLVMGoInstructionMayWriteToMemory(LLVMValueRef Inst) {
+  return unwrap<Instruction>(Inst)->mayWriteToMemory();
+}
+
+LLVMBool LLVMGoInstructionMayReadOrWriteMemory(LLVMValueRef Inst) {
+  return unwrap<Instruction>(Inst)->mayReadOrWriteMemory();
+}
+
+LLVMBool LLVMGoInstructionMayHaveSideEffects(LLVMValueRef Inst) {
+  return unwrap<Instruction>(Inst)->mayHaveSideEffects();
 }
