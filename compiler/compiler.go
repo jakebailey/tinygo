@@ -77,6 +77,8 @@ type compilerContext struct {
 	ditypes          map[types.Type]llvm.Metadata
 	llvmTypes        typeutil.Map
 	interfaceTypes   typeutil.Map
+	typeCodes        typeutil.Map
+	typeMethodSets   typeutil.Map
 	machine          llvm.TargetMachine
 	targetData       llvm.TargetData
 	intType          llvm.Type
