@@ -78,6 +78,8 @@ type context struct {
 	ditypes                     map[types.Type]llvm.Metadata
 	llvmTypes                   typeutil.Map
 	interfaceTypes              typeutil.Map
+	typeCodes                   typeutil.Map
+	typeMethodSets              typeutil.Map
 	machine                     llvm.TargetMachine
 	targetData                  llvm.TargetData
 	void, i1, i8, i16, i32, i64 llvm.Type

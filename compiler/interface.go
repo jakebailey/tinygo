@@ -168,6 +168,9 @@ func isGenericMethod(fn *types.Func) bool {
 func (c *context) getTypeCode(typ types.Type) llvm.Value {
 	// Resolve alias types: alias types are resolved at compile time.
 	typ = types.Unalias(typ)
+	if value := c.typeCodes.At(typ); value != nil {
+		return value.(llvm.Value)
+	}
 
 	ms := c.program.MethodSets.MethodSet(typ)
 	_, isInterface := typ.Underlying().(*types.Interface)
@@ -200,9 +203,11 @@ func (c *context) getTypeCode(typ types.Type) llvm.Value {
 			if typstr := typ.String(); strings.HasPrefix(typstr, "*****") {
 				c.addError(token.NoPos, fmt.Sprintf("too many levels of pointers for typecode: %s", typstr))
 			}
-			return llvm.ConstGEP(c.i8, ptr, []llvm.Value{
+			typeCode := llvm.ConstGEP(c.i8, ptr, []llvm.Value{
 				llvm.ConstInt(c.i32, 1, false),
 			})
+			c.typeCodes.Set(typ, typeCode)
+			return typeCode
 		}
 	}
 
@@ -355,6 +360,7 @@ func (c *context) getTypeCode(typ types.Type) llvm.Value {
 		if isLocal {
 			c.interfaceTypes.Set(typ, global)
 		}
+		c.typeCodes.Set(typ, c.typeCodeValue(global, hasMethodSet))
 		metabyte := getTypeKind(typ)
 
 		// Precompute these so we don't have to calculate them at runtime.
@@ -590,6 +596,15 @@ func (c *context) getTypeCode(typ types.Type) llvm.Value {
 			global.AddMetadata(0, diglobal)
 		}
 	}
+	if value := c.typeCodes.At(typ); value != nil {
+		return value.(llvm.Value)
+	}
+	typeCode := c.typeCodeValue(global, hasMethodSet)
+	c.typeCodes.Set(typ, typeCode)
+	return typeCode
+}
+
+func (c *context) typeCodeValue(global llvm.Value, hasMethodSet bool) llvm.Value {
 	offset := uint64(0)
 	if hasMethodSet {
 		// The pointer to the method set is always the first element of the
@@ -1025,6 +1040,11 @@ func (c *context) registerSyntheticLocalTypes(fn *ssa.Function) {
 // getTypeMethodSet returns a reference (GEP) to a global method set. This
 // method set should be unreferenced after the interface lowering pass.
 func (c *context) getTypeMethodSet(typ types.Type) llvm.Value {
+	typ = types.Unalias(typ)
+	if value := c.typeMethodSets.At(typ); value != nil {
+		return value.(llvm.Value)
+	}
+
 	typeName, _ := c.getTypeCodeName(typ)
 	globalName := typeName + "$methodset"
 	global := c.mod.NamedGlobal(globalName)
@@ -1061,6 +1081,7 @@ func (c *context) getTypeMethodSet(typ types.Type) llvm.Value {
 		global.SetUnnamedAddr(true)
 		global.SetLinkage(llvm.LinkOnceODRLinkage)
 	}
+	c.typeMethodSets.Set(typ, global)
 	return global
 }
 
