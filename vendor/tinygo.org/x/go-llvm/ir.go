@@ -165,6 +165,9 @@ const (
 	Load          Opcode = C.LLVMLoad
 	Store         Opcode = C.LLVMStore
 	GetElementPtr Opcode = C.LLVMGetElementPtr
+	Fence         Opcode = C.LLVMFence
+	AtomicCmpXchg Opcode = C.LLVMAtomicCmpXchg
+	AtomicRMW     Opcode = C.LLVMAtomicRMW
 
 	// Cast Operators
 	Trunc    Opcode = C.LLVMTrunc
@@ -1212,10 +1215,22 @@ func (v Value) RemoveFromParentAsInstruction()     { C.LLVMInstructionRemoveFrom
 func (v Value) InstructionParent() (bb BasicBlock) { bb.C = C.LLVMGetInstructionParent(v.C); return }
 func (v Value) InstructionDebugLoc() (md Metadata) { md.C = C.LLVMInstructionGetDebugLoc(v.C); return }
 func (v Value) InstructionSetDebugLoc(md Metadata) { C.LLVMInstructionSetDebugLoc(v.C, md.C) }
-func (bb BasicBlock) FirstInstruction() (v Value)  { v.C = C.LLVMGetFirstInstruction(bb.C); return }
-func (bb BasicBlock) LastInstruction() (v Value)   { v.C = C.LLVMGetLastInstruction(bb.C); return }
-func NextInstruction(v Value) (rv Value)           { rv.C = C.LLVMGetNextInstruction(v.C); return }
-func PrevInstruction(v Value) (rv Value)           { rv.C = C.LLVMGetPreviousInstruction(v.C); return }
+func (v Value) InstructionMayReadFromMemory() bool {
+	return C.LLVMGoInstructionMayReadFromMemory(v.C) != 0
+}
+func (v Value) InstructionMayWriteToMemory() bool {
+	return C.LLVMGoInstructionMayWriteToMemory(v.C) != 0
+}
+func (v Value) InstructionMayReadOrWriteMemory() bool {
+	return C.LLVMGoInstructionMayReadOrWriteMemory(v.C) != 0
+}
+func (v Value) InstructionMayHaveSideEffects() bool {
+	return C.LLVMGoInstructionMayHaveSideEffects(v.C) != 0
+}
+func (bb BasicBlock) FirstInstruction() (v Value) { v.C = C.LLVMGetFirstInstruction(bb.C); return }
+func (bb BasicBlock) LastInstruction() (v Value)  { v.C = C.LLVMGetLastInstruction(bb.C); return }
+func NextInstruction(v Value) (rv Value)          { rv.C = C.LLVMGetNextInstruction(v.C); return }
+func PrevInstruction(v Value) (rv Value)          { rv.C = C.LLVMGetPreviousInstruction(v.C); return }
 
 // Operations on call sites
 func (v Value) SetInstructionCallConv(cc CallConv) {

@@ -26,12 +26,6 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-const (
-	// These opcodes are in llvm-c/Core.h but are not exposed by x/go-llvm.
-	llvmAtomicCmpXchg llvm.Opcode = 56
-	llvmAtomicRMW     llvm.Opcode = 57
-)
-
 // An object is a memory buffer that may be an already existing global or a
 // global created with runtime.alloc or the alloca instruction. If llvmGlobal is
 // set, that's the global for this object, otherwise it needs to be created (if
@@ -231,10 +225,6 @@ func (mv *memoryView) markExternalFunction(llvmFn llvm.Value) error {
 }
 
 func (mv *memoryView) markExternalInstruction(inst llvm.Value) error {
-	// TODO: Replace the memory-instruction operand cases with an LLVM
-	// MemoryLocation binding once it is available across supported LLVM
-	// versions. LLVM already knows the pointer operand for loads, stores,
-	// atomics, and va_arg.
 	switch inst.InstructionOpcode() {
 	case llvm.Load:
 		return mv.markExternalPointer(inst.Operand(0), 1)
@@ -242,11 +232,16 @@ func (mv *memoryView) markExternalInstruction(inst llvm.Value) error {
 		return mv.markExternalPointer(inst.Operand(1), 2)
 	case llvm.Call, llvm.Invoke:
 		return mv.markExternalCall(inst)
-	case llvmAtomicCmpXchg, llvmAtomicRMW:
+	case llvm.AtomicCmpXchg, llvm.AtomicRMW:
 		return mv.markExternalPointer(inst.Operand(0), 2)
 	case llvm.VAArg:
 		return mv.markExternalPointer(inst.Operand(0), 2)
+	case llvm.Fence:
+		return nil
 	default:
+		if inst.InstructionMayReadOrWriteMemory() {
+			return fmt.Errorf("interp: unhandled memory-accessing instruction in markExternalFunction: %s", inst.String())
+		}
 		// Other instructions don't directly access memory. Pointer operands
 		// are followed when a load, store, or call actually uses their result.
 		return nil
@@ -259,9 +254,6 @@ func (mv *memoryView) markExternalCall(inst llvm.Value) error {
 		return nil
 	}
 
-	// TODO: Replace this operand walk with CallBase argument and memory-effect
-	// bindings. That would let interp use readonly/readnone attributes instead
-	// of marking every pointer argument as a possible store.
 	numOperands := inst.OperandsCount()
 	for i := 0; i < numOperands-1; i++ {
 		op := inst.Operand(i)
@@ -302,9 +294,6 @@ func (mv *memoryView) markExternalPointerSeen(llvmValue llvm.Value, mark uint8, 
 	}
 	seen[llvmValue] = struct{}{}
 
-	// TODO: Consider replacing part of this pointer-origin tracing with LLVM's
-	// getUnderlyingObjects helpers. Interp still needs to keep the final object
-	// marking logic because it tracks its own memory objects.
 	if !llvmValue.IsAInstruction().IsNil() {
 		switch llvmValue.InstructionOpcode() {
 		case llvm.GetElementPtr, llvm.BitCast, llvm.IntToPtr, llvm.PtrToInt:
