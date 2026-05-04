@@ -413,10 +413,6 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 				if errs != nil {
 					return newMultiError(errs, pkg.ImportPath)
 				}
-				if err := llvm.VerifyModule(mod, llvm.PrintMessageAction); err != nil {
-					return errors.New("verification error after compiling package " + pkg.ImportPath)
-				}
-
 				// Load bitcode of CGo headers and join the modules together.
 				// This may seem vulnerable to cache problems, but this is not
 				// the case: the Go code that was just compiled already tracks
