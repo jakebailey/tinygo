@@ -6,7 +6,7 @@ target triple = "x86_64--linux"
 @effect.atomic = global i32 0
 @effect.cas = global i32 0
 @effect.returned = global i32 0
-@effect.after = local_unnamed_addr global i64 0
+@effect.after = local_unnamed_addr global i64 7
 @effect.afterAtomic = local_unnamed_addr global i32 0
 @effect.afterCAS = local_unnamed_addr global i32 0
 @effect.afterReturned = local_unnamed_addr global i32 0
@@ -14,8 +14,6 @@ target triple = "x86_64--linux"
 define void @runtime.initAll() unnamed_addr {
 entry:
   call fastcc void @runtimeOnly()
-  %val = load i64, ptr @effect.read, align 8
-  store i64 %val, ptr @effect.after, align 8
   %atomic = load i32, ptr @effect.atomic, align 4
   store i32 %atomic, ptr @effect.afterAtomic, align 4
   %cas = load i32, ptr @effect.cas, align 4
