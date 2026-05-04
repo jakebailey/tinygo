@@ -485,6 +485,10 @@ func (mv *memoryView) store(v value, p pointerValue) bool {
 		buffer := obj.buffer.asRawValue(mv.r)
 		obj.buffer = buffer
 		v := v.asRawValue(mv.r)
+		if writable {
+			// A partial load from this object may share the destination buffer.
+			v.buf = append([]uint64(nil), v.buf...)
+		}
 		for i := range valueLen {
 			buffer.buf[p.offset()+i] = v.buf[i]
 		}
