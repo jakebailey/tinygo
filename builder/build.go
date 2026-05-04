@@ -806,11 +806,23 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (*BuildR
 		dependencies: []*compileJob{programJob},
 		result:       objfile,
 		run: func(*compileJob) error {
-			llvmBuf := llvm.WriteThinLTOBitcodeToMemoryBuffer(mod)
+			var llvmBuf llvm.MemoryBuffer
+			if arch := strings.Split(config.Triple(), "-")[0]; arch == "wasm32" {
+				// The Go module has already been linked and optimized. Avoid
+				// running wasm-ld ThinLTO codegen over it again, which is very
+				// expensive for large modules.
+				var err error
+				llvmBuf, err = machine.EmitToMemoryBuffer(mod, llvm.ObjectFile)
+				if err != nil {
+					return err
+				}
+			} else {
+				// Keep ThinLTO for non-wasm targets, where linker LTO is
+				// important for binary size.
+				llvmBuf = llvm.WriteThinLTOBitcodeToMemoryBuffer(mod)
+			}
 			err := os.WriteFile(objfile, llvmBuf.Bytes(), 0666)
 			llvmBuf.Dispose()
-			// Only the stack size analysis in the link job reads the module
-			// after this point, so free it when that analysis will not run.
 			if !config.Options.PrintStacks && !config.AutomaticStackSize() {
 				ctx := mod.Context()
 				mod.Dispose()
