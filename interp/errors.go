@@ -58,13 +58,20 @@ func (e *Error) Error() string {
 // location of the instruction. The location information may not be complete as
 // it depends on debug information in the IR.
 func (r *runner) errorAt(inst instruction, err error) *Error {
+	if !r.debug && isRecoverableError(err) {
+		return &Error{
+			ImportPath: r.pkgName,
+			Err:        err,
+		}
+	}
 	pos := getPosition(inst.llvmInst)
+	instString := inst.llvmInst.String()
 	return &Error{
 		ImportPath: r.pkgName,
-		Inst:       inst.llvmInst.String(),
+		Inst:       instString,
 		Pos:        pos,
 		Err:        err,
-		Traceback:  []ErrorLine{{pos, inst.llvmInst.String()}},
+		Traceback:  []ErrorLine{{pos, instString}},
 	}
 }
 
