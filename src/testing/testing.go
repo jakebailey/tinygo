@@ -25,6 +25,7 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+	_ "unsafe"
 )
 
 // Testing flags.
@@ -493,6 +494,25 @@ func tRunner(t *T, fn func(t *T)) {
 	if t.parent != nil && !t.hasSub {
 		t.setRan()
 	}
+}
+
+//go:linkname testingSynctestTest testing/synctest.testingSynctestTest
+func testingSynctestTest(t *T, f func(*T)) bool {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	synctestT := T{
+		common: common{
+			output:    &logger{logToStdout: flagVerbose},
+			name:      t.name,
+			parent:    &t.common,
+			level:     t.level + 1,
+			ctx:       ctx,
+			cancelCtx: cancelCtx,
+		},
+		context: t.context,
+	}
+
+	tRunner(&synctestT, f)
+	return !synctestT.failed
 }
 
 // Run runs f as a subtest of t called name. It waits until the subtest is finished

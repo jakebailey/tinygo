@@ -13,3 +13,9 @@ func synctest_acquire() any {
 func synctest_release(sg any) {
 	// Dummy: we don't support synctest.
 }
+
+//go:linkname synctest_run internal/synctest.Run
+func synctest_run(f func()) {
+	// Dummy: we don't support synctest.
+	f()
+}
