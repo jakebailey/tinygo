@@ -215,9 +215,8 @@ func (c *common) Failed() bool {
 // current goroutine).
 func (c *common) FailNow() {
 	c.Fail()
-
 	c.finished = true
-	c.Error("FailNow is incomplete, requires runtime.Goexit()")
+	runtime.Goexit()
 }
 
 // log generates the output.
@@ -289,7 +288,7 @@ func (c *common) Skipf(format string, args ...interface{}) {
 func (c *common) SkipNow() {
 	c.skip()
 	c.finished = true
-	c.Error("SkipNow is incomplete, requires runtime.Goexit()")
+	runtime.Goexit()
 }
 
 func (c *common) skip() {
@@ -481,19 +480,23 @@ type InternalTest struct {
 }
 
 func tRunner(t *T, fn func(t *T)) {
-	defer func() {
-		t.runCleanup()
+	done := make(chan struct{})
+	go func() {
+		defer func() {
+			t.duration += time.Since(t.start) // TODO: capture cleanup time, too.
+			t.report()                       // Report after all subtests have finished.
+			if t.parent != nil && !t.hasSub {
+				t.setRan()
+			}
+			t.runCleanup()
+			close(done)
+		}()
+
+		// Run the test.
+		t.start = time.Now()
+		fn(t)
 	}()
-
-	// Run the test.
-	t.start = time.Now()
-	fn(t)
-	t.duration += time.Since(t.start) // TODO: capture cleanup time, too.
-
-	t.report() // Report after all subtests have finished.
-	if t.parent != nil && !t.hasSub {
-		t.setRan()
-	}
+	<-done
 }
 
 //go:linkname testingSynctestTest testing/synctest.testingSynctestTest

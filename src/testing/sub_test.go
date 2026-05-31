@@ -78,3 +78,33 @@ func TestNestedCleanup(t *T) {
 		t.Errorf("unexpected cleanup count: got %d want 3", ranCleanup)
 	}
 }
+
+func TestSkipNowStopsSubtest(t *T) {
+	continued := false
+	ok := t.Run("test", func(t *T) {
+		t.Skip("skipping")
+		continued = true
+	})
+	if continued {
+		t.Error("continued after Skip")
+	}
+	if !ok {
+		t.Error("skipped subtest returned false")
+	}
+}
+
+func TestCleanupAfterSkip(t *T) {
+	ranCleanup := false
+	ok := t.Run("test", func(t *T) {
+		t.Cleanup(func() {
+			ranCleanup = true
+		})
+		t.Skip("skipping")
+	})
+	if !ok {
+		t.Error("skipped subtest returned false")
+	}
+	if !ranCleanup {
+		t.Error("cleanup did not run after Skip")
+	}
+}

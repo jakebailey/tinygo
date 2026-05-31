@@ -431,13 +431,13 @@ TEST_PACKAGES_LINUX := \
 
 TEST_PACKAGES_DARWIN := $(TEST_PACKAGES_LINUX)
 
-# os/user requires t.Skip() support
 TEST_PACKAGES_WINDOWS := \
 	compress/flate \
 	crypto/des \
 	crypto/hmac \
 	image \
 	mime \
+	os/user \
 	regexp/syntax \
 	strconv \
 	text/tabwriter \
@@ -499,7 +499,7 @@ TEST_PACKAGES_HOST := $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_WINDOWS)
 TEST_IOFS := false
 endif
 
-TEST_SKIP_FLAG := -skip='TestExtraMethods|TestParseAndBytesRoundTrip/P256/Generic|TestAsValidation'
+TEST_SKIP_FLAG := -skip='TestExtraMethods|TestAsValidation'
 TEST_ADDITIONAL_FLAGS ?=
 
 # Test known-working standard library packages.
@@ -507,7 +507,6 @@ TEST_ADDITIONAL_FLAGS ?=
 .PHONY: tinygo-test
 tinygo-test:
 	@# TestExtraMethods: used by many crypto packages and uses reflect.Type.Method which is not implemented.
-	@# TestParseAndBytesRoundTrip/P256/Generic: relies on t.Skip() which is not implemented
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW)
 	@# io/fs requires os.ReadDir, not yet supported on windows or wasi. It also
 	@# requires a large stack-size. Hence, io/fs is only run conditionally.
