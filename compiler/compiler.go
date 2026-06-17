@@ -2253,6 +2253,9 @@ func (b *builder) createExpr(expr ssa.Value) (llvm.Value, error) {
 		panic("const is not an expression")
 	case *ssa.Convert:
 		x := b.getValue(expr.X, getPos(expr))
+		if b.canOptimizeStringFromBytesForMapLookup(expr) {
+			return b.createStringFromBytesNoCopy(x), nil
+		}
 		return b.createConvert(expr.X.Type(), expr.Type(), x, expr.Pos())
 	case *ssa.Extract:
 		if _, ok := expr.Tuple.(*ssa.Select); ok {

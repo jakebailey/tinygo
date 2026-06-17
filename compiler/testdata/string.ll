@@ -45,7 +45,7 @@ lookup.next:                                      ; preds = %entry
   ret i8 %1
 
 lookup.throw:                                     ; preds = %entry
-  call void @runtime.lookupPanic(ptr undef) #2
+  call void @runtime.lookupPanic(ptr undef) #3
   unreachable
 }
 
@@ -54,7 +54,7 @@ declare void @runtime.lookupPanic(ptr) #0
 ; Function Attrs: nounwind
 define hidden i1 @main.stringCompareEqual(ptr readonly %s1.data, i32 %s1.len, ptr readonly %s2.data, i32 %s2.len, ptr %context) unnamed_addr #1 {
 entry:
-  %0 = call i1 @runtime.stringEqual(ptr %s1.data, i32 %s1.len, ptr %s2.data, i32 %s2.len, ptr undef) #2
+  %0 = call i1 @runtime.stringEqual(ptr %s1.data, i32 %s1.len, ptr %s2.data, i32 %s2.len, ptr undef) #3
   ret i1 %0
 }
 
@@ -63,7 +63,7 @@ declare i1 @runtime.stringEqual(ptr readonly, i32, ptr readonly, i32, ptr) #0
 ; Function Attrs: nounwind
 define hidden i1 @main.stringCompareUnequal(ptr readonly %s1.data, i32 %s1.len, ptr readonly %s2.data, i32 %s2.len, ptr %context) unnamed_addr #1 {
 entry:
-  %0 = call i1 @runtime.stringEqual(ptr %s1.data, i32 %s1.len, ptr %s2.data, i32 %s2.len, ptr undef) #2
+  %0 = call i1 @runtime.stringEqual(ptr %s1.data, i32 %s1.len, ptr %s2.data, i32 %s2.len, ptr undef) #3
   %1 = xor i1 %0, true
   ret i1 %1
 }
@@ -71,7 +71,7 @@ entry:
 ; Function Attrs: nounwind
 define hidden i1 @main.stringCompareLarger(ptr readonly %s1.data, i32 %s1.len, ptr readonly %s2.data, i32 %s2.len, ptr %context) unnamed_addr #1 {
 entry:
-  %0 = call i1 @runtime.stringLess(ptr %s2.data, i32 %s2.len, ptr %s1.data, i32 %s1.len, ptr undef) #2
+  %0 = call i1 @runtime.stringLess(ptr %s2.data, i32 %s2.len, ptr %s1.data, i32 %s1.len, ptr undef) #3
   ret i1 %0
 }
 
@@ -90,10 +90,60 @@ lookup.next:                                      ; preds = %entry
   ret i8 %2
 
 lookup.throw:                                     ; preds = %entry
-  call void @runtime.lookupPanic(ptr undef) #2
+  call void @runtime.lookupPanic(ptr undef) #3
   unreachable
 }
 
+; Function Attrs: nounwind
+define hidden i8 @main.stringMapLookupFromBytes(ptr dereferenceable_or_null(48) %m, ptr %b.data, i32 %b.len, i32 %b.cap, ptr %context) unnamed_addr #1 {
+entry:
+  %hashmap.value = alloca i8, align 1
+  %stackalloc = alloca i8, align 1
+  call void @runtime.trackPointer(ptr %b.data, ptr nonnull %stackalloc, ptr undef) #3
+  call void @llvm.lifetime.start.p0(i64 1, ptr nonnull %hashmap.value)
+  %0 = call i1 @runtime.hashmapStringGet(ptr %m, ptr %b.data, i32 %b.len, ptr nonnull %hashmap.value, i32 1, ptr undef) #3
+  %1 = load i8, ptr %hashmap.value, align 1
+  call void @llvm.lifetime.end.p0(i64 1, ptr nonnull %hashmap.value)
+  ret i8 %1
+}
+
+; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #2
+
+declare i1 @runtime.hashmapStringGet(ptr dereferenceable_or_null(48), ptr readonly, i32, ptr, i32, ptr) #0
+
+; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #2
+
+; Function Attrs: nounwind
+define hidden i8 @main.stringMapLookupFromBytesAfterMutation(ptr dereferenceable_or_null(48) %m, ptr %b.data, i32 %b.len, i32 %b.cap, ptr %context) unnamed_addr #1 {
+entry:
+  %hashmap.value = alloca i8, align 1
+  %stackalloc = alloca i8, align 1
+  %0 = call %runtime._string @runtime.stringFromBytes(ptr %b.data, i32 %b.len, i32 %b.cap, ptr undef) #3
+  %1 = extractvalue %runtime._string %0, 0
+  call void @runtime.trackPointer(ptr %1, ptr nonnull %stackalloc, ptr undef) #3
+  %2 = icmp eq i32 %b.len, 0
+  br i1 %2, label %lookup.throw, label %lookup.next
+
+lookup.next:                                      ; preds = %entry
+  store i8 1, ptr %b.data, align 1
+  call void @llvm.lifetime.start.p0(i64 1, ptr nonnull %hashmap.value)
+  %3 = extractvalue %runtime._string %0, 0
+  %4 = extractvalue %runtime._string %0, 1
+  %5 = call i1 @runtime.hashmapStringGet(ptr %m, ptr %3, i32 %4, ptr nonnull %hashmap.value, i32 1, ptr undef) #3
+  %6 = load i8, ptr %hashmap.value, align 1
+  call void @llvm.lifetime.end.p0(i64 1, ptr nonnull %hashmap.value)
+  ret i8 %6
+
+lookup.throw:                                     ; preds = %entry
+  call void @runtime.lookupPanic(ptr undef) #3
+  unreachable
+}
+
+declare %runtime._string @runtime.stringFromBytes(ptr nocapture readonly dereferenceable_or_null(1), i32, i32, ptr) #0
+
 attributes #0 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #1 = { nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
-attributes #2 = { nounwind }
+attributes #2 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
+attributes #3 = { nounwind }

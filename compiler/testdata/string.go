@@ -32,3 +32,13 @@ func stringLookup(s string, x uint8) byte {
 	// Test that x is correctly extended to an uint before comparison.
 	return s[x]
 }
+
+func stringMapLookupFromBytes(m map[string]byte, b []byte) byte {
+	return m[string(b)]
+}
+
+func stringMapLookupFromBytesAfterMutation(m map[string]byte, b []byte) byte {
+	s := string(b)
+	b[0] = 1
+	return m[s]
+}

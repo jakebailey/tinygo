@@ -124,6 +124,78 @@ func (b *builder) createMapLookup(keyType, valueType types.Type, m, key llvm.Val
 	}
 }
 
+// canOptimizeStringFromBytesForMapLookup reports whether this string([]byte)
+// conversion is used directly as a map[string] lookup key. In this specific
+// case, the conversion does not need to allocate or copy because the temporary
+// string is only used for the duration of the lookup.
+func (b *builder) canOptimizeStringFromBytesForMapLookup(expr *ssa.Convert) bool {
+	if !isStringType(expr.Type()) || !isByteSliceType(expr.X.Type()) {
+		return false
+	}
+
+	var lookup *ssa.Lookup
+	for _, referrer := range *expr.Referrers() {
+		if _, ok := referrer.(*ssa.DebugRef); ok {
+			continue
+		}
+		referrerLookup, ok := referrer.(*ssa.Lookup)
+		if !ok || referrerLookup.Index != expr {
+			return false
+		}
+		if lookup != nil {
+			return false
+		}
+		lookup = referrerLookup
+	}
+	if lookup == nil {
+		return false
+	}
+
+	mapType, ok := lookup.X.Type().Underlying().(*types.Map)
+	if !ok || !isStringType(mapType.Key()) {
+		return false
+	}
+
+	foundConvert := false
+	for _, instr := range b.currentBlock.Instrs {
+		if instr == expr {
+			foundConvert = true
+			continue
+		}
+		if !foundConvert {
+			continue
+		}
+		if _, ok := instr.(*ssa.DebugRef); ok {
+			continue
+		}
+		return instr == lookup
+	}
+	return false
+}
+
+func (b *builder) createStringFromBytesNoCopy(slice llvm.Value) llvm.Value {
+	ptr := b.CreateExtractValue(slice, 0, "string.data")
+	len := b.CreateExtractValue(slice, 1, "string.len")
+	str := llvm.Undef(b.getLLVMRuntimeType("_string"))
+	str = b.CreateInsertValue(str, ptr, 0, "")
+	str = b.CreateInsertValue(str, len, 1, "")
+	return str
+}
+
+func isStringType(typ types.Type) bool {
+	basic, ok := typ.Underlying().(*types.Basic)
+	return ok && basic.Info()&types.IsString != 0
+}
+
+func isByteSliceType(typ types.Type) bool {
+	slice, ok := typ.Underlying().(*types.Slice)
+	if !ok {
+		return false
+	}
+	elem, ok := slice.Elem().Underlying().(*types.Basic)
+	return ok && elem.Kind() == types.Byte
+}
+
 // createMapUpdate updates a map key to a given value, by creating an
 // appropriate runtime call.
 func (b *builder) createMapUpdate(keyType types.Type, m, key, value llvm.Value, pos token.Pos) {
