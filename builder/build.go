@@ -98,7 +98,7 @@ type packageAction struct {
 //
 // The error value may be of type *MultiError. Callers will likely want to check
 // for this case and print such errors individually.
-func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildResult, error) {
+func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (result BuildResult, err error) {
 	// Read the build ID of the tinygo binary.
 	// Used as a cache key for package builds.
 	compilerBuildID, err := ReadBuildID()
@@ -118,6 +118,15 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 		// build cache.
 		cacheDir = tmpdir
 	}
+	buildCache, err := newBuildCache(cacheDir)
+	if err != nil {
+		return BuildResult{}, err
+	}
+	defer func() {
+		if closeErr := buildCache.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
 
 	// Create default global values.
 	globalValues := map[string]map[string]string{
@@ -213,7 +222,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 	if err != nil {
 		return BuildResult{}, err
 	}
-	result := BuildResult{
+	result = BuildResult{
 		ModuleRoot: lprogram.MainPkg().Module.Dir,
 		MainDir:    lprogram.MainPkg().Dir,
 		ImportPath: lprogram.MainPkg().ImportPath,
@@ -375,13 +384,18 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 			description:  "compile package " + pkg.ImportPath,
 			dependencies: []*compileJob{packageActionIDJob},
 			run: func(job *compileJob) error {
-				job.result = filepath.Join(cacheDir, "pkg-"+packageActionIDJob.result+".bc")
+				localResult := buildCache.filePath("pkg", packageActionIDJob.result)
+				job.result = localResult
 				// Acquire a lock (if supported).
-				unlock := lock(job.result + ".lock")
+				unlock := lock(localResult + ".lock")
 				defer unlock()
 
-				if _, err := os.Stat(job.result); err == nil {
-					// Already cached, don't recreate this package.
+				path, ok, err := buildCache.Get("pkg", packageActionIDJob.result)
+				if err != nil {
+					return err
+				}
+				if ok {
+					job.result = path
 					return nil
 				}
 
@@ -471,7 +485,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 				if pkgInit.IsNil() {
 					panic("init not found for " + pkg.Pkg.Path())
 				}
-				err := interp.RunFunc(pkgInit, config.Options.InterpTimeout, config.Options.InterpMaxLoopIterations, config.DumpSSA())
+				err = interp.RunFunc(pkgInit, config.Options.InterpTimeout, config.Options.InterpMaxLoopIterations, config.DumpSSA())
 				if err != nil {
 					return err
 				}
@@ -485,7 +499,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 				// Write to a temporary path that is renamed to the destination
 				// file to avoid race conditions with other TinyGo invocatiosn
 				// that might also be compiling this package at the same time.
-				f, err := os.CreateTemp(filepath.Dir(job.result), filepath.Base(job.result))
+				f, err := os.CreateTemp(filepath.Dir(localResult), filepath.Base(localResult))
 				if err != nil {
 					return err
 				}
@@ -505,13 +519,14 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 				if err != nil {
 					// WriteBitcodeToFile doesn't produce a useful error on its
 					// own, so create a somewhat useful error message here.
-					return fmt.Errorf("failed to write bitcode for package %s to file %s", pkg.ImportPath, job.result)
+					return fmt.Errorf("failed to write bitcode for package %s to file %s", pkg.ImportPath, localResult)
 				}
 				err = f.Close()
 				if err != nil {
 					return err
 				}
-				return os.Rename(f.Name(), job.result)
+				job.result, err = buildCache.Put("pkg", packageActionIDJob.result, f.Name())
+				return err
 			},
 		}
 		packageJobs = append(packageJobs, job)
@@ -734,7 +749,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 		job := &compileJob{
 			description: "compile extra file " + path,
 			run: func(job *compileJob) error {
-				result, err := compileAndCacheCFile(abspath, tmpdir, config.CFlags(false), config.Options.PrintCommands)
+				result, err := compileAndCacheCFile(buildCache, abspath, tmpdir, config.CFlags(false), config.Options.PrintCommands)
 				job.result = result
 				return err
 			},
@@ -752,7 +767,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 			job := &compileJob{
 				description: "compile CGo file " + abspath,
 				run: func(job *compileJob) error {
-					result, err := compileAndCacheCFile(abspath, tmpdir, pkg.CFlags, config.Options.PrintCommands)
+					result, err := compileAndCacheCFile(buildCache, abspath, tmpdir, pkg.CFlags, config.Options.PrintCommands)
 					job.result = result
 					return err
 				},
