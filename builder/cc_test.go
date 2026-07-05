@@ -243,6 +243,8 @@ func TestScanCDependenciesEmptySnippet(t *testing.T) {
 }
 
 func TestCFileCacheIncludePathShadowing(t *testing.T) {
+	t.Setenv("GOCACHEPROG", "")
+
 	dir := t.TempDir()
 	cacheDir := filepath.Join(dir, "cache")
 	cache, err := newBuildCache(cacheDir)
