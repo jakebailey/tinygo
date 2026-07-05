@@ -78,17 +78,18 @@ type BuildResult struct {
 // key, avoiding the need for recompiling all dependencies when only the
 // implementation of an imported package changes.
 type packageAction struct {
-	ImportPath       string
-	CompilerBuildID  string
-	TinyGoVersion    string
-	LLVMVersion      string
-	Config           *compiler.Config
-	CFlags           []string
-	FileHashes       map[string]string // hash of every file that's part of the package
-	EmbeddedFiles    map[string]string // hash of all the //go:embed files in the package
-	Imports          map[string]string // map from imported package to action ID hash
-	OptLevel         string            // LLVM optimization level (O0, O1, O2, Os, Oz)
-	UndefinedGlobals []string          // globals that are left as external globals (no initializer)
+	ImportPath        string
+	CompilerBuildID   string
+	TinyGoVersion     string
+	LLVMVersion       string
+	CCompilerIdentity string
+	Config            *compiler.Config
+	CFlags            []string
+	FileHashes        map[string]string // hash of every file that's part of the package
+	EmbeddedFiles     map[string]string // hash of all the //go:embed files in the package
+	Imports           map[string]string // map from imported package to action ID hash
+	OptLevel          string            // LLVM optimization level (O0, O1, O2, Os, Oz)
+	UndefinedGlobals  []string          // globals that are left as external globals (no initializer)
 }
 
 // Build performs a single package to executable Go build. It takes in a package
@@ -344,6 +345,13 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 					OptLevel:         optLevel,
 					UndefinedGlobals: undefinedGlobals,
 				}
+				if len(pkg.CGoHeaders) != 0 {
+					compilerID, err := clangCompilerIdentity()
+					if err != nil {
+						return err
+					}
+					actionID.CCompilerIdentity = compilerID
+				}
 				for filePath, hash := range pkg.FileHashes {
 					actionID.FileHashes[filePath] = hex.EncodeToString(hash)
 				}
@@ -393,9 +401,6 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 				}
 
 				// Load bitcode of CGo headers and join the modules together.
-				// This may seem vulnerable to cache problems, but this is not
-				// the case: the Go code that was just compiled already tracks
-				// all C files that are read and hashes them.
 				// These headers could be compiled in parallel but the benefit
 				// is so small that it's probably not worth parallelizing.
 				// Packages are compiled independently anyway.
