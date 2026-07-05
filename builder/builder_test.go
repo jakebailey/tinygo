@@ -173,6 +173,9 @@ func TestMain(m *testing.M) {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "cacheprog":
+			runTestCacheProg(os.Args[2])
+			os.Exit(0)
 		}
 	}
 
