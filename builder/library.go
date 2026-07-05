@@ -362,7 +362,7 @@ func expandLibraryCompileArgs(args []string, headerPath, dir string) []string {
 // output archive file, it is expected to be removed after use.
 // As a side effect, this call creates the library header files if they didn't
 // exist yet.
-func (l *Library) load(config *compileopts.Config, tmpdir string) (jobs []*compileJob, abortLock func(), err error) {
+func (l *Library) load(cache *buildCache, config *compileopts.Config, tmpdir string) (jobs []*compileJob, abortLock func(), err error) {
 	input, err := l.cacheInput(config)
 	if err != nil {
 		return nil, nil, err
@@ -376,33 +376,17 @@ func (l *Library) load(config *compileopts.Config, tmpdir string) (jobs []*compi
 		return nil, nil, fmt.Errorf("library cache key missing for %s", l.name)
 	}
 	outdir := config.LibraryPath(l.name)
-	archiveFilePath := filepath.Join(outdir, "lib.a")
-	crt1FilePath := filepath.Join(outdir, "crt1.o")
 
 	// Create a lock on the output (if supported).
 	// This is a bit messy, but avoids a deadlock because it is ordered consistently with other library loads within a build.
 	outname := filepath.Base(outdir)
-	unlock := lock(filepath.Join(goenv.Get("GOCACHE"), outname+".lock"))
+	unlock := lock(cache.Path(outname + ".lock"))
 	var ok bool
 	defer func() {
 		if !ok {
 			unlock()
 		}
 	}()
-
-	// Try to fetch this library from the cache.
-	if _, err := os.Stat(archiveFilePath); err == nil {
-		if l.crt1Source == "" {
-			return []*compileJob{dummyCompileJob(archiveFilePath)}, func() {}, nil
-		}
-		if _, err := os.Stat(crt1FilePath); err == nil {
-			return []*compileJob{
-				dummyCompileJob(crt1FilePath),
-				dummyCompileJob(archiveFilePath),
-			}, func() {}, nil
-		}
-	}
-	// Cache miss, build it now.
 
 	// Create the destination directory where the components of this library
 	// (lib.a file, include directory) are placed.
@@ -453,6 +437,31 @@ func (l *Library) load(config *compileopts.Config, tmpdir string) (jobs []*compi
 		}
 	}
 
+	var crt1Job *compileJob
+	if l.crt1Source != "" {
+		path, ok, err := cache.Get("lib-crt1", outname)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok {
+			crt1Job = dummyCompileJob(path)
+		}
+	}
+
+	// Try to fetch this library from the cache.
+	archivePath, archiveOK, err := cache.Get("lib", outname)
+	if err != nil {
+		return nil, nil, err
+	}
+	if archiveOK && (l.crt1Source == "" || crt1Job != nil) {
+		if crt1Job != nil {
+			return []*compileJob{crt1Job, dummyCompileJob(archivePath)}, func() {}, nil
+		}
+		return []*compileJob{dummyCompileJob(archivePath)}, func() {}, nil
+	}
+
+	// Cache miss, build it now.
+
 	dir := filepath.Join(tmpdir, "build-lib-"+l.name)
 	err = os.Mkdir(dir, 0777)
 	if err != nil {
@@ -470,78 +479,86 @@ func (l *Library) load(config *compileopts.Config, tmpdir string) (jobs []*compi
 	// Create job to put all the object files in a single archive. This archive
 	// file is the (static) library file.
 	var objs []string
-	archiveJob := &compileJob{
-		description: "ar " + l.name + "/lib.a",
-		result:      filepath.Join(goenv.Get("GOCACHE"), outname, "lib.a"),
-		run: func(*compileJob) error {
-			defer once.Do(unlock)
+	var archiveJob *compileJob
+	if archiveOK {
+		archiveJob = dummyCompileJob(archivePath)
+	} else {
+		archiveJob = &compileJob{
+			description: "ar " + l.name + "/lib.a",
+			run: func(job *compileJob) error {
+				defer once.Do(unlock)
 
-			// Create an archive of all object files.
-			f, err := os.CreateTemp(outdir, "libc.a.tmp*")
-			if err != nil {
+				// Create an archive of all object files.
+				f, err := os.CreateTemp(outdir, "libc.a.tmp*")
+				if err != nil {
+					return err
+				}
+				err = makeArchive(f, objs)
+				if err != nil {
+					return err
+				}
+				err = f.Close()
+				if err != nil {
+					return err
+				}
+				err = os.Chmod(f.Name(), 0o644) // TempFile uses 0o600 by default
+				if err != nil {
+					return err
+				}
+				job.result, err = cache.Put("lib", outname, f.Name())
 				return err
-			}
-			err = makeArchive(f, objs)
-			if err != nil {
-				return err
-			}
-			err = f.Close()
-			if err != nil {
-				return err
-			}
-			err = os.Chmod(f.Name(), 0o644) // TempFile uses 0o600 by default
-			if err != nil {
-				return err
-			}
-			// Store this archive in the cache.
-			return robustRename(f.Name(), archiveFilePath)
-		},
+			},
+		}
 	}
 
 	sourceDir := input.SourceDir
 
 	// Create jobs to compile all sources. These jobs are depended upon by the
 	// archive job above, so must be run first.
-	for _, source := range input.Sources {
-		// Strip leading "../" parts off the path.
-		source := source
-		path := filepath.FromSlash(source.Path)
-		cleanpath := path
-		for strings.HasPrefix(cleanpath, "../") {
-			cleanpath = cleanpath[3:]
+	if !archiveOK {
+		for _, source := range input.Sources {
+			// Strip leading "../" parts off the path.
+			source := source
+			path := filepath.FromSlash(source.Path)
+			cleanpath := path
+			for strings.HasPrefix(cleanpath, "../") {
+				cleanpath = cleanpath[3:]
+			}
+			srcpath := filepath.Join(sourceDir, path)
+			objpath := filepath.Join(dir, cleanpath+".o")
+			os.MkdirAll(filepath.Dir(objpath), 0o777)
+			objs = append(objs, objpath)
+			objfile := &compileJob{
+				description: "compile " + srcpath,
+				run: func(*compileJob) error {
+					var compileArgs []string
+					compileArgs = append(compileArgs, args...)
+					compileArgs = append(compileArgs, source.CFlags...)
+					compileArgs = append(compileArgs, "-o", objpath, srcpath)
+					if config.Options.PrintCommands != nil {
+						config.Options.PrintCommands("clang", compileArgs...)
+					}
+					err := runCCompiler(compileArgs...)
+					if err != nil {
+						return &commandError{"failed to build", srcpath, err}
+					}
+					return nil
+				},
+			}
+			archiveJob.dependencies = append(archiveJob.dependencies, objfile)
 		}
-		srcpath := filepath.Join(sourceDir, path)
-		objpath := filepath.Join(dir, cleanpath+".o")
-		os.MkdirAll(filepath.Dir(objpath), 0o777)
-		objs = append(objs, objpath)
-		objfile := &compileJob{
-			description: "compile " + srcpath,
-			run: func(*compileJob) error {
-				var compileArgs []string
-				compileArgs = append(compileArgs, args...)
-				compileArgs = append(compileArgs, source.CFlags...)
-				compileArgs = append(compileArgs, "-o", objpath, srcpath)
-				if config.Options.PrintCommands != nil {
-					config.Options.PrintCommands("clang", compileArgs...)
-				}
-				err := runCCompiler(compileArgs...)
-				if err != nil {
-					return &commandError{"failed to build", srcpath, err}
-				}
-				return nil
-			},
-		}
-		archiveJob.dependencies = append(archiveJob.dependencies, objfile)
 	}
 
 	// Create crt1.o job, if needed.
-	var crt1Job *compileJob
-	if l.crt1Source != "" {
+	if l.crt1Source != "" && crt1Job == nil {
+		releaseLock := archiveOK
 		srcpath := filepath.Join(sourceDir, l.crt1Source)
 		crt1Job = &compileJob{
 			description: "compile " + srcpath,
-			result:      crt1FilePath,
-			run: func(*compileJob) error {
+			run: func(job *compileJob) error {
+				if releaseLock {
+					defer once.Do(unlock)
+				}
 				var compileArgs []string
 				compileArgs = append(compileArgs, args...)
 				tmpfile, err := os.CreateTemp(outdir, "crt1.o.tmp*")
@@ -557,10 +574,16 @@ func (l *Library) load(config *compileopts.Config, tmpdir string) (jobs []*compi
 				if err != nil {
 					return &commandError{"failed to build", srcpath, err}
 				}
-				return os.Rename(tmpfile.Name(), crt1FilePath)
+				job.result, err = cache.Put("lib-crt1", outname, tmpfile.Name())
+				return err
 			},
 		}
-		archiveJob.dependencies = append(archiveJob.dependencies, crt1Job)
+		if !archiveOK {
+			archiveJob.dependencies = append(archiveJob.dependencies, crt1Job)
+		}
+	}
+
+	if crt1Job != nil {
 		jobs = append(jobs, crt1Job)
 	}
 	jobs = append(jobs, archiveJob)
