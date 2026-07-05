@@ -55,11 +55,15 @@ func TestLibraryTrimPathCache(t *testing.T) {
 			if err := os.WriteFile(cachedArchive, []byte("cached library"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			job, abort, err := lib.load(config, t.TempDir(), input)
+			jobs, abort, err := lib.load(config, t.TempDir(), input)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer abort()
+			if len(jobs) != 1 {
+				t.Fatalf("library jobs = %d, want 1", len(jobs))
+			}
+			job := jobs[0]
 			want := filepath.Join(cache, tc.wantName+suffix, "lib.a")
 			if job.result != want {
 				t.Fatalf("library path = %q, want %q", job.result, want)
@@ -74,11 +78,15 @@ func TestLibraryTrimPathCache(t *testing.T) {
 				if _, err := os.Stat(want); err != nil {
 					t.Fatal(err)
 				}
-				cached, abort, err := lib.load(config, t.TempDir(), input)
+				cachedJobs, abort, err := lib.load(config, t.TempDir(), input)
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer abort()
+				if len(cachedJobs) != 1 {
+					t.Fatalf("cached library jobs = %d, want 1", len(cachedJobs))
+				}
+				cached := cachedJobs[0]
 				if cached.result != want || len(cached.dependencies) != 0 {
 					t.Fatalf("rebuilt library was not cached: %q", cached.result)
 				}
