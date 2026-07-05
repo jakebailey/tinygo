@@ -171,7 +171,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (result 
 		libcDependencies = append(libcDependencies, libcJob)
 	}
 	if libraries.libc != nil {
-		libcJobs, unlock, err := libraries.libc.load(config, tmpdir, libraryInputs[libraries.libc.name])
+		libcJobs, unlock, err := libraries.libc.load(buildCache, config, tmpdir, libraryInputs[libraries.libc.name])
 		if err != nil {
 			return BuildResult{}, err
 		}
@@ -740,7 +740,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (result 
 
 	// Add library dependencies needed by the linker, usually from the cache.
 	for _, library := range libraries.linker {
-		jobs, unlock, err := library.load(config, tmpdir, libraryInputs[library.name])
+		jobs, unlock, err := library.load(buildCache, config, tmpdir, libraryInputs[library.name])
 		if err != nil {
 			return result, err
 		}
