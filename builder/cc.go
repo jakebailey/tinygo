@@ -17,7 +17,6 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/tinygo-org/tinygo/goenv"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -43,9 +42,9 @@ type cFileCompileConfig struct {
 //
 // The Makefile syntax that compilers output has issues, see readDepFile for
 // details.
-func compileAndCacheCFile(abspath, tmpdir string, cflags []string, compileConfig *cFileCompileConfig, printCommands func(string, ...string)) (string, error) {
+func compileAndCacheCFile(cache *buildCache, abspath, tmpdir string, cflags []string, compileConfig *cFileCompileConfig, printCommands func(string, ...string)) (string, error) {
 	if isAssemblyFile(abspath) {
-		cacheDir := goenv.Get("GOCACHE")
+		cacheDir := cache.Dir()
 		if err := os.MkdirAll(cacheDir, 0o777); err != nil {
 			return "", err
 		}
@@ -58,18 +57,16 @@ func compileAndCacheCFile(abspath, tmpdir string, cflags []string, compileConfig
 		if err != nil {
 			return "", err
 		}
-		outpath := filepath.Join(cacheDir, "asm-"+hash+".o")
-		unlock := lock(outpath + ".lock")
+		unlock := lock(cache.Path("asm-" + hash + ".lock"))
 		defer unlock()
-		if _, err := os.Stat(outpath); err == nil {
+		outpath, ok, err := cache.Get("asm", hash)
+		if err != nil {
+			return "", err
+		}
+		if ok {
 			return outpath, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", err
 		}
-		if err := robustRename(object, outpath); err != nil {
-			return "", err
-		}
-		return outpath, nil
+		return cache.Put("asm", hash, object)
 	}
 
 	// Hash input file.
@@ -79,7 +76,7 @@ func compileAndCacheCFile(abspath, tmpdir string, cflags []string, compileConfig
 	}
 
 	// Acquire a lock (if supported).
-	unlock := lock(filepath.Join(goenv.Get("GOCACHE"), fileHash+".c.lock"))
+	unlock := lock(cache.Path(fileHash + ".c.lock"))
 	defer unlock()
 
 	compilerID, err := clangCompilerIdentity()
@@ -91,25 +88,23 @@ func compileAndCacheCFile(abspath, tmpdir string, cflags []string, compileConfig
 	if err != nil {
 		return "", err
 	}
-	outpath, err := makeCFileCachePath(abspath, cFileCompileArgs(abspath, "$OBJ", cflags, compileConfig), compilerID, dependencies)
+	cacheKey, err := makeCFileCacheKey(abspath, cFileCompileArgs(abspath, "$OBJ", cflags, compileConfig), compilerID, dependencies)
 	if err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(outpath); err == nil {
-		return outpath, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
+	path, ok, err := cache.Get("obj", cacheKey)
+	if err != nil {
 		return "", err
+	}
+	if ok {
+		return path, nil
 	}
 
-	objTmpFile, err := compileCFile(goenv.Get("GOCACHE"), abspath, cflags, compileConfig, printCommands)
+	objTmpFile, err := compileCFile(cache.Dir(), abspath, cflags, compileConfig, printCommands)
 	if err != nil {
 		return "", err
 	}
-	if err := os.Rename(objTmpFile, outpath); err != nil {
-		os.Remove(objTmpFile)
-		return "", err
-	}
-	return outpath, nil
+	return cache.Put("obj", cacheKey, objTmpFile)
 }
 
 func scanCFileDependencies(abspath, tmpdir string, cflags []string, printCommands func(string, ...string)) ([]string, error) {
@@ -195,10 +190,9 @@ func compileCFile(cacheDir, abspath string, cflags []string, compileConfig *cFil
 	return objTmpFile.Name(), nil
 }
 
-// Create a cache path (a path in GOCACHE) to store the output of a compiler
-// job. This path is based on the compiler identity, compiler flags, and the
+// Create a cache key based on the compiler identity, compiler flags, and the
 // hash of all dependency files.
-func makeCFileCachePath(path string, flags []string, compilerID string, dependencies []string) (string, error) {
+func makeCFileCacheKey(path string, flags []string, compilerID string, dependencies []string) (string, error) {
 	// Hash all input files.
 	fileHashes := make(map[string]string, len(dependencies))
 	for _, path := range dependencies {
@@ -228,9 +222,7 @@ func makeCFileCachePath(path string, flags []string, compilerID string, dependen
 	}
 	outFileNameBuf := sha512.Sum512_224(buf)
 	cacheKey := hex.EncodeToString(outFileNameBuf[:])
-
-	outpath := filepath.Join(goenv.Get("GOCACHE"), "obj-"+cacheKey+".bc")
-	return outpath, nil
+	return cacheKey, nil
 }
 
 func isAssemblyFile(path string) bool {
