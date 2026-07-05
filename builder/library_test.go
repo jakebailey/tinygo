@@ -127,7 +127,8 @@ func TestLibraryObjectForParentSource(t *testing.T) {
 		Target:      &compileopts.TargetSpec{Triple: "x86_64-unknown-linux-gnu"},
 		LibraryKeys: map[string]string{lib.name: input.key()},
 	}
-	jobs, unlock, err := lib.load(config, dir, input)
+	cache := &buildCache{dir: goenv.Get("GOCACHE")}
+	jobs, unlock, err := lib.load(cache, config, dir, input)
 	if err != nil {
 		t.Fatal(err)
 	}
