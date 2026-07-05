@@ -32,6 +32,7 @@ type Config struct {
 	Target         *TargetSpec
 	GoMinorVersion int
 	TestConfig     TestConfig
+	LibraryKeys    map[string]string
 }
 
 // Triple returns the LLVM target triple, like armv6m-unknown-unknown-eabi.
@@ -291,8 +292,10 @@ func (c *Config) LibraryPath(name string) string {
 		archname += "-" + c.Target.Libc
 	}
 
-	// Append a version string, if this library has a version.
-	if v, ok := libVersions[name]; ok {
+	if key, ok := c.LibraryKeys[name]; ok {
+		archname += "-h" + key
+	} else if v, ok := libVersions[name]; ok {
+		// Append a version string, if this library has a version.
 		archname += "-v" + strconv.Itoa(v)
 	}
 
@@ -374,8 +377,8 @@ func (c *Config) CFlags(libclang bool) []string {
 }
 
 // LibcCFlags returns the C compiler flags for the configured libc.
-// It only uses flags that are part of the libc path (triple, cpu, abi, libc
-// name) so it can safely be used to compile another C library.
+// It only uses flags that are part of the libc path, so it can safely be used
+// to compile another C library.
 func (c *Config) LibcCFlags() []string {
 	switch c.Target.Libc {
 	case "darwin-libSystem":
