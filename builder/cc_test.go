@@ -8,6 +8,13 @@ import (
 )
 
 func TestCompileCXXFile(t *testing.T) {
+	t.Setenv("GOCACHEPROG", "")
+	cache, err := newBuildCache(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+
 	dir := t.TempDir()
 	source := filepath.Join(dir, "flags.cpp")
 	code := `#if defined(C_ONLY) || !defined(SHARED)
@@ -26,11 +33,11 @@ extern "C" int value(void) { return constant<true>(); }
 		t.Fatal(err)
 	}
 	flags := []string{"-std=c++17", "-DSHARED=23", "-DCXX_ONLY=19"}
-	first, err := compileAndCacheCFile(source, dir, flags, nil, nil)
+	first, err := compileAndCacheCFile(cache, source, dir, flags, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cached, err := compileAndCacheCFile(source, dir, flags, nil, nil)
+	cached, err := compileAndCacheCFile(cache, source, dir, flags, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +45,7 @@ extern "C" int value(void) { return constant<true>(); }
 		t.Errorf("cached output = %q, want %q", cached, first)
 	}
 	flags[2] = "-DCXX_ONLY=20"
-	changed, err := compileAndCacheCFile(source, dir, flags, nil, nil)
+	changed, err := compileAndCacheCFile(cache, source, dir, flags, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +85,15 @@ func TestCFileCacheIncludePathShadowing(t *testing.T) {
 	t.Setenv("GOCACHEPROG", "")
 
 	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	if err := os.Mkdir(cacheDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := newBuildCache(cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
 
 	include1 := filepath.Join(dir, "include1")
 	include2 := filepath.Join(dir, "include2")
@@ -100,11 +116,11 @@ func TestCFileCacheIncludePathShadowing(t *testing.T) {
 		"-I", include2,
 		"--target=x86_64-unknown-linux-gnu",
 	}
-	first, err := compileAndCacheCFile(source, dir, flags, nil, nil)
+	first, err := compileAndCacheCFile(cache, source, dir, flags, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := compileAndCacheCFile(source, dir, flags, nil, nil)
+	second, err := compileAndCacheCFile(cache, source, dir, flags, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +131,7 @@ func TestCFileCacheIncludePathShadowing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(include1, "value.h"), []byte("#define VALUE 2\n"), 0o666); err != nil {
 		t.Fatal(err)
 	}
-	shadowed, err := compileAndCacheCFile(source, dir, flags, nil, nil)
+	shadowed, err := compileAndCacheCFile(cache, source, dir, flags, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
