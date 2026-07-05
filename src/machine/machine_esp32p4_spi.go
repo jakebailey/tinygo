@@ -9,6 +9,8 @@ import (
 	"unsafe"
 )
 
+const spiClockFreq = 40_000_000 // XTAL_CLK, GPSPI2_CLK_SRC_SEL 0. See ESP-IDF hal/esp32p4/include/hal/spi_ll.h spi_ll_set_clk_source.
+
 // GPIO matrix signals for GPSPI2. See ESP-IDF
 // components/soc/esp32p4/include/soc/gpio_sig_map.h.
 const (
@@ -71,22 +73,12 @@ func (spi *SPI) Configure(config SPIConfig) error {
 	spi.Bus.SetSPI_USER_SPI_USR_MISO(1)
 	spi.Bus.SetSPI_USER_SPI_DOUTDIN(1)
 
-	switch config.Mode {
-	case Mode0:
-		spi.Bus.SetSPI_MISC_SPI_CK_IDLE_EDGE(0)
-		spi.Bus.SetSPI_USER_SPI_CK_OUT_EDGE(0)
-	case Mode1:
-		spi.Bus.SetSPI_MISC_SPI_CK_IDLE_EDGE(0)
-		spi.Bus.SetSPI_USER_SPI_CK_OUT_EDGE(1)
-	case Mode2:
-		spi.Bus.SetSPI_MISC_SPI_CK_IDLE_EDGE(1)
-		spi.Bus.SetSPI_USER_SPI_CK_OUT_EDGE(1)
-	case Mode3:
-		spi.Bus.SetSPI_MISC_SPI_CK_IDLE_EDGE(1)
-		spi.Bus.SetSPI_USER_SPI_CK_OUT_EDGE(0)
-	default:
+	mode := spiModeFor(config.Mode)
+	if mode&spiModeValid == 0 {
 		return ErrInvalidSPIMode
 	}
+	spi.Bus.SetSPI_MISC_SPI_CK_IDLE_EDGE(mode.idleEdge())
+	spi.Bus.SetSPI_USER_SPI_CK_OUT_EDGE(mode.outEdge())
 
 	if config.LSBFirst {
 		spi.Bus.SetSPI_CTRL_SPI_WR_BIT_ORDER(1)
