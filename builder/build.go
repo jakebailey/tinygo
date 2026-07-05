@@ -162,15 +162,12 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 		libcDependencies = append(libcDependencies, libcJob)
 	}
 	if libraries.libc != nil {
-		libcJob, unlock, err := libraries.libc.load(config, tmpdir)
+		libcJobs, unlock, err := libraries.libc.load(config, tmpdir)
 		if err != nil {
 			return BuildResult{}, err
 		}
 		defer unlock()
-		if libraries.libc.crt1Source != "" {
-			libcDependencies = append(libcDependencies, dummyCompileJob(filepath.Join(filepath.Dir(libcJob.result), "crt1.o")))
-		}
-		libcDependencies = append(libcDependencies, libcJob)
+		libcDependencies = append(libcDependencies, libcJobs...)
 	}
 	if config.Target.Libc == "mingw-w64" {
 		libcDependencies = append(libcDependencies, makeMinGWExtraLibs(tmpdir, config.GOARCH())...)
@@ -721,12 +718,12 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 
 	// Add library dependencies needed by the linker, usually from the cache.
 	for _, library := range libraries.linker {
-		job, unlock, err := library.load(config, tmpdir)
+		jobs, unlock, err := library.load(config, tmpdir)
 		if err != nil {
 			return result, err
 		}
 		defer unlock()
-		linkerDependencies = append(linkerDependencies, job)
+		linkerDependencies = append(linkerDependencies, jobs...)
 	}
 
 	// Add jobs to compile extra files. These files are in C or assembly and
