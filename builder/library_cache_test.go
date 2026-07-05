@@ -10,6 +10,7 @@ import (
 )
 
 func TestLibraryTrimPathCache(t *testing.T) {
+	t.Setenv("GOCACHEPROG", "")
 	const triple = "x86_64-unknown-linux-gnu"
 	for _, tc := range []struct {
 		name       string
@@ -27,7 +28,11 @@ func TestLibraryTrimPathCache(t *testing.T) {
 			t.Setenv("HOME", home)
 			t.Setenv("XDG_CACHE_HOME", home)
 			t.Setenv("LocalAppData", home)
-			cache := goenv.Get("GOCACHE")
+			cache, err := newBuildCache(goenv.Get("GOCACHE"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cache.Close()
 			sourceDir := t.TempDir()
 			if err := os.WriteFile(filepath.Join(sourceDir, "probe.c"), []byte("int probe(void) { return 1; }\n"), 0o644); err != nil {
 				t.Fatal(err)
@@ -48,14 +53,14 @@ func TestLibraryTrimPathCache(t *testing.T) {
 			}
 			config.LibraryKeys = map[string]string{lib.name: input.key()}
 			suffix := "-h" + input.key()
-			cachedArchive := filepath.Join(cache, tc.cachedName+suffix, "lib.a")
+			cachedArchive := cache.filePath("lib", tc.cachedName+suffix)
 			if err := os.MkdirAll(filepath.Dir(cachedArchive), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(cachedArchive, []byte("cached library"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			jobs, abort, err := lib.load(config, t.TempDir(), input)
+			jobs, abort, err := lib.load(cache, config, t.TempDir(), input)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -64,21 +69,21 @@ func TestLibraryTrimPathCache(t *testing.T) {
 				t.Fatalf("library jobs = %d, want 1", len(jobs))
 			}
 			job := jobs[0]
-			want := filepath.Join(cache, tc.wantName+suffix, "lib.a")
-			if job.result != want {
-				t.Fatalf("library path = %q, want %q", job.result, want)
-			}
+			want := cache.filePath("lib", tc.wantName+suffix)
 			if got := len(job.dependencies) != 0; got != tc.rebuild {
 				t.Fatalf("library rebuild = %t, want %t", got, tc.rebuild)
 			}
+			if err := runJobs(job, make(chan struct{}, 1)); err != nil {
+				t.Fatal(err)
+			}
+			if job.result != want {
+				t.Fatalf("library path = %q, want %q", job.result, want)
+			}
 			if tc.rebuild {
-				if err := runJobs(job, make(chan struct{}, 1)); err != nil {
-					t.Fatal(err)
-				}
 				if _, err := os.Stat(want); err != nil {
 					t.Fatal(err)
 				}
-				cachedJobs, abort, err := lib.load(config, t.TempDir(), input)
+				cachedJobs, abort, err := lib.load(cache, config, t.TempDir(), input)
 				if err != nil {
 					t.Fatal(err)
 				}
