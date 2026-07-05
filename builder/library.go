@@ -159,7 +159,7 @@ func (l *Library) cacheInput(config *compileopts.Config) (*libraryCacheInput, er
 	if l.inputDir != nil {
 		inputDir = l.inputDir()
 	}
-	compilerID, err := libraryCompilerIdentity()
+	compilerID, err := clangCompilerIdentity()
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +267,7 @@ func hashLibraryHeaderInputs(root string) (map[string]string, error) {
 	return hashes, err
 }
 
-func libraryCompilerIdentity() (string, error) {
+func clangCompilerIdentity() (string, error) {
 	if hasBuiltinTools {
 		return "builtin clang llvm " + llvm.Version, nil
 	}
