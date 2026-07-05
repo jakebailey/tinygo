@@ -26,6 +26,7 @@ var Keys = []string{
 	"GOROOT",
 	"GOPATH",
 	"GOCACHE",
+	"GOCACHEPROG",
 	"CGO_ENABLED",
 	"TINYGOROOT",
 }
@@ -152,7 +153,7 @@ func Get(name string) string {
 			panic("could not find cache dir: " + err.Error())
 		}
 		return filepath.Join(dir, "tinygo")
-	case "CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS":
+	case "GOCACHEPROG", "CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS":
 		return os.Getenv(name)
 	case "CGO_ENABLED":
 		// Always enable CGo. It is required by a number of targets, including
