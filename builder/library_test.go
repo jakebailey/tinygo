@@ -127,12 +127,12 @@ func TestLibraryObjectForParentSource(t *testing.T) {
 		Target:      &compileopts.TargetSpec{Triple: "x86_64-unknown-linux-gnu"},
 		LibraryKeys: map[string]string{lib.name: input.key()},
 	}
-	job, unlock, err := lib.load(config, dir, input)
+	jobs, unlock, err := lib.load(config, dir, input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer unlock()
-	compile := job.dependencies[0]
+	compile := jobs[0].dependencies[0]
 	if err := compile.run(compile); err != nil {
 		t.Fatal(err)
 	}
