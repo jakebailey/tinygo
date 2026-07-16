@@ -29,6 +29,8 @@ type compiler struct {
 	goIDs       map[*ssa.Go]int
 	structs     []*structType
 	structByGo  map[types.Type]*structType
+	arrays      []*arrayType
+	arrayByElem map[types.Type]*arrayType
 	globals     []*globalInfo
 	globalBySSA map[*ssa.Global]*globalInfo
 }
@@ -37,6 +39,12 @@ type structType struct {
 	id     int
 	goType types.Type
 	fields []field
+}
+
+type arrayType struct {
+	id          int
+	element     types.Type
+	elementSize int64
 }
 
 type field struct {
@@ -50,6 +58,9 @@ type field struct {
 type valueInfo struct {
 	goType types.Type
 	base   *structType
+	array  *arrayType
+	slice  bool
+	length int64
 	field  int
 	global *globalInfo
 }
@@ -78,9 +89,13 @@ func Compile(program Program) (string, error) {
 		functionIDs: make(map[*ssa.Function]int),
 		goIDs:       make(map[*ssa.Go]int),
 		structByGo:  make(map[types.Type]*structType),
+		arrayByElem: make(map[types.Type]*arrayType),
 		globalBySSA: make(map[*ssa.Global]*globalInfo),
 	}
 	if err := c.findFunctions(); err != nil {
+		return "", err
+	}
+	if err := c.findArrays(); err != nil {
 		return "", err
 	}
 	if err := c.findStructs(); err != nil {
@@ -92,6 +107,9 @@ func Compile(program Program) (string, error) {
 
 	var out strings.Builder
 	out.WriteString("(module\n")
+	for _, typ := range c.arrays {
+		fmt.Fprintf(&out, "  (type $array%d (array (mut %s)))\n", typ.id, wasmScalarType(typ.element))
+	}
 	if len(c.structs) != 0 {
 		out.WriteString("  (rec\n")
 		for _, typ := range c.structs {
@@ -226,6 +244,79 @@ func (c *compiler) findFunctions() error {
 	return visit(mainFn)
 }
 
+func (c *compiler) findArrays() error {
+	addArray := func(element types.Type, pos token.Pos) error {
+		if !isScalar(element) {
+			return c.errorAt(pos, "unsupported managed array element type: %s", element)
+		}
+		if _, ok := c.arrayByElem[element]; ok {
+			return nil
+		}
+		typ := &arrayType{
+			id:          len(c.arrays),
+			element:     element,
+			elementSize: types.SizesFor("gc", "wasm").Sizeof(element),
+		}
+		c.arrays = append(c.arrays, typ)
+		c.arrayByElem[element] = typ
+		return nil
+	}
+	addFromType := func(goType types.Type, pos token.Pos) error {
+		if slice, ok := goType.Underlying().(*types.Slice); ok {
+			return addArray(slice.Elem(), pos)
+		}
+		if pointer, ok := goType.Underlying().(*types.Pointer); ok {
+			if array, ok := pointer.Elem().Underlying().(*types.Array); ok {
+				return addArray(array.Elem(), pos)
+			}
+		}
+		return nil
+	}
+	for _, fn := range c.functions {
+		for i := 0; i < fn.Signature.Params().Len(); i++ {
+			if err := addFromType(fn.Signature.Params().At(i).Type(), fn.Pos()); err != nil {
+				return err
+			}
+		}
+		for i := 0; i < fn.Signature.Results().Len(); i++ {
+			if err := addFromType(fn.Signature.Results().At(i).Type(), fn.Pos()); err != nil {
+				return err
+			}
+		}
+		for _, block := range fn.Blocks {
+			for _, instruction := range block.Instrs {
+				if value, ok := instruction.(ssa.Value); ok {
+					if err := addFromType(value.Type(), value.Pos()); err != nil {
+						return err
+					}
+				}
+				for _, operand := range instruction.Operands(nil) {
+					if operand != nil && *operand != nil {
+						if err := addFromType((*operand).Type(), instruction.Pos()); err != nil {
+							return err
+						}
+					}
+				}
+				switch instruction := instruction.(type) {
+				case *ssa.Alloc:
+					array, ok := dereference(instruction.Type()).Underlying().(*types.Array)
+					if ok {
+						if err := addArray(array.Elem(), instruction.Pos()); err != nil {
+							return err
+						}
+					}
+				case *ssa.MakeSlice:
+					slice := instruction.Type().Underlying().(*types.Slice)
+					if err := addArray(slice.Elem(), instruction.Pos()); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (c *compiler) findStructs() error {
 	var addType func(types.Type) error
 	addType = func(goType types.Type) error {
@@ -281,6 +372,9 @@ func (c *compiler) findStructs() error {
 		for _, block := range fn.Blocks {
 			for _, instruction := range block.Instrs {
 				if alloc, ok := instruction.(*ssa.Alloc); ok {
+					if _, ok := dereference(alloc.Type()).Underlying().(*types.Array); ok {
+						continue
+					}
 					if err := addType(alloc.Type()); err != nil {
 						return c.errorAt(alloc.Pos(), "%v", err)
 					}
@@ -372,10 +466,8 @@ func (fc *functionCompiler) compile() (string, error) {
 		if err != nil {
 			return "", fc.compiler.errorAt(fc.fn.Pos(), "%v", err)
 		}
-		if info.base != nil {
-			fmt.Fprintf(&out, " (result (ref null $type%d)) (result i32)", info.base.id)
-		} else {
-			fmt.Fprintf(&out, " (result %s)", wasmScalarType(info.goType))
+		for _, typ := range wasmValueTypes(info) {
+			fmt.Fprintf(&out, " (result %s)", typ)
 		}
 	}
 	out.WriteString("\n")
@@ -466,21 +558,21 @@ func (fc *functionCompiler) emitEdge(out *strings.Builder, predecessor, successo
 		phis = append(phis, phi)
 		info := fc.values[phi]
 		edge := phi.Edges[predecessorIndex]
-		if info.base != nil {
-			base, offset := fc.pointerExpressions(edge, info)
-			fmt.Fprintf(out, "              (local.set %s_base %s)\n", phiTempName(phi), base)
-			fmt.Fprintf(out, "              (local.set %s_offset %s)\n", phiTempName(phi), offset)
-		} else {
-			fmt.Fprintf(out, "              (local.set %s %s)\n", phiTempName(phi), fc.expression(edge))
+		expressions, err := fc.valueExpressions(edge, info)
+		if err != nil {
+			return err
+		}
+		names := valuePartNames(phiTempName(phi), info)
+		for i := range names {
+			fmt.Fprintf(out, "              (local.set %s %s)\n", names[i], expressions[i])
 		}
 	}
 	for _, phi := range phis {
 		info := fc.values[phi]
-		if info.base != nil {
-			fmt.Fprintf(out, "              (local.set %s (local.get %s_base))\n", baseName(phi), phiTempName(phi))
-			fmt.Fprintf(out, "              (local.set %s (local.get %s_offset))\n", offsetName(phi), phiTempName(phi))
-		} else {
-			fmt.Fprintf(out, "              (local.set %s (local.get %s))\n", valueName(phi), phiTempName(phi))
+		names := valuePartNames(valueName(phi), info)
+		tempNames := valuePartNames(phiTempName(phi), info)
+		for i := range names {
+			fmt.Fprintf(out, "              (local.set %s (local.get %s))\n", names[i], tempNames[i])
 		}
 	}
 	fmt.Fprintf(out, "              (local.set $block (i32.const %d))\n", successor.Index)
@@ -493,6 +585,13 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 	case *ssa.Phi:
 		return fc.infoForType(value.Type())
 	case *ssa.Alloc:
+		if array, ok := dereference(value.Type()).Underlying().(*types.Array); ok {
+			typ := fc.compiler.arrayByElem[array.Elem()]
+			if typ == nil {
+				return valueInfo{}, fc.compiler.errorAt(value.Pos(), "managed array type was not discovered: %s", array.Elem())
+			}
+			return valueInfo{goType: value.Type(), array: typ, length: array.Len(), field: -1}, nil
+		}
 		base := fc.compiler.structByGo[dereference(value.Type())]
 		if base == nil {
 			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "unsupported allocation type: %s", value.Type())
@@ -511,6 +610,31 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "invalid field index %d", value.Field)
 		}
 		return valueInfo{goType: value.Type(), base: base, field: value.Field}, nil
+	case *ssa.IndexAddr:
+		source, err := fc.info(value.X)
+		if err != nil {
+			return valueInfo{}, err
+		}
+		if source.array == nil {
+			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "index address has no managed array")
+		}
+		return valueInfo{goType: value.Type(), array: source.array, field: -1}, nil
+	case *ssa.Slice:
+		source, err := fc.info(value.X)
+		if err != nil {
+			return valueInfo{}, err
+		}
+		if source.array == nil {
+			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "slice has no managed array")
+		}
+		return valueInfo{goType: value.Type(), array: source.array, slice: true, field: -1}, nil
+	case *ssa.MakeSlice:
+		slice := value.Type().Underlying().(*types.Slice)
+		typ := fc.compiler.arrayByElem[slice.Elem()]
+		if typ == nil {
+			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "managed array type was not discovered: %s", slice.Elem())
+		}
+		return valueInfo{goType: value.Type(), array: typ, slice: true, field: -1}, nil
 	case *ssa.UnOp:
 		if value.Op == token.ARROW {
 			if wasmScalarType(value.Type()) != "i32" {
@@ -524,6 +648,9 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 		source, err := fc.info(value.X)
 		if err != nil {
 			return valueInfo{}, err
+		}
+		if source.array != nil {
+			return valueInfo{goType: value.Type(), field: -1}, nil
 		}
 		if source.field < 0 {
 			if source.global != nil {
@@ -565,7 +692,11 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 	switch instruction := instruction.(type) {
 	case *ssa.Alloc:
 		info := fc.values[instruction]
-		fmt.Fprintf(out, "    (local.set %s (struct.new_default $type%d))\n", baseName(instruction), info.base.id)
+		if info.array != nil {
+			fmt.Fprintf(out, "    (local.set %s (array.new_default $array%d (i32.const %d)))\n", baseName(instruction), info.array.id, info.length)
+		} else {
+			fmt.Fprintf(out, "    (local.set %s (struct.new_default $type%d))\n", baseName(instruction), info.base.id)
+		}
 		fmt.Fprintf(out, "    (local.set %s (i32.const 0))\n", offsetName(instruction))
 		out.WriteString("    (drop (call $suspend))\n")
 	case *ssa.FieldAddr:
@@ -575,6 +706,22 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 		fmt.Fprintf(out, "    (local.set %s (i32.add (local.get %s) (i32.const %d)))\n", offsetName(instruction), offsetName(instruction.X), field.virtualOffset)
 	case *ssa.Store:
 		return fc.emitStore(out, instruction)
+	case *ssa.IndexAddr:
+		return fc.emitIndexAddr(out, instruction)
+	case *ssa.Slice:
+		return fc.emitSlice(out, instruction)
+	case *ssa.MakeSlice:
+		info := fc.values[instruction]
+		length := fc.expression(instruction.Len)
+		capacity := fc.expression(instruction.Cap)
+		fmt.Fprintf(out, "    (if (i32.lt_s %s (i32.const 0)) (then (unreachable)))\n", length)
+		fmt.Fprintf(out, "    (if (i32.lt_s %s (i32.const 0)) (then (unreachable)))\n", capacity)
+		fmt.Fprintf(out, "    (if (i32.gt_u %s %s) (then (unreachable)))\n", length, capacity)
+		fmt.Fprintf(out, "    (local.set %s (array.new_default $array%d %s))\n", baseName(instruction), info.array.id, capacity)
+		fmt.Fprintf(out, "    (local.set %s (i32.const 0))\n", offsetName(instruction))
+		fmt.Fprintf(out, "    (local.set %s %s)\n", lenName(instruction), length)
+		fmt.Fprintf(out, "    (local.set %s %s)\n", capName(instruction), capacity)
+		out.WriteString("    (drop (call $suspend))\n")
 	case *ssa.UnOp:
 		if instruction.Op == token.ARROW {
 			fmt.Fprintf(out, "    (local.set %s (call $channelRecv %s))\n", valueName(instruction), fc.expression(instruction.X))
@@ -612,7 +759,7 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 		if err != nil {
 			return err
 		}
-		if source.base != nil || source.global != nil || fc.values[instruction].base != nil {
+		if source.base != nil || source.array != nil || source.global != nil || fc.values[instruction].base != nil || fc.values[instruction].array != nil {
 			return fc.compiler.errorAt(instruction.Pos(), "pointer conversions are not supported")
 		}
 		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), fc.expression(instruction.X))
@@ -623,14 +770,12 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 			if err != nil {
 				return err
 			}
-			if info.base != nil {
-				base, offset := fc.pointerExpressions(result, info)
-				fmt.Fprintf(out, " %s %s", base, offset)
-			} else {
-				if info.global != nil {
-					return fc.compiler.errorAt(instruction.Pos(), "global addresses cannot be returned")
-				}
-				fmt.Fprintf(out, " %s", fc.expression(result))
+			expressions, err := fc.valueExpressions(result, info)
+			if err != nil {
+				return err
+			}
+			for _, expression := range expressions {
+				fmt.Fprintf(out, " %s", expression)
 			}
 		}
 		out.WriteString(")\n")
@@ -649,6 +794,51 @@ func (fc *functionCompiler) emitBinOp(out *strings.Builder, instruction *ssa.Bin
 	right, err := fc.info(instruction.Y)
 	if err != nil {
 		return err
+	}
+	if left.array != nil || right.array != nil {
+		if left.array == nil || right.array == nil || left.array != right.array {
+			return fc.compiler.errorAt(instruction.Pos(), "managed array comparison has incompatible bases")
+		}
+		if instruction.Op != token.EQL && instruction.Op != token.NEQ {
+			return fc.compiler.errorAt(instruction.Pos(), "unsupported managed array comparison: %s", instruction.Op)
+		}
+		if left.slice || right.slice {
+			leftNil := isNilConst(instruction.X)
+			rightNil := isNilConst(instruction.Y)
+			if !leftNil && !rightNil {
+				return fc.compiler.errorAt(instruction.Pos(), "slices can only be compared with nil")
+			}
+			other := instruction.X
+			otherInfo := left
+			if leftNil {
+				other = instruction.Y
+				otherInfo = right
+			}
+			expressions, err := fc.valueExpressions(other, otherInfo)
+			if err != nil {
+				return err
+			}
+			expression := "(ref.is_null " + expressions[0] + ")"
+			if instruction.Op == token.NEQ {
+				expression = "(i32.eqz " + expression + ")"
+			}
+			fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), expression)
+			return nil
+		}
+		leftExpressions, err := fc.valueExpressions(instruction.X, left)
+		if err != nil {
+			return err
+		}
+		rightExpressions, err := fc.valueExpressions(instruction.Y, right)
+		if err != nil {
+			return err
+		}
+		expression := fmt.Sprintf("(i32.and (ref.eq %s %s) (i32.eq %s %s))", leftExpressions[0], rightExpressions[0], leftExpressions[1], rightExpressions[1])
+		if instruction.Op == token.NEQ {
+			expression = "(i32.eqz " + expression + ")"
+		}
+		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), expression)
+		return nil
 	}
 	if left.base != nil || right.base != nil {
 		if left.base == nil || right.base == nil || left.base != right.base {
@@ -674,8 +864,14 @@ func (fc *functionCompiler) emitBinOp(out *strings.Builder, instruction *ssa.Bin
 	if err != nil {
 		return fc.compiler.errorAt(instruction.Pos(), "%v", err)
 	}
+
 	fmt.Fprintf(out, "    (local.set %s (%s %s %s))\n", valueName(instruction), op, fc.expression(instruction.X), fc.expression(instruction.Y))
 	return nil
+}
+
+func isNilConst(value ssa.Value) bool {
+	constant, ok := value.(*ssa.Const)
+	return ok && constant.IsNil()
 }
 
 func (fc *functionCompiler) emitChangeType(out *strings.Builder, instruction *ssa.ChangeType) error {
@@ -693,10 +889,84 @@ func (fc *functionCompiler) emitChangeType(out *strings.Builder, instruction *ss
 		fmt.Fprintf(out, "    (local.set %s %s)\n", offsetName(instruction), offset)
 		return nil
 	}
-	if source.base != nil || source.global != nil {
+	if destination.array != nil {
+		if source.array != destination.array || source.slice != destination.slice {
+			return fc.compiler.errorAt(instruction.Pos(), "slice change has incompatible managed array")
+		}
+		expressions, err := fc.valueExpressions(instruction.X, source)
+		if err != nil {
+			return err
+		}
+		names := valuePartNames(valueName(instruction), destination)
+		for i := range names {
+			fmt.Fprintf(out, "    (local.set %s %s)\n", names[i], expressions[i])
+		}
+		return nil
+	}
+	if source.base != nil || source.array != nil || source.global != nil {
 		return fc.compiler.errorAt(instruction.Pos(), "pointer change is not supported")
 	}
 	fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), fc.expression(instruction.X))
+	return nil
+}
+
+func (fc *functionCompiler) emitIndexAddr(out *strings.Builder, instruction *ssa.IndexAddr) error {
+	source, err := fc.info(instruction.X)
+	if err != nil {
+		return err
+	}
+	if source.array == nil {
+		return fc.compiler.errorAt(instruction.Pos(), "index address has no managed array")
+	}
+	index := fc.expression(instruction.Index)
+	length := fc.lengthExpression(instruction.X, source)
+	sourceExpressions, err := fc.valueExpressions(instruction.X, source)
+	if err != nil {
+		return err
+	}
+	if !source.slice {
+		fmt.Fprintf(out, "    (drop (ref.as_non_null %s))\n", sourceExpressions[0])
+	}
+	fmt.Fprintf(out, "    (if (i32.ge_u %s %s) (then (unreachable)))\n", index, length)
+	fmt.Fprintf(out, "    (local.set %s %s)\n", baseName(instruction), sourceExpressions[0])
+	fmt.Fprintf(out, "    (local.set %s (i32.add %s %s))\n", offsetName(instruction), sourceExpressions[1], scaleArrayIndex(index, source.array))
+	return nil
+}
+
+func (fc *functionCompiler) emitSlice(out *strings.Builder, instruction *ssa.Slice) error {
+	source, err := fc.info(instruction.X)
+	if err != nil {
+		return err
+	}
+	if source.array == nil {
+		return fc.compiler.errorAt(instruction.Pos(), "slice has no managed array")
+	}
+	sourceExpressions, err := fc.valueExpressions(instruction.X, source)
+	if err != nil {
+		return err
+	}
+	if !source.slice {
+		fmt.Fprintf(out, "    (drop (ref.as_non_null %s))\n", sourceExpressions[0])
+	}
+	low := "(i32.const 0)"
+	if instruction.Low != nil {
+		low = fc.expression(instruction.Low)
+	}
+	high := fc.lengthExpression(instruction.X, source)
+	if instruction.High != nil {
+		high = fc.expression(instruction.High)
+	}
+	max := fc.capacityExpression(instruction.X, source)
+	if instruction.Max != nil {
+		max = fc.expression(instruction.Max)
+	}
+	fmt.Fprintf(out, "    (if (i32.gt_u %s %s) (then (unreachable)))\n", low, high)
+	fmt.Fprintf(out, "    (if (i32.gt_u %s %s) (then (unreachable)))\n", high, max)
+	fmt.Fprintf(out, "    (if (i32.gt_u %s %s) (then (unreachable)))\n", max, fc.capacityExpression(instruction.X, source))
+	fmt.Fprintf(out, "    (local.set %s %s)\n", baseName(instruction), sourceExpressions[0])
+	fmt.Fprintf(out, "    (local.set %s (i32.add %s %s))\n", offsetName(instruction), sourceExpressions[1], scaleArrayIndex(low, source.array))
+	fmt.Fprintf(out, "    (local.set %s (i32.sub %s %s))\n", lenName(instruction), high, low)
+	fmt.Fprintf(out, "    (local.set %s (i32.sub %s %s))\n", capName(instruction), max, low)
 	return nil
 }
 
@@ -720,6 +990,10 @@ func (fc *functionCompiler) emitStore(out *strings.Builder, instruction *ssa.Sto
 		} else {
 			fmt.Fprintf(out, "    (global.set $global%d %s)\n", address.global.id, fc.expression(instruction.Val))
 		}
+		return nil
+	}
+	if address.array != nil {
+		fmt.Fprintf(out, "    (array.set $array%d (ref.as_non_null (local.get %s)) %s %s)\n", address.array.id, baseName(instruction.Addr), physicalArrayIndex(instruction.Addr, address.array), fc.expression(instruction.Val))
 		return nil
 	}
 	if address.base == nil || address.field < 0 {
@@ -758,6 +1032,10 @@ func (fc *functionCompiler) emitLoad(out *strings.Builder, instruction *ssa.UnOp
 		}
 		return nil
 	}
+	if source.array != nil {
+		fmt.Fprintf(out, "    (local.set %s (array.get $array%d (ref.as_non_null (local.get %s)) %s))\n", valueName(instruction), source.array.id, baseName(instruction.X), physicalArrayIndex(instruction.X, source.array))
+		return nil
+	}
 	if source.base == nil || source.field < 0 {
 		return fc.compiler.errorAt(instruction.Pos(), "load source is not a managed struct field")
 	}
@@ -775,6 +1053,24 @@ func (fc *functionCompiler) emitLoad(out *strings.Builder, instruction *ssa.UnOp
 func (fc *functionCompiler) emitCall(out *strings.Builder, instruction *ssa.Call) error {
 	if builtin, ok := instruction.Call.Value.(*ssa.Builtin); ok {
 		switch builtin.Name() {
+		case "len", "cap":
+			if len(instruction.Call.Args) != 1 {
+				return fc.compiler.errorAt(instruction.Pos(), "invalid %s call", builtin.Name())
+			}
+			arg := instruction.Call.Args[0]
+			info, err := fc.info(arg)
+			if err != nil {
+				return err
+			}
+			if info.array == nil {
+				return fc.compiler.errorAt(instruction.Pos(), "%s only supports managed arrays and slices", builtin.Name())
+			}
+			expression := fc.lengthExpression(arg, info)
+			if builtin.Name() == "cap" {
+				expression = fc.capacityExpression(arg, info)
+			}
+			fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), expression)
+			return nil
 		case "println", "print":
 			for _, arg := range instruction.Call.Args {
 				info, err := fc.info(arg)
@@ -803,14 +1099,12 @@ func (fc *functionCompiler) emitCall(out *strings.Builder, instruction *ssa.Call
 		if err != nil {
 			return err
 		}
-		if info.base != nil {
-			base, offset := fc.pointerExpressions(arg, info)
-			fmt.Fprintf(&call, " %s %s", base, offset)
-		} else {
-			if info.global != nil {
-				return fc.compiler.errorAt(instruction.Pos(), "global addresses cannot be passed to functions")
-			}
-			fmt.Fprintf(&call, " %s", fc.expression(arg))
+		expressions, err := fc.valueExpressions(arg, info)
+		if err != nil {
+			return err
+		}
+		for _, expression := range expressions {
+			fmt.Fprintf(&call, " %s", expression)
 		}
 	}
 	call.WriteString(")")
@@ -820,10 +1114,12 @@ func (fc *functionCompiler) emitCall(out *strings.Builder, instruction *ssa.Call
 		return nil
 	}
 	info := fc.values[instruction]
-	if info.base != nil {
+	if info.base != nil || info.array != nil {
 		fmt.Fprintf(out, "    %s\n", call.String())
-		fmt.Fprintf(out, "    (local.set %s)\n", offsetName(instruction))
-		fmt.Fprintf(out, "    (local.set %s)\n", baseName(instruction))
+		names := valuePartNames(valueName(instruction), info)
+		for i := len(names) - 1; i >= 0; i-- {
+			fmt.Fprintf(out, "    (local.set %s)\n", names[i])
+		}
 	} else {
 		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), call.String())
 	}
@@ -860,6 +1156,66 @@ func (fc *functionCompiler) pointerExpressions(value ssa.Value, info valueInfo) 
 	return "(local.get " + baseName(value) + ")", "(local.get " + offsetName(value) + ")"
 }
 
+func (fc *functionCompiler) valueExpressions(value ssa.Value, info valueInfo) ([]string, error) {
+	if info.array != nil {
+		if constant, ok := value.(*ssa.Const); ok && constant.IsNil() {
+			expressions := []string{fmt.Sprintf("(ref.null $array%d)", info.array.id), "(i32.const 0)"}
+			if info.slice {
+				expressions = append(expressions, "(i32.const 0)", "(i32.const 0)")
+			}
+			return expressions, nil
+		}
+		expressions := []string{"(local.get " + baseName(value) + ")", "(local.get " + offsetName(value) + ")"}
+		if info.slice {
+			expressions = append(expressions, "(local.get "+lenName(value)+")", "(local.get "+capName(value)+")")
+		}
+		return expressions, nil
+	}
+	if info.base != nil {
+		base, offset := fc.pointerExpressions(value, info)
+		return []string{base, offset}, nil
+	}
+	if info.global != nil {
+		return nil, fc.compiler.errorAt(value.Pos(), "global addresses do not have a first-class representation")
+	}
+	return []string{fc.expression(value)}, nil
+}
+
+func (fc *functionCompiler) lengthExpression(value ssa.Value, info valueInfo) string {
+	if constant, ok := value.(*ssa.Const); ok && constant.IsNil() {
+		return "(i32.const 0)"
+	}
+	if info.slice {
+		return "(local.get " + lenName(value) + ")"
+	}
+	return "(i32.const " + strconv.FormatInt(info.length, 10) + ")"
+}
+
+func (fc *functionCompiler) capacityExpression(value ssa.Value, info valueInfo) string {
+	if constant, ok := value.(*ssa.Const); ok && constant.IsNil() {
+		return "(i32.const 0)"
+	}
+	if info.slice {
+		return "(local.get " + capName(value) + ")"
+	}
+	return "(i32.const " + strconv.FormatInt(info.length, 10) + ")"
+}
+
+func scaleArrayIndex(index string, array *arrayType) string {
+	if array.elementSize == 1 {
+		return index
+	}
+	return fmt.Sprintf("(i32.mul %s (i32.const %d))", index, array.elementSize)
+}
+
+func physicalArrayIndex(value ssa.Value, array *arrayType) string {
+	offset := "(local.get " + offsetName(value) + ")"
+	if array.elementSize == 1 {
+		return offset
+	}
+	return fmt.Sprintf("(i32.div_u %s (i32.const %d))", offset, array.elementSize)
+}
+
 func (fc *functionCompiler) info(value ssa.Value) (valueInfo, error) {
 	if constant, ok := value.(*ssa.Const); ok {
 		return fc.infoForType(constant.Type())
@@ -879,8 +1235,22 @@ func (fc *functionCompiler) info(value ssa.Value) (valueInfo, error) {
 }
 
 func (fc *functionCompiler) infoForType(goType types.Type) (valueInfo, error) {
+	if slice, ok := goType.Underlying().(*types.Slice); ok {
+		array := fc.compiler.arrayByElem[slice.Elem()]
+		if array == nil {
+			return valueInfo{}, fmt.Errorf("wasm-gc: managed array type was not discovered: %s", slice.Elem())
+		}
+		return valueInfo{goType: goType, array: array, slice: true, field: -1}, nil
+	}
 	if pointer, ok := goType.Underlying().(*types.Pointer); ok {
 		target := dereference(pointer)
+		if array, ok := target.Underlying().(*types.Array); ok {
+			managedArray := fc.compiler.arrayByElem[array.Elem()]
+			if managedArray == nil {
+				return valueInfo{}, fmt.Errorf("wasm-gc: managed array type was not discovered: %s", array.Elem())
+			}
+			return valueInfo{goType: goType, array: managedArray, length: array.Len(), field: -1}, nil
+		}
 		if _, ok := target.Underlying().(*types.Struct); !ok {
 			return valueInfo{}, fmt.Errorf("wasm-gc: pointer type has no statically known managed base: %s", goType)
 		}
@@ -990,17 +1360,60 @@ func offsetName(value ssa.Value) string {
 	return valueName(value) + "_offset"
 }
 
+func lenName(value ssa.Value) string {
+	return valueName(value) + "_len"
+}
+
+func capName(value ssa.Value) string {
+	return valueName(value) + "_cap"
+}
+
 func phiTempName(phi *ssa.Phi) string {
 	return valueName(phi) + "_phi"
 }
 
 func writeDeclaration(out *strings.Builder, kind, name string, info valueInfo) {
-	if info.base != nil {
+	if info.array != nil {
+		fmt.Fprintf(out, " (%s %s_base (ref null $array%d))", kind, name, info.array.id)
+		fmt.Fprintf(out, " (%s %s_offset i32)", kind, name)
+		if info.slice {
+			fmt.Fprintf(out, " (%s %s_len i32)", kind, name)
+			fmt.Fprintf(out, " (%s %s_cap i32)", kind, name)
+		}
+	} else if info.base != nil {
 		fmt.Fprintf(out, " (%s %s_base (ref null $type%d))", kind, name, info.base.id)
 		fmt.Fprintf(out, " (%s %s_offset i32)", kind, name)
 	} else {
 		fmt.Fprintf(out, " (%s %s %s)", kind, name, wasmScalarType(info.goType))
 	}
+}
+
+func wasmValueTypes(info valueInfo) []string {
+	if info.array != nil {
+		types := []string{fmt.Sprintf("(ref null $array%d)", info.array.id), "i32"}
+		if info.slice {
+			types = append(types, "i32", "i32")
+		}
+		return types
+	}
+	if info.base != nil {
+		return []string{fmt.Sprintf("(ref null $type%d)", info.base.id), "i32"}
+	}
+	return []string{wasmScalarType(info.goType)}
+}
+
+func valuePartNames(name string, info valueInfo) []string {
+	if info.array != nil {
+		names := []string{name + "_base", name + "_offset"}
+		if info.slice {
+			names = append(names, name+"_len", name+"_cap")
+		}
+		return names
+	}
+	if info.base != nil {
+		return []string{name + "_base", name + "_offset"}
+	}
+	return []string{name}
 }
 
 func isZeroTuple(goType types.Type) bool {
