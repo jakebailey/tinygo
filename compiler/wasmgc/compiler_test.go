@@ -151,6 +151,47 @@ func main() {
 	}
 }
 
+func TestCompileManagedString(t *testing.T) {
+	const source = `package main
+var message = "wasmgc!"
+func middle(value string) string { return value[2:7] }
+func main() {
+	value := middle(message)
+	println(len(value), value[0], value == "smgc!")
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(type $array0 (array (mut i8)))",
+		"(array.new_fixed $array0",
+		"(func $stringEqual",
+		"(array.get_u $array0",
+		"(global.set $global",
+		"(result (ref null $array0)) (result i32) (result i32)",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
+func TestCompileStringEdgeCases(t *testing.T) {
+	const source = `package main
+func increment(value byte) byte { return value + 1 }
+func main() {
+	number := 300
+	println(len(""[0:0]), "abc"[1], increment(255), byte(number))
+}
+`
+	wat := compileSource(t, source)
+	if strings.Contains(wat, "$nil:string_len") || strings.Contains(wat, "$\"abc\":string_len") {
+		t.Fatalf("string constant length used an undeclared local:\n%s", wat)
+	}
+	if !strings.Contains(wat, "(i32.const 255)") {
+		t.Fatalf("uint8 narrowing was not emitted:\n%s", wat)
+	}
+}
+
 func TestRejectUnsupportedPrograms(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -160,10 +201,10 @@ func TestRejectUnsupportedPrograms(t *testing.T) {
 		{
 			name: "unsupported global",
 			source: `package main
-var value string
+var value float64
 func main() {}
 `,
-			message: "unsupported global type value: string",
+			message: "unsupported global type value: float64",
 		},
 		{
 			name: "integer width",
