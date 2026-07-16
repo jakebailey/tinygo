@@ -34,6 +34,7 @@ type TargetSpec struct {
 	SoftFloat        bool     // used for non-baremetal systems (GOMIPS=softfloat etc)
 	BuildTags        []string `json:"build-tags,omitempty"`
 	BuildMode        string   `json:"buildmode,omitempty"` // default build mode (if nothing specified)
+	Backend          string   `json:"backend,omitempty"`
 	GC               string   `json:"gc,omitempty"`
 	PanicUnwind      string   `json:"panic-unwind,omitempty"`
 	Scheduler        string   `json:"scheduler,omitempty"`
@@ -243,6 +244,9 @@ func LoadTarget(options *Options) (*TargetSpec, error) {
 			return nil, errors.New("scheduler=jspi requires a WebAssembly target with GOOS=js")
 		}
 		spec.ExtraFiles = append(spec.ExtraFiles, "src/internal/task/task_jspi_wasm.S")
+	}
+	if spec.Backend == "wasm-gc" && scheduler != "jspi" {
+		return nil, errors.New("backend=wasm-gc requires scheduler=jspi")
 	}
 
 	return spec, nil

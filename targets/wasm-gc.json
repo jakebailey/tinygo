@@ -1,0 +1,12 @@
+{
+	"llvm-target": "wasm32-unknown-unknown",
+	"cpu": "generic",
+	"features": "+bulk-memory,+multivalue,+reference-types",
+	"backend": "wasm-gc",
+	"build-tags": ["tinygo.wasm", "tinygo.wasmgc"],
+	"goos": "js",
+	"goarch": "wasm",
+	"gc": "none",
+	"scheduler": "jspi",
+	"emulator": "node --expose-gc {root}/targets/wasm_gc_exec_node.js {}"
+}
