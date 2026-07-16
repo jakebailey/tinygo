@@ -105,6 +105,52 @@ func main() {
 	}
 }
 
+func TestCompileManagedSlice(t *testing.T) {
+	const source = `package main
+func makeValues(count int) []int {
+	values := make([]int, count)
+	for i := 0; i < len(values); i++ {
+		values[i] = i
+	}
+	return values
+}
+func main() {
+	values := makeValues(8)[2:6]
+	println(values[1], len(values), cap(values))
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(type $array0 (array (mut i32)))",
+		"(array.new_default $array0",
+		"(array.set $array0",
+		"(array.get $array0",
+		"(result (ref null $array0)) (result i32) (result i32) (result i32)",
+		"(if (i32.lt_s",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
+func TestCompileNilSlice(t *testing.T) {
+	const source = `package main
+func pass(values []int) []int { return values }
+func main() {
+	var values []int
+	println(len(pass(values)), values == nil)
+}
+`
+	wat := compileSource(t, source)
+	if !strings.Contains(wat, "(type $array0 (array (mut i32)))") {
+		t.Fatalf("slice type was not discovered from the function signature:\n%s", wat)
+	}
+	if !strings.Contains(wat, "(ref.is_null") {
+		t.Fatalf("nil slice comparison was not lowered:\n%s", wat)
+	}
+}
+
 func TestRejectUnsupportedPrograms(t *testing.T) {
 	tests := []struct {
 		name    string

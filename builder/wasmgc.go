@@ -23,22 +23,46 @@ func buildWasmGC(result BuildResult, tmpdir string, config *compileopts.Config, 
 	}
 
 	result.Executable = filepath.Join(tmpdir, "main.wasm")
-	result.Binary = result.Executable
+	wasmtools := goenv.Get("WASMTOOLS")
+	args := []string{"parse", watPath, "-o", result.Executable}
+	if config.Options.PrintCommands != nil {
+		config.Options.PrintCommands(wasmtools, args...)
+	}
+	cmd := exec.Command(wasmtools, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return result, fmt.Errorf("wasm-tools parse failed: %w", err)
+	}
+
+	wasmoptInput := filepath.Join(tmpdir, "main.stripped.wasm")
+	args = []string{"strip", "--delete", "^name$", result.Executable, "-o", wasmoptInput}
+	if config.Options.PrintCommands != nil {
+		config.Options.PrintCommands(wasmtools, args...)
+	}
+	cmd = exec.Command(wasmtools, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return result, fmt.Errorf("wasm-tools strip failed: %w", err)
+	}
+
+	result.Binary = filepath.Join(tmpdir, "main.opt.wasm")
 	optLevel, _, _ := config.OptLevel()
-	args := []string{
+	args = []string{
 		"-" + optLevel,
 		"-g",
 		"--enable-gc",
 		"--enable-reference-types",
 		"--enable-multivalue",
-		watPath,
+		wasmoptInput,
 		"--output", result.Binary,
 	}
 	wasmopt := goenv.Get("WASMOPT")
 	if config.Options.PrintCommands != nil {
 		config.Options.PrintCommands(wasmopt, args...)
 	}
-	cmd := exec.Command(wasmopt, args...)
+	cmd = exec.Command(wasmopt, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
