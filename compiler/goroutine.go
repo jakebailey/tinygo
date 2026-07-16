@@ -118,7 +118,7 @@ func (b *builder) createGo(instr *ssa.Go) {
 	} else {
 		// The stack size is fixed at compile time. By emitting it here as a
 		// constant, it can be optimized.
-		if (b.Scheduler == "tasks" || b.Scheduler == "asyncify") && b.DefaultStackSize == 0 {
+		if (b.Scheduler == "tasks" || b.Scheduler == "asyncify" || b.Scheduler == "jspi") && b.DefaultStackSize == 0 {
 			b.addError(instr.Pos(), "default stack size for goroutines is not set")
 		}
 		stackSize = llvm.ConstInt(b.uintptrType, b.DefaultStackSize, false)
@@ -314,6 +314,11 @@ func (c *compilerContext) createGoroutineStartWrapper(fnType llvm.Type, fn llvm.
 	if c.Scheduler == "asyncify" {
 		exitGoroutineType, exitGoroutine = c.getFunction(c.program.ImportedPackage("runtime").Members["exitGoroutine"].(*ssa.Function))
 	}
+	var complete llvm.Value
+	var completeType llvm.Type
+	if c.Scheduler == "jspi" {
+		completeType, complete = c.getFunction(c.program.ImportedPackage("internal/task").Members["complete"].(*ssa.Function))
+	}
 
 	if !fn.IsAFunction().IsNil() {
 		// See whether this wrapper has already been created. If so, return it.
@@ -378,6 +383,10 @@ func (c *compilerContext) createGoroutineStartWrapper(fnType llvm.Type, fn llvm.
 
 			if c.Scheduler == "asyncify" {
 				b.CreateCall(exitGoroutineType, exitGoroutine, []llvm.Value{
+					llvm.Undef(c.dataPtrType),
+				}, "")
+			} else if c.Scheduler == "jspi" {
+				b.CreateCall(completeType, complete, []llvm.Value{
 					llvm.Undef(c.dataPtrType),
 				}, "")
 			}
@@ -463,6 +472,11 @@ func (c *compilerContext) createGoroutineStartWrapper(fnType llvm.Type, fn llvm.
 			// back to the scheduler, which will in turn return from the
 			// //go:wasmexport function.
 			b.createRuntimeCall("wasmExportExit", nil, "")
+			if c.Scheduler == "jspi" {
+				b.CreateCall(completeType, complete, []llvm.Value{
+					llvm.Undef(c.dataPtrType),
+				}, "")
+			}
 		}
 
 	} else {
@@ -529,6 +543,10 @@ func (c *compilerContext) createGoroutineStartWrapper(fnType llvm.Type, fn llvm.
 
 		if c.Scheduler == "asyncify" {
 			b.CreateCall(exitGoroutineType, exitGoroutine, []llvm.Value{
+				llvm.Undef(c.dataPtrType),
+			}, "")
+		} else if c.Scheduler == "jspi" {
+			b.CreateCall(completeType, complete, []llvm.Value{
 				llvm.Undef(c.dataPtrType),
 			}, "")
 		}
