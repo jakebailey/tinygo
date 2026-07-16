@@ -291,8 +291,8 @@ func (c *compiler) findStructs() error {
 }
 
 func (fc *functionCompiler) compile() (string, error) {
-	if len(fc.fn.Blocks) != 1 {
-		return "", fc.compiler.errorAt(fc.fn.Pos(), "function %s has %d basic blocks; only straight-line functions are supported", fc.fn.String(), len(fc.fn.Blocks))
+	if len(fc.fn.Blocks) == 0 {
+		return "", fc.compiler.errorAt(fc.fn.Pos(), "function %s has no body", fc.fn.String())
 	}
 
 	for _, param := range fc.fn.Params {
@@ -302,16 +302,18 @@ func (fc *functionCompiler) compile() (string, error) {
 		}
 		fc.values[param] = info
 	}
-	for _, instruction := range fc.fn.Blocks[0].Instrs {
-		value, ok := instruction.(ssa.Value)
-		if !ok {
-			continue
+	for _, block := range fc.fn.Blocks {
+		for _, instruction := range block.Instrs {
+			value, ok := instruction.(ssa.Value)
+			if !ok {
+				continue
+			}
+			info, err := fc.analyzeValue(value)
+			if err != nil {
+				return "", err
+			}
+			fc.values[value] = info
 		}
-		info, err := fc.analyzeValue(value)
-		if err != nil {
-			return "", err
-		}
-		fc.values[value] = info
 	}
 
 	var out strings.Builder
@@ -332,25 +334,118 @@ func (fc *functionCompiler) compile() (string, error) {
 	}
 	out.WriteString("\n")
 
-	for _, instruction := range fc.fn.Blocks[0].Instrs {
-		value, ok := instruction.(ssa.Value)
-		if !ok || isZeroTuple(value.Type()) {
-			continue
+	for _, block := range fc.fn.Blocks {
+		for _, instruction := range block.Instrs {
+			value, ok := instruction.(ssa.Value)
+			if !ok || isZeroTuple(value.Type()) {
+				continue
+			}
+			writeDeclaration(&out, "local", valueName(value), fc.values[value])
+			if phi, ok := value.(*ssa.Phi); ok {
+				writeDeclaration(&out, "local", phiTempName(phi), fc.values[value])
+			}
 		}
-		writeDeclaration(&out, "local", valueName(value), fc.values[value])
 	}
 
-	for _, instruction := range fc.fn.Blocks[0].Instrs {
-		if err := fc.emitInstruction(&out, instruction); err != nil {
-			return "", err
+	if len(fc.fn.Blocks) == 1 {
+		for _, instruction := range fc.fn.Blocks[0].Instrs {
+			if _, ok := instruction.(*ssa.Phi); ok {
+				continue
+			}
+			if err := fc.emitInstruction(&out, instruction); err != nil {
+				return "", err
+			}
 		}
+	} else {
+		out.WriteString("    (local $block i32)\n")
+		out.WriteString("    (loop $dispatch\n")
+		for _, block := range fc.fn.Blocks {
+			fmt.Fprintf(&out, "      (if (i32.eq (local.get $block) (i32.const %d))\n", block.Index)
+			out.WriteString("        (then\n")
+			for _, instruction := range block.Instrs {
+				switch instruction := instruction.(type) {
+				case *ssa.Phi:
+					continue
+				case *ssa.Jump:
+					if err := fc.emitEdge(&out, block, block.Succs[0]); err != nil {
+						return "", err
+					}
+				case *ssa.If:
+					fmt.Fprintf(&out, "          (if %s\n", fc.expression(instruction.Cond))
+					out.WriteString("            (then\n")
+					if err := fc.emitEdge(&out, block, block.Succs[0]); err != nil {
+						return "", err
+					}
+					out.WriteString("            )\n")
+					out.WriteString("            (else\n")
+					if err := fc.emitEdge(&out, block, block.Succs[1]); err != nil {
+						return "", err
+					}
+					out.WriteString("            ))\n")
+				default:
+					if err := fc.emitInstruction(&out, instruction); err != nil {
+						return "", err
+					}
+				}
+			}
+			out.WriteString("        ))\n")
+		}
+		out.WriteString("      (unreachable))\n")
 	}
 	out.WriteString("  )\n")
 	return out.String(), nil
 }
 
+func (fc *functionCompiler) emitEdge(out *strings.Builder, predecessor, successor *ssa.BasicBlock) error {
+	predecessorIndex := -1
+	for i, block := range successor.Preds {
+		if block == predecessor {
+			predecessorIndex = i
+			break
+		}
+	}
+	if predecessorIndex < 0 {
+		return fc.compiler.errorAt(fc.fn.Pos(), "invalid SSA edge from block %d to block %d", predecessor.Index, successor.Index)
+	}
+
+	var phis []*ssa.Phi
+	for _, instruction := range successor.Instrs {
+		phi, ok := instruction.(*ssa.Phi)
+		if !ok {
+			break
+		}
+		if predecessorIndex >= len(phi.Edges) {
+			return fc.compiler.errorAt(phi.Pos(), "missing phi edge from block %d", predecessor.Index)
+		}
+		phis = append(phis, phi)
+		info := fc.values[phi]
+		edge := phi.Edges[predecessorIndex]
+		if info.base != nil {
+			base, offset := fc.pointerExpressions(edge, info)
+			fmt.Fprintf(out, "              (local.set %s_base %s)\n", phiTempName(phi), base)
+			fmt.Fprintf(out, "              (local.set %s_offset %s)\n", phiTempName(phi), offset)
+		} else {
+			fmt.Fprintf(out, "              (local.set %s %s)\n", phiTempName(phi), fc.expression(edge))
+		}
+	}
+	for _, phi := range phis {
+		info := fc.values[phi]
+		if info.base != nil {
+			fmt.Fprintf(out, "              (local.set %s (local.get %s_base))\n", baseName(phi), phiTempName(phi))
+			fmt.Fprintf(out, "              (local.set %s (local.get %s_offset))\n", offsetName(phi), phiTempName(phi))
+		} else {
+			fmt.Fprintf(out, "              (local.set %s (local.get %s))\n", valueName(phi), phiTempName(phi))
+		}
+	}
+	fmt.Fprintf(out, "              (local.set $block (i32.const %d))\n", successor.Index)
+	out.WriteString("              (br $dispatch)\n")
+	return nil
+}
+
 func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 	switch value := value.(type) {
+	case *ssa.Phi:
+		return fc.infoForType(value.Type())
 	case *ssa.Alloc:
 		base := fc.compiler.structByGo[dereference(value.Type())]
 		if base == nil {
@@ -435,11 +530,7 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 		}
 		return fc.emitLoad(out, instruction)
 	case *ssa.BinOp:
-		op, err := wasmBinOp(instruction.Op, instruction.Type())
-		if err != nil {
-			return fc.compiler.errorAt(instruction.Pos(), "%v", err)
-		}
-		fmt.Fprintf(out, "    (local.set %s (%s %s %s))\n", valueName(instruction), op, fc.expression(instruction.X), fc.expression(instruction.Y))
+		return fc.emitBinOp(out, instruction)
 	case *ssa.Call:
 		return fc.emitCall(out, instruction)
 	case *ssa.MakeChan:
@@ -467,6 +558,7 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 	case *ssa.Convert:
 		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), fc.expression(instruction.X))
 	case *ssa.Return:
+		out.WriteString("    (return")
 		for _, result := range instruction.Results {
 			info, err := fc.info(result)
 			if err != nil {
@@ -474,16 +566,50 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 			}
 			if info.base != nil {
 				base, offset := fc.pointerExpressions(result, info)
-				fmt.Fprintf(out, "    %s\n", base)
-				fmt.Fprintf(out, "    %s\n", offset)
+				fmt.Fprintf(out, " %s %s", base, offset)
 			} else {
-				fmt.Fprintf(out, "    %s\n", fc.expression(result))
+				fmt.Fprintf(out, " %s", fc.expression(result))
 			}
 		}
+		out.WriteString(")\n")
 	case *ssa.DebugRef:
 	default:
 		return fc.compiler.errorAt(instruction.Pos(), "unsupported SSA instruction: %T", instruction)
 	}
+	return nil
+}
+
+func (fc *functionCompiler) emitBinOp(out *strings.Builder, instruction *ssa.BinOp) error {
+	left, err := fc.info(instruction.X)
+	if err != nil {
+		return err
+	}
+	right, err := fc.info(instruction.Y)
+	if err != nil {
+		return err
+	}
+	if left.base != nil || right.base != nil {
+		if left.base == nil || right.base == nil || left.base != right.base {
+			return fc.compiler.errorAt(instruction.Pos(), "pointer comparison has incompatible managed bases")
+		}
+		if instruction.Op != token.EQL && instruction.Op != token.NEQ {
+			return fc.compiler.errorAt(instruction.Pos(), "unsupported pointer comparison: %s", instruction.Op)
+		}
+		leftBase, leftOffset := fc.pointerExpressions(instruction.X, left)
+		rightBase, rightOffset := fc.pointerExpressions(instruction.Y, right)
+		expression := fmt.Sprintf("(i32.and (ref.eq %s %s) (i32.eq %s %s))", leftBase, rightBase, leftOffset, rightOffset)
+		if instruction.Op == token.NEQ {
+			expression = "(i32.eqz " + expression + ")"
+		}
+		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), expression)
+		return nil
+	}
+
+	op, err := wasmBinOp(instruction.Op, instruction.X.Type())
+	if err != nil {
+		return fc.compiler.errorAt(instruction.Pos(), "%v", err)
+	}
+	fmt.Fprintf(out, "    (local.set %s (%s %s %s))\n", valueName(instruction), op, fc.expression(instruction.X), fc.expression(instruction.Y))
 	return nil
 }
 
@@ -603,9 +729,6 @@ func (fc *functionCompiler) expression(value ssa.Value) string {
 			if !exact {
 				panic("integer constant does not fit in int64")
 			}
-			if wasmScalarType(value.Type()) == "i64" {
-				return "(i64.const " + strconv.FormatInt(number, 10) + ")"
-			}
 			return "(i32.const " + strconv.FormatInt(number, 10) + ")"
 		default:
 			panic("unsupported constant: " + value.String())
@@ -695,7 +818,26 @@ func wasmScalarType(goType types.Type) string {
 
 func wasmBinOp(op token.Token, goType types.Type) (string, error) {
 	prefix := wasmScalarType(goType)
+	comparisonSuffix := "_s"
+	if basic, ok := goType.Underlying().(*types.Basic); ok {
+		switch basic.Kind() {
+		case types.Uint, types.Uint32, types.Uintptr:
+			comparisonSuffix = "_u"
+		}
+	}
 	switch op {
+	case token.EQL:
+		return prefix + ".eq", nil
+	case token.NEQ:
+		return prefix + ".ne", nil
+	case token.LSS:
+		return prefix + ".lt" + comparisonSuffix, nil
+	case token.LEQ:
+		return prefix + ".le" + comparisonSuffix, nil
+	case token.GTR:
+		return prefix + ".gt" + comparisonSuffix, nil
+	case token.GEQ:
+		return prefix + ".ge" + comparisonSuffix, nil
 	case token.ADD:
 		return prefix + ".add", nil
 	case token.SUB:
@@ -723,6 +865,10 @@ func baseName(value ssa.Value) string {
 
 func offsetName(value ssa.Value) string {
 	return valueName(value) + "_offset"
+}
+
+func phiTempName(phi *ssa.Phi) string {
+	return valueName(phi) + "_phi"
 }
 
 func writeDeclaration(out *strings.Builder, kind, name string, info valueInfo) {
