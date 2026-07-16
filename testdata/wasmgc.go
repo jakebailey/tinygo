@@ -5,6 +5,12 @@ type wasmGCValue struct {
 	next  *wasmGCValue
 }
 
+var wasmGCRoot = &wasmGCValue{value: 7}
+
+func init() {
+	println(wasmGCRoot.value)
+}
+
 func wasmGCProduce(ch chan int) {
 	var head *wasmGCValue
 	for i := 0; i < 10; i++ {
@@ -25,4 +31,5 @@ func main() {
 	ch := make(chan int)
 	go wasmGCProduce(ch)
 	println(<-ch)
+	println(wasmGCRoot.value)
 }
