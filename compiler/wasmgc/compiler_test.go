@@ -73,6 +73,38 @@ func main() {
 	}
 }
 
+func TestCompileManagedLoop(t *testing.T) {
+	const source = `package main
+
+type node struct {
+	value int
+	next *node
+}
+
+func main() {
+	var head *node
+	for i := 0; i < 10; i++ {
+		head = &node{value: i, next: head}
+	}
+	total := 0
+	for value := head; value != nil; value = value.next {
+		total += value.value
+	}
+	println(total)
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(loop $dispatch",
+		"(ref.eq",
+		"(br $dispatch)",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
 func TestRejectUnsupportedPrograms(t *testing.T) {
 	tests := []struct {
 		name    string
