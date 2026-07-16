@@ -1,6 +1,6 @@
-//go:build scheduler.tasks
+//go:build scheduler.tasks || scheduler.jspi
 
 package task
 
-// MarkFinishing does nothing for scheduler.tasks because it does not use asyncify heap stacks.
+// MarkFinishing does nothing for schedulers that do not use asyncify heap stacks.
 func MarkFinishing() {}

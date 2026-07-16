@@ -58,6 +58,14 @@ func reentrantCall(a, b int32) int32 {
 //
 //go:wasmexport goroutineExit
 func goroutineExit() {
+	exited := make(chan struct{})
+	go func() {
+		close(exited)
+		runtime.Goexit()
+	}()
+	<-exited
+	runtime.Gosched()
+
 	go func() {
 		time.Sleep(time.Second * 10)
 		println("goroutineExit: exiting goroutine")

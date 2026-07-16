@@ -9,9 +9,15 @@ func resume() {
 	}()
 
 	scheduler(false)
+	if mainExited {
+		mainReturnExit()
+	}
 }
 
 //export go_scheduler
 func go_scheduler() {
 	scheduler(false)
+	if mainExited {
+		mainReturnExit()
+	}
 }
