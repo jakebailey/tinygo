@@ -31,6 +31,9 @@ type compiler struct {
 	structByGo  map[types.Type]*structType
 	arrays      []*arrayType
 	arrayByElem map[types.Type]*arrayType
+	stringArray *arrayType
+	strings     []string
+	stringIDs   map[string]int
 	globals     []*globalInfo
 	globalBySSA map[*ssa.Global]*globalInfo
 }
@@ -60,6 +63,7 @@ type valueInfo struct {
 	base   *structType
 	array  *arrayType
 	slice  bool
+	string bool
 	length int64
 	field  int
 	global *globalInfo
@@ -69,6 +73,9 @@ type globalInfo struct {
 	id        int
 	valueType types.Type
 	base      *structType
+	array     *arrayType
+	slice     bool
+	string    bool
 }
 
 type functionCompiler struct {
@@ -90,6 +97,7 @@ func Compile(program Program) (string, error) {
 		goIDs:       make(map[*ssa.Go]int),
 		structByGo:  make(map[types.Type]*structType),
 		arrayByElem: make(map[types.Type]*arrayType),
+		stringIDs:   make(map[string]int),
 		globalBySSA: make(map[*ssa.Global]*globalInfo),
 	}
 	if err := c.findFunctions(); err != nil {
@@ -108,7 +116,7 @@ func Compile(program Program) (string, error) {
 	var out strings.Builder
 	out.WriteString("(module\n")
 	for _, typ := range c.arrays {
-		fmt.Fprintf(&out, "  (type $array%d (array (mut %s)))\n", typ.id, wasmScalarType(typ.element))
+		fmt.Fprintf(&out, "  (type $array%d (array (mut %s)))\n", typ.id, wasmArrayElementType(typ))
 	}
 	if len(c.structs) != 0 {
 		out.WriteString("  (rec\n")
@@ -146,12 +154,38 @@ func Compile(program Program) (string, error) {
 		out.WriteString("))\n")
 	}
 	for _, global := range c.globals {
-		if global.base != nil {
+		if global.array != nil {
+			fmt.Fprintf(&out, "  (global $global%d_base (mut (ref null $array%d)) (ref.null $array%d))\n", global.id, global.array.id, global.array.id)
+			fmt.Fprintf(&out, "  (global $global%d_offset (mut i32) (i32.const 0))\n", global.id)
+			fmt.Fprintf(&out, "  (global $global%d_len (mut i32) (i32.const 0))\n", global.id)
+			if global.slice {
+				fmt.Fprintf(&out, "  (global $global%d_cap (mut i32) (i32.const 0))\n", global.id)
+			}
+		} else if global.base != nil {
 			fmt.Fprintf(&out, "  (global $global%d_base (mut (ref null $type%d)) (ref.null $type%d))\n", global.id, global.base.id, global.base.id)
 			fmt.Fprintf(&out, "  (global $global%d_offset (mut i32) (i32.const 0))\n", global.id)
 		} else {
 			fmt.Fprintf(&out, "  (global $global%d (mut i32) (i32.const 0))\n", global.id)
 		}
+	}
+	for id := range c.strings {
+		array := c.stringArray
+		fmt.Fprintf(&out, "  (global $string%d (mut (ref null $array%d)) (ref.null $array%d))\n", id, array.id, array.id)
+	}
+	if len(c.strings) != 0 {
+		array := c.stringArray
+		out.WriteString("  (func $initStrings\n")
+		for id, value := range c.strings {
+			fmt.Fprintf(&out, "    (global.set $string%d (array.new_fixed $array%d %d", id, array.id, len(value))
+			for i := 0; i < len(value); i++ {
+				fmt.Fprintf(&out, " (i32.const %d)", value[i])
+			}
+			out.WriteString("))\n")
+		}
+		out.WriteString("  )\n")
+	}
+	if c.stringArray != nil {
+		c.writeStringEqual(&out, c.stringArray)
 	}
 
 	for _, fn := range c.functions {
@@ -182,6 +216,10 @@ func Compile(program Program) (string, error) {
 	mainFn := c.pkg.Func("main")
 	initFn := c.pkg.Func("init")
 	out.WriteString("  (func (export \"run\") (result i32)\n")
+	if len(c.strings) != 0 {
+		out.WriteString("    (call $initStrings)\n")
+		out.WriteString("    (drop (call $suspend))\n")
+	}
 	if initFn != nil {
 		fmt.Fprintf(&out, "    (call $fn%d)\n", c.functionIDs[initFn])
 	}
@@ -262,6 +300,13 @@ func (c *compiler) findArrays() error {
 		return nil
 	}
 	addFromType := func(goType types.Type, pos token.Pos) error {
+		if isStringType(goType) {
+			if err := addArray(types.Typ[types.Uint8], pos); err != nil {
+				return err
+			}
+			c.stringArray = c.arrayByElem[types.Typ[types.Uint8]]
+			return nil
+		}
 		if slice, ok := goType.Underlying().(*types.Slice); ok {
 			return addArray(slice.Elem(), pos)
 		}
@@ -295,6 +340,15 @@ func (c *compiler) findArrays() error {
 						if err := addFromType((*operand).Type(), instruction.Pos()); err != nil {
 							return err
 						}
+						if constValue, ok := (*operand).(*ssa.Const); ok && constValue.Value != nil && constValue.Value.Kind() == constant.String {
+							text := constant.StringVal(constValue.Value)
+							if text != "" {
+								if _, ok := c.stringIDs[text]; !ok {
+									c.stringIDs[text] = len(c.strings)
+									c.strings = append(c.strings, text)
+								}
+							}
+						}
 					}
 				}
 				switch instruction := instruction.(type) {
@@ -314,7 +368,27 @@ func (c *compiler) findArrays() error {
 			}
 		}
 	}
+	for _, global := range c.packageGlobals() {
+		if err := addFromType(dereference(global.Type()), global.Pos()); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (c *compiler) writeStringEqual(out *strings.Builder, array *arrayType) {
+	fmt.Fprintf(out, "  (func $stringEqual (param $left_base (ref null $array%d)) (param $left_offset i32) (param $left_len i32)", array.id)
+	fmt.Fprintf(out, " (param $right_base (ref null $array%d)) (param $right_offset i32) (param $right_len i32) (result i32)\n", array.id)
+	out.WriteString("    (local $index i32)\n")
+	out.WriteString("    (if (i32.ne (local.get $left_len) (local.get $right_len)) (then (return (i32.const 0))))\n")
+	out.WriteString("    (loop $compare\n")
+	out.WriteString("      (if (i32.eq (local.get $index) (local.get $left_len)) (then (return (i32.const 1))))\n")
+	fmt.Fprintf(out, "      (if (i32.ne (array.get_u $array%d (ref.as_non_null (local.get $left_base)) (i32.add (local.get $left_offset) (local.get $index)))", array.id)
+	fmt.Fprintf(out, " (array.get_u $array%d (ref.as_non_null (local.get $right_base)) (i32.add (local.get $right_offset) (local.get $index)))) (then (return (i32.const 0))))\n", array.id)
+	out.WriteString("      (local.set $index (i32.add (local.get $index) (i32.const 1)))\n")
+	out.WriteString("      (br $compare))\n")
+	out.WriteString("    (unreachable)\n")
+	out.WriteString("  )\n")
 }
 
 func (c *compiler) findStructs() error {
@@ -407,6 +481,18 @@ func (c *compiler) findGlobals() error {
 			info.base = c.structByGo[pointer.Elem()]
 			if info.base == nil {
 				return c.errorAt(global.Pos(), "managed type was not discovered for global %s", global.Name())
+			}
+		} else if slice, ok := valueType.Underlying().(*types.Slice); ok {
+			info.array = c.arrayByElem[slice.Elem()]
+			info.slice = true
+			if info.array == nil {
+				return c.errorAt(global.Pos(), "managed array type was not discovered for global %s", global.Name())
+			}
+		} else if isStringType(valueType) {
+			info.array = c.stringArray
+			info.string = true
+			if info.array == nil {
+				return c.errorAt(global.Pos(), "managed string type was not discovered for global %s", global.Name())
 			}
 		} else if !isScalar(valueType) {
 			return c.errorAt(global.Pos(), "unsupported global type %s: %s", global.Name(), valueType)
@@ -619,6 +705,15 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "index address has no managed array")
 		}
 		return valueInfo{goType: value.Type(), array: source.array, field: -1}, nil
+	case *ssa.Index:
+		source, err := fc.info(value.X)
+		if err != nil {
+			return valueInfo{}, err
+		}
+		if !source.string {
+			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "index value only supports managed strings")
+		}
+		return valueInfo{goType: value.Type(), field: -1}, nil
 	case *ssa.Slice:
 		source, err := fc.info(value.X)
 		if err != nil {
@@ -626,6 +721,9 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 		}
 		if source.array == nil {
 			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "slice has no managed array")
+		}
+		if isStringType(value.Type()) {
+			return valueInfo{goType: value.Type(), array: source.array, string: true, field: -1}, nil
 		}
 		return valueInfo{goType: value.Type(), array: source.array, slice: true, field: -1}, nil
 	case *ssa.MakeSlice:
@@ -656,6 +754,15 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 			if source.global != nil {
 				if source.global.base != nil {
 					return valueInfo{goType: value.Type(), base: source.global.base, field: -1}, nil
+				}
+				if source.global.array != nil {
+					return valueInfo{
+						goType: value.Type(),
+						array:  source.global.array,
+						slice:  source.global.slice,
+						string: source.global.string,
+						field:  -1,
+					}, nil
 				}
 				return valueInfo{goType: value.Type(), field: -1}, nil
 			}
@@ -708,6 +815,8 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 		return fc.emitStore(out, instruction)
 	case *ssa.IndexAddr:
 		return fc.emitIndexAddr(out, instruction)
+	case *ssa.Index:
+		return fc.emitStringIndex(out, instruction)
 	case *ssa.Slice:
 		return fc.emitSlice(out, instruction)
 	case *ssa.MakeSlice:
@@ -762,7 +871,11 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 		if source.base != nil || source.array != nil || source.global != nil || fc.values[instruction].base != nil || fc.values[instruction].array != nil {
 			return fc.compiler.errorAt(instruction.Pos(), "pointer conversions are not supported")
 		}
-		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), fc.expression(instruction.X))
+		expression := fc.expression(instruction.X)
+		if isUint8(instruction.Type()) {
+			expression = "(i32.and " + expression + " (i32.const 255))"
+		}
+		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), expression)
 	case *ssa.Return:
 		out.WriteString("    (return")
 		for _, result := range instruction.Results {
@@ -801,6 +914,27 @@ func (fc *functionCompiler) emitBinOp(out *strings.Builder, instruction *ssa.Bin
 		}
 		if instruction.Op != token.EQL && instruction.Op != token.NEQ {
 			return fc.compiler.errorAt(instruction.Pos(), "unsupported managed array comparison: %s", instruction.Op)
+		}
+		if left.string || right.string {
+			if !left.string || !right.string {
+				return fc.compiler.errorAt(instruction.Pos(), "string comparison has incompatible values")
+			}
+			leftExpressions, err := fc.valueExpressions(instruction.X, left)
+			if err != nil {
+				return err
+			}
+			rightExpressions, err := fc.valueExpressions(instruction.Y, right)
+			if err != nil {
+				return err
+			}
+			expression := fmt.Sprintf("(call $stringEqual %s %s %s %s %s %s)",
+				leftExpressions[0], leftExpressions[1], leftExpressions[2],
+				rightExpressions[0], rightExpressions[1], rightExpressions[2])
+			if instruction.Op == token.NEQ {
+				expression = "(i32.eqz " + expression + ")"
+			}
+			fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), expression)
+			return nil
 		}
 		if left.slice || right.slice {
 			leftNil := isNilConst(instruction.X)
@@ -865,7 +999,11 @@ func (fc *functionCompiler) emitBinOp(out *strings.Builder, instruction *ssa.Bin
 		return fc.compiler.errorAt(instruction.Pos(), "%v", err)
 	}
 
-	fmt.Fprintf(out, "    (local.set %s (%s %s %s))\n", valueName(instruction), op, fc.expression(instruction.X), fc.expression(instruction.Y))
+	expression := fmt.Sprintf("(%s %s %s)", op, fc.expression(instruction.X), fc.expression(instruction.Y))
+	if isUint8(instruction.Type()) {
+		expression = "(i32.and " + expression + " (i32.const 255))"
+	}
+	fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), expression)
 	return nil
 }
 
@@ -890,7 +1028,7 @@ func (fc *functionCompiler) emitChangeType(out *strings.Builder, instruction *ss
 		return nil
 	}
 	if destination.array != nil {
-		if source.array != destination.array || source.slice != destination.slice {
+		if source.array != destination.array || source.slice != destination.slice || source.string != destination.string {
 			return fc.compiler.errorAt(instruction.Pos(), "slice change has incompatible managed array")
 		}
 		expressions, err := fc.valueExpressions(instruction.X, source)
@@ -924,12 +1062,30 @@ func (fc *functionCompiler) emitIndexAddr(out *strings.Builder, instruction *ssa
 	if err != nil {
 		return err
 	}
-	if !source.slice {
+	if !source.slice && !source.string {
 		fmt.Fprintf(out, "    (drop (ref.as_non_null %s))\n", sourceExpressions[0])
 	}
 	fmt.Fprintf(out, "    (if (i32.ge_u %s %s) (then (unreachable)))\n", index, length)
 	fmt.Fprintf(out, "    (local.set %s %s)\n", baseName(instruction), sourceExpressions[0])
 	fmt.Fprintf(out, "    (local.set %s (i32.add %s %s))\n", offsetName(instruction), sourceExpressions[1], scaleArrayIndex(index, source.array))
+	return nil
+}
+
+func (fc *functionCompiler) emitStringIndex(out *strings.Builder, instruction *ssa.Index) error {
+	source, err := fc.info(instruction.X)
+	if err != nil {
+		return err
+	}
+	if !source.string {
+		return fc.compiler.errorAt(instruction.Pos(), "index value only supports managed strings")
+	}
+	index := fc.expression(instruction.Index)
+	fmt.Fprintf(out, "    (if (i32.ge_u %s %s) (then (unreachable)))\n", index, fc.lengthExpression(instruction.X, source))
+	expressions, err := fc.valueExpressions(instruction.X, source)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "    (local.set %s (array.get_u $array%d (ref.as_non_null %s) (i32.add %s %s)))\n", valueName(instruction), source.array.id, expressions[0], expressions[1], index)
 	return nil
 }
 
@@ -945,7 +1101,7 @@ func (fc *functionCompiler) emitSlice(out *strings.Builder, instruction *ssa.Sli
 	if err != nil {
 		return err
 	}
-	if !source.slice {
+	if !source.slice && !source.string {
 		fmt.Fprintf(out, "    (drop (ref.as_non_null %s))\n", sourceExpressions[0])
 	}
 	low := "(i32.const 0)"
@@ -955,6 +1111,17 @@ func (fc *functionCompiler) emitSlice(out *strings.Builder, instruction *ssa.Sli
 	high := fc.lengthExpression(instruction.X, source)
 	if instruction.High != nil {
 		high = fc.expression(instruction.High)
+	}
+	if source.string {
+		if instruction.Max != nil {
+			return fc.compiler.errorAt(instruction.Pos(), "three-index slicing is not valid for strings")
+		}
+		fmt.Fprintf(out, "    (if (i32.gt_u %s %s) (then (unreachable)))\n", low, high)
+		fmt.Fprintf(out, "    (if (i32.gt_u %s %s) (then (unreachable)))\n", high, fc.lengthExpression(instruction.X, source))
+		fmt.Fprintf(out, "    (local.set %s %s)\n", baseName(instruction), sourceExpressions[0])
+		fmt.Fprintf(out, "    (local.set %s (i32.add %s %s))\n", offsetName(instruction), sourceExpressions[1], low)
+		fmt.Fprintf(out, "    (local.set %s (i32.sub %s %s))\n", lenName(instruction), high, low)
+		return nil
 	}
 	max := fc.capacityExpression(instruction.X, source)
 	if instruction.Max != nil {
@@ -976,7 +1143,26 @@ func (fc *functionCompiler) emitStore(out *strings.Builder, instruction *ssa.Sto
 		return err
 	}
 	if address.global != nil {
-		if address.global.base != nil {
+		if address.global.array != nil {
+			value, err := fc.info(instruction.Val)
+			if err != nil {
+				return err
+			}
+			if value.array != address.global.array || value.slice != address.global.slice || value.string != address.global.string {
+				return fc.compiler.errorAt(instruction.Pos(), "global aggregate store has incompatible managed array")
+			}
+			expressions, err := fc.valueExpressions(instruction.Val, value)
+			if err != nil {
+				return err
+			}
+			names := []string{"base", "offset", "len"}
+			if address.global.slice {
+				names = append(names, "cap")
+			}
+			for i, name := range names {
+				fmt.Fprintf(out, "    (global.set $global%d_%s %s)\n", address.global.id, name, expressions[i])
+			}
+		} else if address.global.base != nil {
 			value, err := fc.info(instruction.Val)
 			if err != nil {
 				return err
@@ -1024,7 +1210,14 @@ func (fc *functionCompiler) emitLoad(out *strings.Builder, instruction *ssa.UnOp
 		return err
 	}
 	if source.global != nil {
-		if source.global.base != nil {
+		if source.global.array != nil {
+			fmt.Fprintf(out, "    (local.set %s (global.get $global%d_base))\n", baseName(instruction), source.global.id)
+			fmt.Fprintf(out, "    (local.set %s (global.get $global%d_offset))\n", offsetName(instruction), source.global.id)
+			fmt.Fprintf(out, "    (local.set %s (global.get $global%d_len))\n", lenName(instruction), source.global.id)
+			if source.global.slice {
+				fmt.Fprintf(out, "    (local.set %s (global.get $global%d_cap))\n", capName(instruction), source.global.id)
+			}
+		} else if source.global.base != nil {
 			fmt.Fprintf(out, "    (local.set %s (global.get $global%d_base))\n", baseName(instruction), source.global.id)
 			fmt.Fprintf(out, "    (local.set %s (global.get $global%d_offset))\n", offsetName(instruction), source.global.id)
 		} else {
@@ -1033,7 +1226,7 @@ func (fc *functionCompiler) emitLoad(out *strings.Builder, instruction *ssa.UnOp
 		return nil
 	}
 	if source.array != nil {
-		fmt.Fprintf(out, "    (local.set %s (array.get $array%d (ref.as_non_null (local.get %s)) %s))\n", valueName(instruction), source.array.id, baseName(instruction.X), physicalArrayIndex(instruction.X, source.array))
+		fmt.Fprintf(out, "    (local.set %s (%s $array%d (ref.as_non_null (local.get %s)) %s))\n", valueName(instruction), arrayGetOp(source.array), source.array.id, baseName(instruction.X), physicalArrayIndex(instruction.X, source.array))
 		return nil
 	}
 	if source.base == nil || source.field < 0 {
@@ -1160,14 +1353,31 @@ func (fc *functionCompiler) valueExpressions(value ssa.Value, info valueInfo) ([
 	if info.array != nil {
 		if constant, ok := value.(*ssa.Const); ok && constant.IsNil() {
 			expressions := []string{fmt.Sprintf("(ref.null $array%d)", info.array.id), "(i32.const 0)"}
+			if info.slice || info.string {
+				expressions = append(expressions, "(i32.const 0)")
+			}
 			if info.slice {
-				expressions = append(expressions, "(i32.const 0)", "(i32.const 0)")
+				expressions = append(expressions, "(i32.const 0)")
 			}
 			return expressions, nil
 		}
+		if constValue, ok := value.(*ssa.Const); ok && info.string && constValue.Value != nil && constValue.Value.Kind() == constant.String {
+			text := constant.StringVal(constValue.Value)
+			if text == "" {
+				return []string{fmt.Sprintf("(ref.null $array%d)", info.array.id), "(i32.const 0)", "(i32.const 0)"}, nil
+			}
+			id, ok := fc.compiler.stringIDs[text]
+			if !ok {
+				return nil, fc.compiler.errorAt(value.Pos(), "string constant was not discovered")
+			}
+			return []string{fmt.Sprintf("(global.get $string%d)", id), "(i32.const 0)", fmt.Sprintf("(i32.const %d)", len(text))}, nil
+		}
 		expressions := []string{"(local.get " + baseName(value) + ")", "(local.get " + offsetName(value) + ")"}
+		if info.slice || info.string {
+			expressions = append(expressions, "(local.get "+lenName(value)+")")
+		}
 		if info.slice {
-			expressions = append(expressions, "(local.get "+lenName(value)+")", "(local.get "+capName(value)+")")
+			expressions = append(expressions, "(local.get "+capName(value)+")")
 		}
 		return expressions, nil
 	}
@@ -1182,10 +1392,13 @@ func (fc *functionCompiler) valueExpressions(value ssa.Value, info valueInfo) ([
 }
 
 func (fc *functionCompiler) lengthExpression(value ssa.Value, info valueInfo) string {
+	if constValue, ok := value.(*ssa.Const); ok && info.string && constValue.Value != nil && constValue.Value.Kind() == constant.String {
+		return "(i32.const " + strconv.Itoa(len(constant.StringVal(constValue.Value))) + ")"
+	}
 	if constant, ok := value.(*ssa.Const); ok && constant.IsNil() {
 		return "(i32.const 0)"
 	}
-	if info.slice {
+	if info.slice || info.string {
 		return "(local.get " + lenName(value) + ")"
 	}
 	return "(i32.const " + strconv.FormatInt(info.length, 10) + ")"
@@ -1235,6 +1448,12 @@ func (fc *functionCompiler) info(value ssa.Value) (valueInfo, error) {
 }
 
 func (fc *functionCompiler) infoForType(goType types.Type) (valueInfo, error) {
+	if isStringType(goType) {
+		if fc.compiler.stringArray == nil {
+			return valueInfo{}, fmt.Errorf("wasm-gc: managed string array type was not discovered")
+		}
+		return valueInfo{goType: goType, array: fc.compiler.stringArray, string: true, field: -1}, nil
+	}
 	if slice, ok := goType.Underlying().(*types.Slice); ok {
 		array := fc.compiler.arrayByElem[slice.Elem()]
 		if array == nil {
@@ -1292,11 +1511,35 @@ func isScalar(goType types.Type) bool {
 	switch basic.Kind() {
 	case types.Bool,
 		types.Int, types.Int32,
-		types.Uint, types.Uint32, types.Uintptr:
+		types.Uint, types.Uint8, types.Uint32, types.Uintptr:
 		return true
 	default:
 		return false
 	}
+}
+
+func isUint8(goType types.Type) bool {
+	basic, ok := goType.Underlying().(*types.Basic)
+	return ok && basic.Kind() == types.Uint8
+}
+
+func isStringType(goType types.Type) bool {
+	basic, ok := goType.Underlying().(*types.Basic)
+	return ok && (basic.Kind() == types.String || basic.Kind() == types.UntypedString)
+}
+
+func wasmArrayElementType(array *arrayType) string {
+	if basic, ok := array.element.Underlying().(*types.Basic); ok && basic.Kind() == types.Uint8 {
+		return "i8"
+	}
+	return wasmScalarType(array.element)
+}
+
+func arrayGetOp(array *arrayType) string {
+	if wasmArrayElementType(array) == "i8" {
+		return "array.get_u"
+	}
+	return "array.get"
 }
 
 func wasmScalarType(goType types.Type) string {
@@ -1376,8 +1619,10 @@ func writeDeclaration(out *strings.Builder, kind, name string, info valueInfo) {
 	if info.array != nil {
 		fmt.Fprintf(out, " (%s %s_base (ref null $array%d))", kind, name, info.array.id)
 		fmt.Fprintf(out, " (%s %s_offset i32)", kind, name)
-		if info.slice {
+		if info.slice || info.string {
 			fmt.Fprintf(out, " (%s %s_len i32)", kind, name)
+		}
+		if info.slice {
 			fmt.Fprintf(out, " (%s %s_cap i32)", kind, name)
 		}
 	} else if info.base != nil {
@@ -1391,8 +1636,11 @@ func writeDeclaration(out *strings.Builder, kind, name string, info valueInfo) {
 func wasmValueTypes(info valueInfo) []string {
 	if info.array != nil {
 		types := []string{fmt.Sprintf("(ref null $array%d)", info.array.id), "i32"}
+		if info.slice || info.string {
+			types = append(types, "i32")
+		}
 		if info.slice {
-			types = append(types, "i32", "i32")
+			types = append(types, "i32")
 		}
 		return types
 	}
@@ -1405,8 +1653,11 @@ func wasmValueTypes(info valueInfo) []string {
 func valuePartNames(name string, info valueInfo) []string {
 	if info.array != nil {
 		names := []string{name + "_base", name + "_offset"}
+		if info.slice || info.string {
+			names = append(names, name+"_len")
+		}
 		if info.slice {
-			names = append(names, name+"_len", name+"_cap")
+			names = append(names, name+"_cap")
 		}
 		return names
 	}
