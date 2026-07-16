@@ -37,7 +37,7 @@ GO ?= go
 
 # Flags to pass to go test.
 GOTESTFLAGS ?=
-GOTESTPKGS ?= ./builder ./cgo ./compileopts ./compiler ./interp ./transform .
+GOTESTPKGS ?= ./builder ./cgo ./compileopts ./compiler ./compiler/wasmgc ./interp ./transform .
 
 # tinygo binary for tests
 TINYGO ?= $(call detect,tinygo,tinygo $(CURDIR)/build/tinygo)

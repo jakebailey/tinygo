@@ -37,6 +37,21 @@ func TestLoadTargetJSPI(t *testing.T) {
 	}
 }
 
+func TestLoadTargetWasmGC(t *testing.T) {
+	target, err := LoadTarget(&Options{Target: "wasm-gc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Backend != "wasm-gc" {
+		t.Fatalf("unexpected backend: %q", target.Backend)
+	}
+
+	_, err = LoadTarget(&Options{Target: "wasm-gc", Scheduler: "none"})
+	if err == nil || err.Error() != "backend=wasm-gc requires scheduler=jspi" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestJSPIEmulator(t *testing.T) {
 	config := &Config{
 		Options: &Options{Scheduler: "jspi"},

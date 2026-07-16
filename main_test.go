@@ -884,6 +884,38 @@ func TestWasmFuncOf(t *testing.T) {
 	}
 }
 
+func TestWasmGC(t *testing.T) {
+	cmd := exec.Command("node", "--experimental-wasm-jspi", "--expose-gc", "-e",
+		`if (typeof WebAssembly.Suspending !== "function") process.exit(1)`)
+	if err := cmd.Run(); err != nil {
+		t.Skip("NodeJS does not support --experimental-wasm-jspi")
+	}
+
+	tmpdir := t.TempDir()
+	options := optionsFromTarget("wasm-gc", sema)
+	config, err := builder.NewConfig(&options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := builder.Build("testdata/wasmgc.go", ".wasm", tmpdir, config)
+	if err != nil {
+		t.Fatal("failed to build binary:", err)
+	}
+
+	emulator, err := config.Emulator("", result.Binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := &bytes.Buffer{}
+	cmd = exec.Command(emulator[0], emulator[1:]...)
+	cmd.Stdout = output
+	cmd.Stderr = output
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to run WasmGC module: %v\n%s", err, output)
+	}
+	checkOutput(t, "testdata/wasmgc.txt", output.Bytes())
+}
+
 // Test //go:wasmexport in JavaScript (using NodeJS).
 func TestWasmExportJS(t *testing.T) {
 	t.Parallel()

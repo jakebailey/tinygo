@@ -28,6 +28,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/tinygo-org/tinygo/compileopts"
 	"github.com/tinygo-org/tinygo/compiler"
+	"github.com/tinygo-org/tinygo/compiler/wasmgc"
 	"github.com/tinygo-org/tinygo/goenv"
 	"github.com/tinygo-org/tinygo/interp"
 	"github.com/tinygo-org/tinygo/loader"
@@ -269,6 +270,11 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 	// Create the *ssa.Program. This does not yet build the entire SSA of the
 	// program so it's pretty fast and doesn't need to be parallelized.
 	program := lprogram.LoadSSA()
+	if config.Backend() == "wasm-gc" {
+		return buildWasmGC(result, tmpdir, config, wasmgc.Program{
+			Main: program.Package(lprogram.MainPkg().Pkg),
+		})
+	}
 
 	// Add jobs to compile each package.
 	// Packages that have a cache hit will not be compiled again.

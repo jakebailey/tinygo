@@ -57,6 +57,14 @@ func (c *Config) BuildMode() string {
 	return "default"
 }
 
+// Backend returns the compiler backend selected by the target.
+func (c *Config) Backend() string {
+	if c.Target.Backend != "" {
+		return c.Target.Backend
+	}
+	return "llvm"
+}
+
 // Features returns a list of features this CPU supports. For example, for a
 // RISC-V processor, that could be "+a,+c,+m". For many targets, an empty list
 // will be returned.
