@@ -112,12 +112,12 @@ func TestRejectUnsupportedPrograms(t *testing.T) {
 		message string
 	}{
 		{
-			name: "global",
+			name: "unsupported global",
 			source: `package main
-var value int
-func main() { println(value) }
+var value string
+func main() {}
 `,
-			message: "missing value information",
+			message: "unsupported global type value: string",
 		},
 		{
 			name: "integer width",
@@ -130,12 +130,12 @@ func main() {
 			message: "unsupported value type: int8",
 		},
 		{
-			name: "init",
+			name: "global address comparison",
 			source: `package main
-func init() { println(1) }
-func main() {}
+var value int
+func main() { println(&value == &value) }
 `,
-			message: "package initialization is not supported",
+			message: "global address comparisons are not supported",
 		},
 	}
 	for _, test := range tests {
@@ -145,6 +145,39 @@ func main() {}
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestCompileInit(t *testing.T) {
+	const source = `package main
+func init() { println(1) }
+func main() { println(2) }
+`
+	wat := compileSource(t, source)
+	if strings.Count(wat, "(call $printInt") != 2 {
+		t.Fatalf("package init was not compiled:\n%s", wat)
+	}
+}
+
+func TestCompileGlobals(t *testing.T) {
+	const source = `package main
+type node struct { value int }
+type nodePointer *node
+var scalar = 3
+var root nodePointer = nodePointer(&node{value: 39})
+func init() { scalar += root.value }
+func main() { println(scalar) }
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(global $global",
+		"(mut (ref null $type0))",
+		"(global.set $global",
+		"(global.get $global",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
 	}
 }
 

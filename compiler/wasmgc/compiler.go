@@ -10,6 +10,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -28,6 +29,8 @@ type compiler struct {
 	goIDs       map[*ssa.Go]int
 	structs     []*structType
 	structByGo  map[types.Type]*structType
+	globals     []*globalInfo
+	globalBySSA map[*ssa.Global]*globalInfo
 }
 
 type structType struct {
@@ -48,6 +51,13 @@ type valueInfo struct {
 	goType types.Type
 	base   *structType
 	field  int
+	global *globalInfo
+}
+
+type globalInfo struct {
+	id        int
+	valueType types.Type
+	base      *structType
 }
 
 type functionCompiler struct {
@@ -68,14 +78,15 @@ func Compile(program Program) (string, error) {
 		functionIDs: make(map[*ssa.Function]int),
 		goIDs:       make(map[*ssa.Go]int),
 		structByGo:  make(map[types.Type]*structType),
+		globalBySSA: make(map[*ssa.Global]*globalInfo),
 	}
 	if err := c.findFunctions(); err != nil {
 		return "", err
 	}
-	if c.hasNontrivialInit() {
-		return "", c.errorAt(c.pkg.Func("init").Pos(), "package initialization is not supported")
-	}
 	if err := c.findStructs(); err != nil {
+		return "", err
+	}
+	if err := c.findGlobals(); err != nil {
 		return "", err
 	}
 
@@ -116,6 +127,14 @@ func Compile(program Program) (string, error) {
 		}
 		out.WriteString("))\n")
 	}
+	for _, global := range c.globals {
+		if global.base != nil {
+			fmt.Fprintf(&out, "  (global $global%d_base (mut (ref null $type%d)) (ref.null $type%d))\n", global.id, global.base.id, global.base.id)
+			fmt.Fprintf(&out, "  (global $global%d_offset (mut i32) (i32.const 0))\n", global.id)
+		} else {
+			fmt.Fprintf(&out, "  (global $global%d (mut i32) (i32.const 0))\n", global.id)
+		}
+	}
 
 	for _, fn := range c.functions {
 		fc := &functionCompiler{
@@ -143,38 +162,15 @@ func Compile(program Program) (string, error) {
 	}
 
 	mainFn := c.pkg.Func("main")
+	initFn := c.pkg.Func("init")
 	out.WriteString("  (func (export \"run\") (result i32)\n")
+	if initFn != nil {
+		fmt.Fprintf(&out, "    (call $fn%d)\n", c.functionIDs[initFn])
+	}
 	fmt.Fprintf(&out, "    (call $fn%d)\n", c.functionIDs[mainFn])
 	out.WriteString("    (i32.const 0))\n")
 	out.WriteString(")\n")
 	return out.String(), nil
-}
-
-func (c *compiler) hasNontrivialInit() bool {
-	initFn := c.pkg.Func("init")
-	if initFn == nil {
-		return false
-	}
-	for _, block := range initFn.Blocks {
-		for _, instruction := range block.Instrs {
-			switch instruction := instruction.(type) {
-			case *ssa.UnOp:
-				global, ok := instruction.X.(*ssa.Global)
-				if !ok || global.Name() != "init$guard" {
-					return true
-				}
-			case *ssa.Store:
-				global, ok := instruction.Addr.(*ssa.Global)
-				if !ok || global.Name() != "init$guard" {
-					return true
-				}
-			case *ssa.If, *ssa.Jump, *ssa.Return, *ssa.DebugRef:
-			default:
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (c *compiler) findFunctions() error {
@@ -222,6 +218,11 @@ func (c *compiler) findFunctions() error {
 		return nil
 	}
 
+	if initFn := c.pkg.Func("init"); initFn != nil {
+		if err := visit(initFn); err != nil {
+			return err
+		}
+	}
 	return visit(mainFn)
 }
 
@@ -287,7 +288,52 @@ func (c *compiler) findStructs() error {
 			}
 		}
 	}
+	for _, global := range c.packageGlobals() {
+		valueType := dereference(global.Type())
+		if pointer, ok := valueType.Underlying().(*types.Pointer); ok {
+			if _, ok := pointer.Elem().Underlying().(*types.Struct); !ok {
+				return c.errorAt(global.Pos(), "global pointer %s does not point to a struct", global.Name())
+			}
+			if err := addType(pointer.Elem()); err != nil {
+				return c.errorAt(global.Pos(), "%v", err)
+			}
+		}
+	}
 	return nil
+}
+
+func (c *compiler) findGlobals() error {
+	for _, global := range c.packageGlobals() {
+		valueType := dereference(global.Type())
+		info := &globalInfo{
+			id:        len(c.globals),
+			valueType: valueType,
+		}
+		if pointer, ok := valueType.Underlying().(*types.Pointer); ok {
+			info.base = c.structByGo[pointer.Elem()]
+			if info.base == nil {
+				return c.errorAt(global.Pos(), "managed type was not discovered for global %s", global.Name())
+			}
+		} else if !isScalar(valueType) {
+			return c.errorAt(global.Pos(), "unsupported global type %s: %s", global.Name(), valueType)
+		}
+		c.globalBySSA[global] = info
+		c.globals = append(c.globals, info)
+	}
+	return nil
+}
+
+func (c *compiler) packageGlobals() []*ssa.Global {
+	var globals []*ssa.Global
+	for _, member := range c.pkg.Members {
+		if global, ok := member.(*ssa.Global); ok {
+			globals = append(globals, global)
+		}
+	}
+	sort.Slice(globals, func(i, j int) bool {
+		return globals[i].Name() < globals[j].Name()
+	})
+	return globals
 }
 
 func (fc *functionCompiler) compile() (string, error) {
@@ -480,6 +526,12 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 			return valueInfo{}, err
 		}
 		if source.field < 0 {
+			if source.global != nil {
+				if source.global.base != nil {
+					return valueInfo{goType: value.Type(), base: source.global.base, field: -1}, nil
+				}
+				return valueInfo{goType: value.Type(), field: -1}, nil
+			}
 			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "loading whole structs is not supported")
 		}
 		field := source.base.fields[source.field]
@@ -554,8 +606,15 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 		}
 		out.WriteString(")\n")
 	case *ssa.ChangeType:
-		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), fc.expression(instruction.X))
+		return fc.emitChangeType(out, instruction)
 	case *ssa.Convert:
+		source, err := fc.info(instruction.X)
+		if err != nil {
+			return err
+		}
+		if source.base != nil || source.global != nil || fc.values[instruction].base != nil {
+			return fc.compiler.errorAt(instruction.Pos(), "pointer conversions are not supported")
+		}
 		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), fc.expression(instruction.X))
 	case *ssa.Return:
 		out.WriteString("    (return")
@@ -568,6 +627,9 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 				base, offset := fc.pointerExpressions(result, info)
 				fmt.Fprintf(out, " %s %s", base, offset)
 			} else {
+				if info.global != nil {
+					return fc.compiler.errorAt(instruction.Pos(), "global addresses cannot be returned")
+				}
 				fmt.Fprintf(out, " %s", fc.expression(result))
 			}
 		}
@@ -604,6 +666,9 @@ func (fc *functionCompiler) emitBinOp(out *strings.Builder, instruction *ssa.Bin
 		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), expression)
 		return nil
 	}
+	if left.global != nil || right.global != nil {
+		return fc.compiler.errorAt(instruction.Pos(), "global address comparisons are not supported")
+	}
 
 	op, err := wasmBinOp(instruction.Op, instruction.X.Type())
 	if err != nil {
@@ -613,10 +678,49 @@ func (fc *functionCompiler) emitBinOp(out *strings.Builder, instruction *ssa.Bin
 	return nil
 }
 
+func (fc *functionCompiler) emitChangeType(out *strings.Builder, instruction *ssa.ChangeType) error {
+	destination := fc.values[instruction]
+	source, err := fc.info(instruction.X)
+	if err != nil {
+		return err
+	}
+	if destination.base != nil {
+		if source.base != destination.base {
+			return fc.compiler.errorAt(instruction.Pos(), "pointer change has incompatible managed base")
+		}
+		base, offset := fc.pointerExpressions(instruction.X, source)
+		fmt.Fprintf(out, "    (local.set %s %s)\n", baseName(instruction), base)
+		fmt.Fprintf(out, "    (local.set %s %s)\n", offsetName(instruction), offset)
+		return nil
+	}
+	if source.base != nil || source.global != nil {
+		return fc.compiler.errorAt(instruction.Pos(), "pointer change is not supported")
+	}
+	fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), fc.expression(instruction.X))
+	return nil
+}
+
 func (fc *functionCompiler) emitStore(out *strings.Builder, instruction *ssa.Store) error {
 	address, err := fc.info(instruction.Addr)
 	if err != nil {
 		return err
+	}
+	if address.global != nil {
+		if address.global.base != nil {
+			value, err := fc.info(instruction.Val)
+			if err != nil {
+				return err
+			}
+			if value.base != address.global.base {
+				return fc.compiler.errorAt(instruction.Pos(), "global pointer store has incompatible managed base")
+			}
+			base, offset := fc.pointerExpressions(instruction.Val, value)
+			fmt.Fprintf(out, "    (global.set $global%d_base %s)\n", address.global.id, base)
+			fmt.Fprintf(out, "    (global.set $global%d_offset %s)\n", address.global.id, offset)
+		} else {
+			fmt.Fprintf(out, "    (global.set $global%d %s)\n", address.global.id, fc.expression(instruction.Val))
+		}
+		return nil
 	}
 	if address.base == nil || address.field < 0 {
 		return fc.compiler.errorAt(instruction.Pos(), "store destination is not a managed struct field")
@@ -644,6 +748,15 @@ func (fc *functionCompiler) emitLoad(out *strings.Builder, instruction *ssa.UnOp
 	source, err := fc.info(instruction.X)
 	if err != nil {
 		return err
+	}
+	if source.global != nil {
+		if source.global.base != nil {
+			fmt.Fprintf(out, "    (local.set %s (global.get $global%d_base))\n", baseName(instruction), source.global.id)
+			fmt.Fprintf(out, "    (local.set %s (global.get $global%d_offset))\n", offsetName(instruction), source.global.id)
+		} else {
+			fmt.Fprintf(out, "    (local.set %s (global.get $global%d))\n", valueName(instruction), source.global.id)
+		}
+		return nil
 	}
 	if source.base == nil || source.field < 0 {
 		return fc.compiler.errorAt(instruction.Pos(), "load source is not a managed struct field")
@@ -694,6 +807,9 @@ func (fc *functionCompiler) emitCall(out *strings.Builder, instruction *ssa.Call
 			base, offset := fc.pointerExpressions(arg, info)
 			fmt.Fprintf(&call, " %s %s", base, offset)
 		} else {
+			if info.global != nil {
+				return fc.compiler.errorAt(instruction.Pos(), "global addresses cannot be passed to functions")
+			}
 			fmt.Fprintf(&call, " %s", fc.expression(arg))
 		}
 	}
@@ -747,6 +863,13 @@ func (fc *functionCompiler) pointerExpressions(value ssa.Value, info valueInfo) 
 func (fc *functionCompiler) info(value ssa.Value) (valueInfo, error) {
 	if constant, ok := value.(*ssa.Const); ok {
 		return fc.infoForType(constant.Type())
+	}
+	if global, ok := value.(*ssa.Global); ok {
+		info := fc.compiler.globalBySSA[global]
+		if info == nil {
+			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "missing global information for %s", value.Name())
+		}
+		return valueInfo{goType: value.Type(), field: -1, global: info}, nil
 	}
 	info, ok := fc.values[value]
 	if !ok {
