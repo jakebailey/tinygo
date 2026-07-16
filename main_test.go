@@ -891,29 +891,33 @@ func TestWasmGC(t *testing.T) {
 		t.Skip("NodeJS does not support --experimental-wasm-jspi")
 	}
 
-	tmpdir := t.TempDir()
-	options := optionsFromTarget("wasm-gc", sema)
-	config, err := builder.NewConfig(&options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := builder.Build("testdata/wasmgc.go", ".wasm", tmpdir, config)
-	if err != nil {
-		t.Fatal("failed to build binary:", err)
-	}
+	for _, name := range []string{"wasmgc", "wasmgc-slices"} {
+		t.Run(name, func(t *testing.T) {
+			tmpdir := t.TempDir()
+			options := optionsFromTarget("wasm-gc", sema)
+			config, err := builder.NewConfig(&options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := builder.Build("testdata/"+name+".go", ".wasm", tmpdir, config)
+			if err != nil {
+				t.Fatal("failed to build binary:", err)
+			}
 
-	emulator, err := config.Emulator("", result.Binary)
-	if err != nil {
-		t.Fatal(err)
+			emulator, err := config.Emulator("", result.Binary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output := &bytes.Buffer{}
+			cmd := exec.Command(emulator[0], emulator[1:]...)
+			cmd.Stdout = output
+			cmd.Stderr = output
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("failed to run WasmGC module: %v\n%s", err, output)
+			}
+			checkOutput(t, "testdata/"+name+".txt", output.Bytes())
+		})
 	}
-	output := &bytes.Buffer{}
-	cmd = exec.Command(emulator[0], emulator[1:]...)
-	cmd.Stdout = output
-	cmd.Stderr = output
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("failed to run WasmGC module: %v\n%s", err, output)
-	}
-	checkOutput(t, "testdata/wasmgc.txt", output.Bytes())
 }
 
 // Test //go:wasmexport in JavaScript (using NodeJS).
