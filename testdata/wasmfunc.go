@@ -3,6 +3,7 @@ package main
 import "syscall/js"
 
 func main() {
+	done := make(chan struct{})
 	js.Global().Call("setCallback", js.FuncOf(func(this js.Value, args []js.Value) any {
 		println("inside callback! parameters:")
 		sum := 0
@@ -11,7 +12,8 @@ func main() {
 			println("  parameter:", n)
 			sum += n
 		}
+		close(done)
 		return sum
 	}))
-	js.Global().Call("callCallback")
+	<-done
 }

@@ -1,4 +1,4 @@
-//go:build scheduler.tasks
+//go:build scheduler.tasks || scheduler.jspi
 
 package runtime
 

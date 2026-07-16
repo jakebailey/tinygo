@@ -147,8 +147,7 @@ func (c *Config) NeedsStackObjects() bool {
 	}
 }
 
-// Scheduler returns the scheduler implementation. Valid values are "none",
-// "asyncify" and "tasks".
+// Scheduler returns the scheduler implementation.
 func (c *Config) Scheduler() string {
 	if c.Options.Scheduler != "" {
 		return c.Options.Scheduler
@@ -646,6 +645,9 @@ func (c *Config) Emulator(format, binary string) ([]string, error) {
 	parts, err := shlex.Split(c.Target.Emulator)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse emulator command: %w", err)
+	}
+	if c.Scheduler() == "jspi" && len(parts) != 0 && strings.TrimSuffix(filepath.Base(parts[0]), ".exe") == "node" && !slices.Contains(parts, "--experimental-wasm-jspi") {
+		parts = slices.Insert(parts, 1, "--experimental-wasm-jspi")
 	}
 	var emulator []string
 	for _, s := range parts {

@@ -1,4 +1,4 @@
-//go:build scheduler.tasks || scheduler.asyncify || scheduler.cores
+//go:build scheduler.tasks || scheduler.asyncify || scheduler.jspi || scheduler.cores
 
 package task
 
@@ -24,6 +24,12 @@ func Exit() {
 
 func exit(goexit bool) {
 	t := Current()
+	finish(t, goexit)
+	terminate()
+	runtimePanic("unreachable")
+}
+
+func finish(t *Task, goexit bool) {
 	remaining := atomic.AddUint32(&liveTasks, ^uint32(0))
 	if t == mainTask {
 		if goexit {
@@ -35,8 +41,4 @@ func exit(goexit bool) {
 	} else if atomic.LoadUint32(&mainExitedByGoexit) != 0 && remaining == 0 {
 		runtimePanic("all goroutines are asleep - deadlock!")
 	}
-
-	// TODO: explicitly free the stack after switching back to the scheduler.
-	Pause()
-	runtimePanic("unreachable")
 }

@@ -1,4 +1,4 @@
-//go:build scheduler.tasks || scheduler.asyncify
+//go:build scheduler.tasks || scheduler.asyncify || scheduler.jspi
 
 package runtime
 
@@ -8,9 +8,8 @@ package runtime
 // were added to the queue (first-in, first-out). It also contains a sleep queue
 // with sleeping goroutines in order of when they should be re-activated.
 //
-// The scheduler is used both for the asyncify based scheduler and for the task
-// based scheduler. In both cases, the 'internal/task.Task' type is used to represent one
-// goroutine.
+// The scheduler is used by the task, asyncify, and JSPI schedulers. In all
+// cases, the 'internal/task.Task' type represents one goroutine.
 
 import (
 	"internal/task"
@@ -216,8 +215,12 @@ func scheduler(returnAtDeadlock bool) {
 				}
 			}
 			if timeLeft > 0 {
+				if jspiScheduler && !returnAtDeadlock {
+					scheduleScheduler(timeLeft)
+					break
+				}
 				sleepTicks(timeLeft)
-				if asyncScheduler {
+				if asyncScheduler && !jspiScheduler {
 					// The sleepTicks function above only sets a timeout at
 					// which point the scheduler will be called again. It does
 					// not really sleep. So instead of sleeping, we return and

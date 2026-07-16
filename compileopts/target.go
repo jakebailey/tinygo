@@ -225,8 +225,18 @@ func LoadTarget(options *Options) (*TargetSpec, error) {
 		return nil, fmt.Errorf("%s : %w", options.Target, err)
 	}
 
-	if spec.Scheduler == "asyncify" {
+	scheduler := spec.Scheduler
+	if options.Scheduler != "" {
+		scheduler = options.Scheduler
+	}
+	if scheduler == "asyncify" {
 		spec.ExtraFiles = append(spec.ExtraFiles, "src/internal/task/task_asyncify_wasm.S")
+	}
+	if scheduler == "jspi" {
+		if spec.GOOS != "js" || !strings.HasPrefix(spec.Triple, "wasm") {
+			return nil, errors.New("scheduler=jspi requires a WebAssembly target with GOOS=js")
+		}
+		spec.ExtraFiles = append(spec.ExtraFiles, "src/internal/task/task_jspi_wasm.S")
 	}
 
 	return spec, nil

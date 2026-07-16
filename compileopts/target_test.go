@@ -5,6 +5,8 @@ import (
 	"io/fs"
 	"reflect"
 	"testing"
+
+	"github.com/tinygo-org/tinygo/goenv"
 )
 
 func TestLoadTarget(t *testing.T) {
@@ -20,6 +22,35 @@ func TestLoadTarget(t *testing.T) {
 
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Error("LoadTarget failed for wrong reason:", err)
+	}
+}
+
+func TestLoadTargetJSPI(t *testing.T) {
+	_, err := LoadTarget(&Options{Target: "wasm", Scheduler: "jspi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = LoadTarget(&Options{Target: "arduino", Scheduler: "jspi"})
+	if err == nil || err.Error() != "scheduler=jspi requires a WebAssembly target with GOOS=js" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestJSPIEmulator(t *testing.T) {
+	config := &Config{
+		Options: &Options{Scheduler: "jspi"},
+		Target: &TargetSpec{
+			Emulator: "node {root}/targets/wasm_exec_node.js {}",
+		},
+	}
+	command, err := config.Emulator("", "test.wasm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := []string{"node", "--experimental-wasm-jspi", goenv.Get("TINYGOROOT") + "/targets/wasm_exec_node.js", "test.wasm"}
+	if !reflect.DeepEqual(command, expected) {
+		t.Fatalf("unexpected emulator command:\nexpected: %v\nactual:   %v", expected, command)
 	}
 }
 

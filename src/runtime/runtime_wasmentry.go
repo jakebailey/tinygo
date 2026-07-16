@@ -96,7 +96,9 @@ func wasmExportExit() {
 	// //go:wasmexport function has exited.
 	schedulerExit = true
 
-	task.Pause()
+	if pauseAfterWasmExport {
+		task.Pause()
+	}
 
 	// TODO: we could cache the allocated stack so we don't have to keep
 	// allocating a new stack on every //go:wasmexport call.

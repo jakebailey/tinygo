@@ -95,6 +95,7 @@
 	let reinterpretBuf = new DataView(new ArrayBuffer(8));
 	var logLine = [];
 	const wasmExit = {}; // thrown to exit via proc_exit (not an error)
+	const jspiExit = {}; // thrown to exit a JSPI goroutine (not an error)
 
 	globalThis.Go = class {
 		constructor() {
@@ -269,16 +270,35 @@
 					},
 
 					// func sleepTicks(timeout int64)
-					"runtime.sleepTicks": (timeout) => {
-						// Do not sleep, only reactivate scheduler after the given timeout.
-						setTimeout(() => {
-							if (this.exited) return;
-							try {
-								this._inst.exports.go_scheduler();
-							} catch (e) {
-								if (e !== wasmExit) throw e;
+					"runtime.sleepTicks": typeof WebAssembly.Suspending === "function"
+						? new WebAssembly.Suspending((timeout) => {
+							if (this._jspiRun) {
+								return new Promise((resolve) => {
+									setTimeout(resolve, Number(timeout) / 1e6);
+								});
 							}
-						}, Number(timeout) / 1e6);
+							this._scheduleTimeout(timeout);
+						})
+						: (timeout) => this._scheduleTimeout(timeout),
+
+					"runtime.jspiStart": typeof WebAssembly.Suspending === "function"
+						? new WebAssembly.Suspending((state) => this._jspiStart(state))
+						: () => {
+							throw new Error("JSPI is not supported by this WebAssembly runtime");
+						},
+
+					"runtime.jspiPause": typeof WebAssembly.Suspending === "function"
+						? new WebAssembly.Suspending((state) => this._jspiPause(state))
+						: () => {
+							throw new Error("JSPI is not supported by this WebAssembly runtime");
+						},
+
+					"runtime.jspiExit": () => {
+						throw jspiExit;
+					},
+
+					"runtime.scheduleTimeout": (timeout) => {
+						this._scheduleTimeout(timeout);
 					},
 
 					// func finalizeRef(v ref)
@@ -476,6 +496,16 @@
 
 		async run(instance) {
 			this._inst = instance;
+			this._goScheduler = this._inst.exports.go_scheduler;
+			if (this._inst.exports.tinygo_jspi_run) {
+				if (typeof WebAssembly.Suspending !== "function" || typeof WebAssembly.promising !== "function") {
+					throw new Error("JSPI is not supported by this WebAssembly runtime");
+				}
+				this._jspiRun = WebAssembly.promising(this._inst.exports.tinygo_jspi_run);
+				this._goScheduler = WebAssembly.promising(this._inst.exports.go_scheduler);
+				this._jspiResume = WebAssembly.promising(this._inst.exports.resume);
+				this._jspiTasks = new Map();
+			}
 			this._values = [ // JS values that Go currently has references to, indexed by reference id
 				NaN,
 				0,
@@ -499,7 +529,11 @@
 				// Run program, but catch the wasmExit exception that's thrown
 				// to return back here.
 				try {
-					this._inst.exports._start();
+					if (this._jspiRun) {
+						await WebAssembly.promising(this._inst.exports._start)();
+					} else {
+						this._inst.exports._start();
+					}
 				} catch (e) {
 					if (e !== wasmExit) throw e;
 				}
@@ -507,13 +541,26 @@
 				await exitPromise;
 				return this.exitCode;
 			} else {
-				this._inst.exports._initialize();
+				if (this._jspiRun) {
+					await WebAssembly.promising(this._inst.exports._initialize)();
+				} else {
+					this._inst.exports._initialize();
+				}
 			}
 		}
 
 		_resume() {
 			if (this.exited) {
 				throw new Error("Go program has already exited");
+			}
+			if (this._jspiRun) {
+				return this._jspiResume().catch((e) => {
+					if (e !== wasmExit) throw e;
+				}).then(() => {
+					if (this.exited) {
+						this._resolveExitPromise();
+					}
+				});
 			}
 			try {
 				this._inst.exports.resume();
@@ -525,15 +572,83 @@
 			}
 		}
 
+		_jspiStart(state) {
+			let task = this._jspiTasks.get(state);
+			if (task === undefined) {
+				task = {};
+				this._jspiTasks.set(state, task);
+				const wait = this._jspiWait(task);
+				this._jspiRun(state).then(() => {
+					task.resolveYield?.();
+					this._jspiTasks.delete(state);
+				}, (err) => {
+					if (err === jspiExit) {
+						task.resolveYield?.();
+					} else {
+						task.rejectYield?.(err);
+					}
+					this._jspiTasks.delete(state);
+				});
+				return wait;
+			}
+
+			if (task.resume === undefined) {
+				throw new Error("attempted to resume a JSPI task that is not suspended");
+			}
+			const wait = this._jspiWait(task);
+			const resume = task.resume;
+			task.resume = undefined;
+			resume();
+			return wait;
+		}
+
+		_jspiPause(state) {
+			const task = this._jspiTasks.get(state);
+			if (task === undefined) {
+				throw new Error("attempted to suspend an unknown JSPI task");
+			}
+			task.resolveYield();
+			task.resolveYield = undefined;
+			task.rejectYield = undefined;
+			return new Promise((resolve) => {
+				task.resume = resolve;
+			});
+		}
+
+		_jspiWait(task) {
+			return new Promise((resolve, reject) => {
+				task.resolveYield = resolve;
+				task.rejectYield = reject;
+			});
+		}
+
+		_scheduleTimeout(timeout) {
+			setTimeout(() => {
+				if (this.exited) return;
+				try {
+					const result = this._goScheduler();
+					if (result instanceof Promise) {
+						result.catch((e) => {
+							if (e !== wasmExit) throw e;
+						});
+					}
+				} catch (e) {
+					if (e !== wasmExit) throw e;
+				}
+			}, Number(timeout) / 1e6);
+		}
+
 		_makeFuncWrapper(id) {
 			const go = this;
 			return function() {
 				const event = { id: id, this: this, args: arguments };
 				go._pendingEvent = event;
-				go._resume();
+				const resume = go._resume();
+				if (resume instanceof Promise) {
+					return resume.then(() => event.result);
+				}
 				return event.result;
 			};
 		}
 	}
 })();
-

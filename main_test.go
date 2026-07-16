@@ -837,28 +837,51 @@ func TestWasmExport(t *testing.T) {
 // Test js.FuncOf (for syscall/js).
 // This test might be extended in the future to cover more cases in syscall/js.
 func TestWasmFuncOf(t *testing.T) {
-	// Build the wasm binary.
-	tmpdir := t.TempDir()
-	options := optionsFromTarget("wasm", sema)
-	buildConfig, err := builder.NewConfig(&options)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name      string
+		scheduler string
+		nodeArgs  []string
+	}{
+		{name: "asyncify"},
+		{name: "jspi", scheduler: "jspi", nodeArgs: []string{"--experimental-wasm-jspi"}},
 	}
-	result, err := builder.Build("testdata/wasmfunc.go", ".wasm", tmpdir, buildConfig)
-	if err != nil {
-		t.Fatal("failed to build binary:", err)
-	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Build the wasm binary.
+			tmpdir := t.TempDir()
+			options := optionsFromTarget("wasm", sema)
+			options.Scheduler = tc.scheduler
+			buildConfig, err := builder.NewConfig(&options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := builder.Build("testdata/wasmfunc.go", ".wasm", tmpdir, buildConfig)
+			if err != nil {
+				t.Fatal("failed to build binary:", err)
+			}
 
-	// Test the resulting binary using NodeJS.
-	output := &bytes.Buffer{}
-	cmd := exec.Command("node", "testdata/wasmfunc.js", result.Binary, buildConfig.BuildMode())
-	cmd.Stdout = output
-	cmd.Stderr = output
-	err = cmd.Run()
-	if err != nil {
-		t.Error("failed to run node:", err)
+			if tc.scheduler == "jspi" {
+				cmd := exec.Command("node", "--experimental-wasm-jspi", "-e",
+					`if (typeof WebAssembly.Suspending !== "function") process.exit(1)`)
+				if err := cmd.Run(); err != nil {
+					t.Skip("NodeJS does not support --experimental-wasm-jspi")
+				}
+			}
+
+			// Test the resulting binary using NodeJS.
+			output := &bytes.Buffer{}
+			args := append([]string{}, tc.nodeArgs...)
+			args = append(args, "testdata/wasmfunc.js", result.Binary, buildConfig.BuildMode())
+			cmd := exec.Command("node", args...)
+			cmd.Stdout = output
+			cmd.Stderr = output
+			err = cmd.Run()
+			if err != nil {
+				t.Error("failed to run node:", err)
+			}
+			checkOutput(t, "testdata/wasmfunc.txt", output.Bytes())
+		})
 	}
-	checkOutput(t, "testdata/wasmfunc.txt", output.Bytes())
 }
 
 // Test //go:wasmexport in JavaScript (using NodeJS).
@@ -867,11 +890,27 @@ func TestWasmExportJS(t *testing.T) {
 	type testCase struct {
 		name      string
 		buildMode string
+		scheduler string
+		file      string
+		nodeArgs  []string
 	}
 
 	tests := []testCase{
 		{name: "default"},
 		{name: "c-shared", buildMode: "c-shared"},
+		{
+			name:      "jspi",
+			scheduler: "jspi",
+			file:      "wasmexport.go",
+			nodeArgs:  []string{"--experimental-wasm-jspi"},
+		},
+		{
+			name:      "jspi-c-shared",
+			buildMode: "c-shared",
+			scheduler: "jspi",
+			file:      "wasmexport.go",
+			nodeArgs:  []string{"--experimental-wasm-jspi"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -880,18 +919,32 @@ func TestWasmExportJS(t *testing.T) {
 			tmpdir := t.TempDir()
 			options := optionsFromTarget("wasm", sema)
 			options.BuildMode = tc.buildMode
+			options.Scheduler = tc.scheduler
 			buildConfig, err := builder.NewConfig(&options)
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := builder.Build("testdata/wasmexport-noscheduler.go", ".wasm", tmpdir, buildConfig)
+			filename := tc.file
+			if filename == "" {
+				filename = "wasmexport-noscheduler.go"
+			}
+			result, err := builder.Build("testdata/"+filename, ".wasm", tmpdir, buildConfig)
 			if err != nil {
 				t.Fatal("failed to build binary:", err)
 			}
 
 			// Test the resulting binary using NodeJS.
+			if tc.scheduler == "jspi" {
+				cmd := exec.Command("node", "--experimental-wasm-jspi", "-e",
+					`if (typeof WebAssembly.Suspending !== "function") process.exit(1)`)
+				if err := cmd.Run(); err != nil {
+					t.Skip("NodeJS does not support --experimental-wasm-jspi")
+				}
+			}
 			output := &bytes.Buffer{}
-			cmd := exec.Command("node", "testdata/wasmexport.js", result.Binary, buildConfig.BuildMode())
+			args := append([]string{}, tc.nodeArgs...)
+			args = append(args, "testdata/wasmexport.js", result.Binary, buildConfig.BuildMode())
+			cmd := exec.Command("node", args...)
 			cmd.Stdout = output
 			cmd.Stderr = output
 			err = cmd.Run()
@@ -909,8 +962,10 @@ func TestWasmExit(t *testing.T) {
 	t.Parallel()
 
 	type testCase struct {
-		name   string
-		output string
+		name      string
+		arg       string
+		output    string
+		scheduler string
 	}
 
 	tests := []testCase{
@@ -919,24 +974,40 @@ func TestWasmExit(t *testing.T) {
 		{name: "exit-0-sleep", output: "slept\nexit code: 0\n"},
 		{name: "exit-1", output: "exit code: 1\n"},
 		{name: "exit-1-sleep", output: "slept\nexit code: 1\n"},
+		{name: "jspi-normal", arg: "normal", output: "exit code: 0\n", scheduler: "jspi"},
+		{name: "jspi-exit-0-sleep", arg: "exit-0-sleep", output: "slept\nexit code: 0\n", scheduler: "jspi"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			options := optionsFromTarget("wasm", sema)
+			options.Scheduler = tc.scheduler
 			buildConfig, err := builder.NewConfig(&options)
 			if err != nil {
 				t.Fatal(err)
 			}
-			buildConfig.Target.Emulator = "node testdata/wasmexit.js {}"
+			if tc.scheduler == "jspi" {
+				cmd := exec.Command("node", "--experimental-wasm-jspi", "-e",
+					`if (typeof WebAssembly.Suspending !== "function") process.exit(1)`)
+				if err := cmd.Run(); err != nil {
+					t.Skip("NodeJS does not support --experimental-wasm-jspi")
+				}
+				buildConfig.Target.Emulator = "node testdata/wasmexit.js {}"
+			} else {
+				buildConfig.Target.Emulator = "node testdata/wasmexit.js {}"
+			}
+			arg := tc.arg
+			if arg == "" {
+				arg = tc.name
+			}
 			output := &bytes.Buffer{}
-			_, err = buildAndRun("testdata/wasmexit.go", buildConfig, output, []string{tc.name}, nil, time.Minute, func(cmd *exec.Cmd, result builder.BuildResult) error {
+			_, err = buildAndRun("testdata/wasmexit.go", buildConfig, output, []string{arg}, nil, time.Minute, func(cmd *exec.Cmd, result builder.BuildResult) error {
 				return cmd.Run()
 			})
 			if err != nil {
 				t.Error(err)
 			}
-			expected := "wasmexit test: " + tc.name + "\n" + tc.output
+			expected := "wasmexit test: " + arg + "\n" + tc.output
 			checkOutputData(t, []byte(expected), output.Bytes())
 		})
 	}
