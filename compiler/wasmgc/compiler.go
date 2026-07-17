@@ -33,6 +33,7 @@ type compiler struct {
 	boxByGo         map[types.Type]*structType
 	arrays          []*arrayType
 	arrayByElem     map[types.Type]*arrayType
+	clearArrays     map[*arrayType]bool
 	stringArray     *arrayType
 	strings         []string
 	stringIDs       map[string]int
@@ -108,6 +109,7 @@ func Compile(program Program) (string, error) {
 		structByGo:      make(map[types.Type]*structType),
 		boxByGo:         make(map[types.Type]*structType),
 		arrayByElem:     make(map[types.Type]*arrayType),
+		clearArrays:     make(map[*arrayType]bool),
 		stringIDs:       make(map[string]int),
 		globalBySSA:     make(map[*ssa.Global]*globalInfo),
 		closureBindings: make(map[*ssa.Function][]ssa.Value),
@@ -230,6 +232,11 @@ func Compile(program Program) (string, error) {
 	}
 	if c.stringArray != nil {
 		c.writeStringEqual(&out, c.stringArray)
+	}
+	for _, array := range c.arrays {
+		if c.clearArrays[array] && array.elementStruct != nil {
+			c.writeStructArrayClear(&out, array)
+		}
 	}
 
 	out.WriteString(functions.String())
@@ -505,6 +512,20 @@ func (c *compiler) findArrays() error {
 					if err := addArray(slice.Elem(), instruction.Pos()); err != nil {
 						return err
 					}
+				case *ssa.Call:
+					builtin, ok := instruction.Call.Value.(*ssa.Builtin)
+					if !ok || builtin.Name() != "clear" || len(instruction.Call.Args) != 1 {
+						continue
+					}
+					slice, ok := instruction.Call.Args[0].Type().Underlying().(*types.Slice)
+					if !ok {
+						continue
+					}
+					array := c.arrayByElem[slice.Elem()]
+					if array == nil {
+						return c.errorAt(instruction.Pos(), "managed array type was not discovered: %s", slice.Elem())
+					}
+					c.clearArrays[array] = true
 				}
 			}
 		}
@@ -529,6 +550,26 @@ func (c *compiler) writeStringEqual(out *strings.Builder, array *arrayType) {
 	out.WriteString("      (local.set $index (i32.add (local.get $index) (i32.const 1)))\n")
 	out.WriteString("      (br $compare))\n")
 	out.WriteString("    (unreachable)\n")
+	out.WriteString("  )\n")
+}
+
+func (c *compiler) writeStructArrayClear(out *strings.Builder, array *arrayType) {
+	fmt.Fprintf(out, "  (func $clearStructArray%d (param $base (ref null $array%d)) (param $offset i32) (param $len i32)\n", array.id, array.id)
+	out.WriteString("    (local $index i32)\n")
+	fmt.Fprintf(out, "    (local $element (ref null $type%d))\n", array.elementStruct.id)
+	out.WriteString("    (if (local.get $len)\n")
+	out.WriteString("      (then\n")
+	fmt.Fprintf(out, "        (loop $clearStructArray%d_loop\n", array.id)
+	fmt.Fprintf(out, "          (local.set $element (array.get $array%d (ref.as_non_null (local.get $base)) %s))\n",
+		array.id, physicalArrayIndexExpression("(local.get $offset)", "(local.get $index)", array))
+	out.WriteString("          (if (ref.is_null (local.get $element))\n")
+	out.WriteString("            (then)\n")
+	out.WriteString("            (else\n")
+	writeZeroStructFields(out, array.elementStruct, "(ref.as_non_null (local.get $element))")
+	out.WriteString("            ))\n")
+	out.WriteString("          (local.set $index (i32.add (local.get $index) (i32.const 1)))\n")
+	fmt.Fprintf(out, "          (br_if $clearStructArray%d_loop (i32.lt_u (local.get $index) (local.get $len))))\n", array.id)
+	out.WriteString("      ))\n")
 	out.WriteString("  )\n")
 }
 
@@ -1869,6 +1910,8 @@ func (fc *functionCompiler) emitCall(out *strings.Builder, instruction *ssa.Call
 			return fc.emitAppend(out, instruction)
 		case "copy":
 			return fc.emitCopy(out, instruction)
+		case "clear":
+			return fc.emitClear(out, instruction)
 		case "len", "cap":
 			if len(instruction.Call.Args) != 1 {
 				return fc.compiler.errorAt(instruction.Pos(), "invalid %s call", builtin.Name())
@@ -1947,6 +1990,39 @@ func (fc *functionCompiler) emitCall(out *strings.Builder, instruction *ssa.Call
 	} else {
 		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), call.String())
 	}
+	return nil
+}
+
+func (fc *functionCompiler) emitClear(out *strings.Builder, instruction *ssa.Call) error {
+	if len(instruction.Call.Args) != 1 {
+		return fc.compiler.errorAt(instruction.Pos(), "clear requires one slice")
+	}
+	value := instruction.Call.Args[0]
+	info, err := fc.info(value)
+	if err != nil {
+		return err
+	}
+	if !info.slice || info.array == nil {
+		return fc.compiler.errorAt(instruction.Pos(), "clear only supports managed slices")
+	}
+	expressions, err := fc.valueExpressions(value, info)
+	if err != nil {
+		return err
+	}
+	if info.array.elementStruct != nil {
+		fmt.Fprintf(out, "    (call $clearStructArray%d %s %s %s)\n",
+			info.array.id, expressions[0], expressions[1], expressions[2])
+		return nil
+	}
+	zero := "(i32.const 0)"
+	if info.array.elementBox != nil {
+		zero = fmt.Sprintf("(ref.null $type%d)", info.array.elementBox.id)
+	}
+	fmt.Fprintf(out, "    (if %s\n", expressions[2])
+	fmt.Fprintf(out, "      (then (array.fill $array%d (ref.as_non_null %s) %s %s %s)))\n",
+		info.array.id, expressions[0],
+		physicalArrayIndexExpression(expressions[1], "(i32.const 0)", info.array),
+		zero, expressions[2])
 	return nil
 }
 
@@ -2064,7 +2140,7 @@ func (fc *functionCompiler) writeStructElementAssignment(out *strings.Builder, a
 	out.WriteString("                (else\n")
 	fmt.Fprintf(out, "                  (if (ref.is_null (local.get %s))\n", sourceElement)
 	out.WriteString("                    (then\n")
-	fc.writeZeroStructFields(out, array.elementStruct, "(ref.as_non_null (local.get "+destinationElement+"))")
+	writeZeroStructFields(out, array.elementStruct, "(ref.as_non_null (local.get "+destinationElement+"))")
 	out.WriteString("                    )\n")
 	out.WriteString("                    (else\n")
 	fc.writeCopyStructFields(out, array.elementStruct,
@@ -2263,7 +2339,7 @@ func (fc *functionCompiler) writeStructFields(out *strings.Builder, typ *structT
 	}
 }
 
-func (fc *functionCompiler) writeZeroStructFields(out *strings.Builder, typ *structType, destination string) {
+func writeZeroStructFields(out *strings.Builder, typ *structType, destination string) {
 	for _, field := range typ.fields {
 		if field.pointer {
 			fmt.Fprintf(out, "                      (struct.set $type%d %d %s (ref.null $type%d))\n", typ.id, field.physicalIndex, destination, field.target.id)
