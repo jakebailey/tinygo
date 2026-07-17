@@ -891,7 +891,7 @@ func TestWasmGC(t *testing.T) {
 		t.Skip("NodeJS does not support --experimental-wasm-jspi")
 	}
 
-	for _, name := range []string{"wasmgc", "wasmgc-slices", "wasmgc-strings"} {
+	for _, name := range []string{"wasmgc", "wasmgc-slices", "wasmgc-strings", "wasmgc-closures"} {
 		t.Run(name, func(t *testing.T) {
 			tmpdir := t.TempDir()
 			options := optionsFromTarget("wasm-gc", sema)
