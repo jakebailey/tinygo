@@ -249,6 +249,34 @@ func main() {
 	}
 }
 
+func TestCompileStructEquality(t *testing.T) {
+	const source = `package main
+type node struct { number int }
+type value struct {
+	number int
+	pointer *node
+}
+func main() {
+	node := &node{number: 2}
+	left := value{number: 40, pointer: node}
+	right := value{number: 40, pointer: node}
+	println(left == right, left != value{number: 41, pointer: node})
+	println(struct{}{} == struct{}{})
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(ref.eq (struct.get $type",
+		"(i32.eq (struct.get $type",
+		"(i32.eqz (i32.and",
+		"(local.set $t",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
 func TestCompileAnonymousPointerSlice(t *testing.T) {
 	const source = `package main
 func replace(values []*struct{ number int }) {
