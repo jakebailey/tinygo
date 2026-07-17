@@ -107,6 +107,11 @@ func main() {
 	emptyCopyCount := copy(make([]struct{}, 1), make([]struct{}, 2))
 	var nilCopySlice []wasmGCStructValue
 	nilCopyCount := copy(nilCopySlice, copySourceSlice)
+	equalityNode := &wasmGCStructNode{value: 7}
+	equalityLeft := wasmGCStructValue{number: 3, pointer: equalityNode}
+	equalityRight := wasmGCStructValue{number: 3, pointer: equalityNode}
+	equalityDifferentNumber := wasmGCStructValue{number: 4, pointer: equalityNode}
+	equalityDifferentPointer := wasmGCStructValue{number: 3, pointer: &wasmGCStructNode{value: 7}}
 	println(
 		original.number,
 		original.pointer.value,
@@ -158,5 +163,10 @@ func main() {
 		zeroCopyPointer.pointer == nil,
 		emptyCopyCount,
 		nilCopyCount,
+		equalityLeft == equalityRight,
+		equalityLeft != equalityDifferentNumber,
+		equalityLeft == equalityDifferentPointer,
+		wasmGCStructValue{} == wasmGCStructValue{},
+		struct{}{} == struct{}{},
 	)
 }
