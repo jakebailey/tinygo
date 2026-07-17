@@ -868,6 +868,12 @@ func (fc *functionCompiler) compile() (string, error) {
 			if call, ok := value.(*ssa.Call); ok {
 				if builtin, ok := call.Call.Value.(*ssa.Builtin); ok && builtin.Name() == "append" {
 					fmt.Fprintf(&out, "    (local %s_append_cap i32)\n", valueName(value))
+					if fc.values[value].array.elementStruct != nil {
+						fmt.Fprintf(&out, "    (local %s_append_index i32)\n", valueName(value))
+						fmt.Fprintf(&out, "    (local %s_append_values (ref null $array%d))\n", valueName(value), fc.values[value].array.id)
+						fmt.Fprintf(&out, "    (local %s_append_source (ref null $type%d))\n", valueName(value), fc.values[value].array.elementStruct.id)
+						fmt.Fprintf(&out, "    (local %s_append_destination (ref null $type%d))\n", valueName(value), fc.values[value].array.elementStruct.id)
+					}
 				}
 			}
 			if phi, ok := value.(*ssa.Phi); ok {
@@ -1898,9 +1904,6 @@ func (fc *functionCompiler) emitAppend(out *strings.Builder, instruction *ssa.Ca
 	if !source.slice || source.array == nil || result.array != source.array || !result.slice {
 		return fc.compiler.errorAt(instruction.Pos(), "append only supports managed scalar slices")
 	}
-	if source.array.elementStruct != nil {
-		return fc.compiler.errorAt(instruction.Pos(), "append of struct slices requires managed value copies")
-	}
 	addedValue := instruction.Call.Args[1]
 	added, err := fc.info(addedValue)
 	if err != nil {
@@ -1913,6 +1916,9 @@ func (fc *functionCompiler) emitAppend(out *strings.Builder, instruction *ssa.Ca
 		wasmArrayElementType(added.array) == wasmArrayElementType(source.array)
 	if !compatibleSlice && !compatibleString {
 		return fc.compiler.errorAt(instruction.Pos(), "append variadic argument has incompatible slice type")
+	}
+	if source.array.elementStruct != nil {
+		return fc.emitStructAppend(out, instruction, sourceValue, source, addedValue, added)
 	}
 
 	sourceExpressions, err := fc.valueExpressions(sourceValue, source)
@@ -1956,6 +1962,161 @@ func (fc *functionCompiler) emitAppend(out *strings.Builder, instruction *ssa.Ca
 		physicalArrayIndexExpression(addedExpressions[1], "(i32.const 0)", source.array),
 		addedLength)
 	return nil
+}
+
+func (fc *functionCompiler) emitStructAppend(out *strings.Builder, instruction *ssa.Call, sourceValue ssa.Value, source valueInfo, addedValue ssa.Value, added valueInfo) error {
+	sourceExpressions, err := fc.valueExpressions(sourceValue, source)
+	if err != nil {
+		return err
+	}
+	addedExpressions, err := fc.valueExpressions(addedValue, added)
+	if err != nil {
+		return err
+	}
+	array := source.array
+	oldLength := sourceExpressions[2]
+	oldCapacity := sourceExpressions[3]
+	addedLength := addedExpressions[2]
+	newLength := lenName(instruction)
+	newCapacity := valueName(instruction) + "_append_cap"
+	index := valueName(instruction) + "_append_index"
+	values := valueName(instruction) + "_append_values"
+	sourceElement := valueName(instruction) + "_append_source"
+	destinationElement := valueName(instruction) + "_append_destination"
+
+	fmt.Fprintf(out, "    (local.set %s (i32.add %s %s))\n", newLength, oldLength, addedLength)
+	fmt.Fprintf(out, "    (if (i32.lt_u (local.get %s) %s) (then (unreachable)))\n", newLength, oldLength)
+	fmt.Fprintf(out, "    (if (i32.lt_s (local.get %s) (i32.const 0)) (then (unreachable)))\n", newLength)
+
+	// Snapshot before writing for overlap, then preserve existing slot objects when
+	// capacity is reused so pointers to those elements remain valid.
+	fmt.Fprintf(out, "    (if %s\n", addedLength)
+	out.WriteString("      (then\n")
+	fmt.Fprintf(out, "        (local.set %s (array.new_default $array%d %s))\n", values, array.id, addedLength)
+	out.WriteString("        (drop (call $suspend))\n")
+	fc.writeStructSnapshotLoop(out,
+		valueName(instruction)+"_append_added_snapshot",
+		array, index, sourceElement,
+		"(ref.as_non_null (local.get "+values+"))", "(i32.const 0)",
+		"(ref.as_non_null "+addedExpressions[0]+")", addedExpressions[1],
+		addedLength)
+	out.WriteString("      ))\n")
+
+	fmt.Fprintf(out, "    (if (i32.le_u (local.get %s) %s)\n", newLength, oldCapacity)
+	out.WriteString("      (then\n")
+	fmt.Fprintf(out, "        (local.set %s %s)\n", baseName(instruction), sourceExpressions[0])
+	fmt.Fprintf(out, "        (local.set %s %s)\n", offsetName(instruction), sourceExpressions[1])
+	fmt.Fprintf(out, "        (local.set %s %s))\n", capName(instruction), oldCapacity)
+	out.WriteString("      (else\n")
+	fmt.Fprintf(out, "        (local.set %s (i32.mul %s (i32.const 2)))\n", newCapacity, oldCapacity)
+	fmt.Fprintf(out, "        (if (i32.or (i32.lt_s (local.get %s) (i32.const 0)) (i32.lt_u (local.get %s) (local.get %s)))\n", newCapacity, newCapacity, newLength)
+	fmt.Fprintf(out, "          (then (local.set %s (local.get %s))))\n", newCapacity, newLength)
+	fmt.Fprintf(out, "        (local.set %s (array.new_default $array%d (local.get %s)))\n", baseName(instruction), array.id, newCapacity)
+	fmt.Fprintf(out, "        (local.set %s (i32.const 0))\n", offsetName(instruction))
+	fmt.Fprintf(out, "        (local.set %s (local.get %s))\n", capName(instruction), newCapacity)
+	out.WriteString("        (drop (call $suspend))\n")
+	fc.writeStructSnapshotLoop(out,
+		valueName(instruction)+"_append_existing_snapshot",
+		array, index, sourceElement,
+		"(ref.as_non_null (local.get "+baseName(instruction)+"))", "(i32.const 0)",
+		"(ref.as_non_null "+sourceExpressions[0]+")", sourceExpressions[1],
+		oldLength)
+	out.WriteString("      ))\n")
+
+	fc.writeStructAssignmentLoop(out,
+		valueName(instruction)+"_append_assign",
+		array, index, sourceElement, destinationElement,
+		"(ref.as_non_null (local.get "+baseName(instruction)+"))",
+		"(i32.add (local.get "+offsetName(instruction)+") "+scaleArrayIndex(oldLength, array)+")",
+		"(ref.as_non_null (local.get "+values+"))", "(i32.const 0)",
+		addedLength)
+	return nil
+}
+
+func (fc *functionCompiler) writeStructSnapshotLoop(out *strings.Builder, label string, array *arrayType, index, sourceElement, destinationBase, destinationOffset, sourceBase, sourceOffset, length string) {
+	fmt.Fprintf(out, "        (local.set %s (i32.const 0))\n", index)
+	fmt.Fprintf(out, "        (loop %s\n", label)
+	fmt.Fprintf(out, "          (if (i32.lt_u (local.get %s) %s)\n", index, length)
+	out.WriteString("            (then\n")
+	fmt.Fprintf(out, "              (local.set %s (array.get $array%d %s %s))\n",
+		sourceElement, array.id, sourceBase,
+		physicalArrayIndexExpression(sourceOffset, "(local.get "+index+")", array))
+	fmt.Fprintf(out, "              (if (ref.is_null (local.get %s))\n", sourceElement)
+	out.WriteString("                (then)\n")
+	fmt.Fprintf(out, "                (else (array.set $array%d %s %s (struct.new $type%d",
+		array.id, destinationBase,
+		physicalArrayIndexExpression(destinationOffset, "(local.get "+index+")", array),
+		array.elementStruct.id)
+	fc.writeStructFields(out, array.elementStruct, "(ref.as_non_null (local.get "+sourceElement+"))")
+	out.WriteString("))))\n")
+	fmt.Fprintf(out, "              (local.set %s (i32.add (local.get %s) (i32.const 1)))\n", index, index)
+	fmt.Fprintf(out, "              (br %s))))\n", label)
+}
+
+func (fc *functionCompiler) writeStructAssignmentLoop(out *strings.Builder, label string, array *arrayType, index, sourceElement, destinationElement, destinationBase, destinationOffset, sourceBase, sourceOffset, length string) {
+	fmt.Fprintf(out, "    (if %s\n", length)
+	out.WriteString("      (then\n")
+	fmt.Fprintf(out, "        (local.set %s (i32.const 0))\n", index)
+	fmt.Fprintf(out, "        (loop %s\n", label)
+	fmt.Fprintf(out, "          (if (i32.lt_u (local.get %s) %s)\n", index, length)
+	out.WriteString("            (then\n")
+	sourceIndex := physicalArrayIndexExpression(sourceOffset, "(local.get "+index+")", array)
+	destinationIndex := physicalArrayIndexExpression(destinationOffset, "(local.get "+index+")", array)
+	fmt.Fprintf(out, "              (local.set %s (array.get $array%d %s %s))\n", sourceElement, array.id, sourceBase, sourceIndex)
+	fmt.Fprintf(out, "              (local.set %s (array.get $array%d %s %s))\n", destinationElement, array.id, destinationBase, destinationIndex)
+	fmt.Fprintf(out, "              (if (ref.is_null (local.get %s))\n", destinationElement)
+	out.WriteString("                (then\n")
+	fmt.Fprintf(out, "                  (if (ref.is_null (local.get %s))\n", sourceElement)
+	out.WriteString("                    (then)\n")
+	fmt.Fprintf(out, "                    (else (array.set $array%d %s %s (local.get %s))))\n", array.id, destinationBase, destinationIndex, sourceElement)
+	out.WriteString("                )\n")
+	out.WriteString("                (else\n")
+	fmt.Fprintf(out, "                  (if (ref.is_null (local.get %s))\n", sourceElement)
+	out.WriteString("                    (then\n")
+	fc.writeZeroStructFields(out, array.elementStruct, "(ref.as_non_null (local.get "+destinationElement+"))")
+	out.WriteString("                    )\n")
+	out.WriteString("                    (else\n")
+	fc.writeCopyStructFields(out, array.elementStruct,
+		"(ref.as_non_null (local.get "+destinationElement+"))",
+		"(ref.as_non_null (local.get "+sourceElement+"))")
+	out.WriteString("                    ))\n")
+	out.WriteString("                ))\n")
+	fmt.Fprintf(out, "              (local.set %s (i32.add (local.get %s) (i32.const 1)))\n", index, index)
+	fmt.Fprintf(out, "              (br %s))))\n", label)
+	out.WriteString("        ))\n")
+}
+
+func (fc *functionCompiler) writeStructFields(out *strings.Builder, typ *structType, receiver string) {
+	for _, field := range typ.fields {
+		fmt.Fprintf(out, " (struct.get $type%d %d %s)", typ.id, field.physicalIndex, receiver)
+		if field.pointer {
+			fmt.Fprintf(out, " (struct.get $type%d %d %s)", typ.id, field.physicalIndex+1, receiver)
+		}
+	}
+}
+
+func (fc *functionCompiler) writeZeroStructFields(out *strings.Builder, typ *structType, destination string) {
+	for _, field := range typ.fields {
+		if field.pointer {
+			fmt.Fprintf(out, "                      (struct.set $type%d %d %s (ref.null $type%d))\n", typ.id, field.physicalIndex, destination, field.target.id)
+			fmt.Fprintf(out, "                      (struct.set $type%d %d %s (i32.const 0))\n", typ.id, field.physicalIndex+1, destination)
+		} else {
+			fmt.Fprintf(out, "                      (struct.set $type%d %d %s (i32.const 0))\n", typ.id, field.physicalIndex, destination)
+		}
+	}
+}
+
+func (fc *functionCompiler) writeCopyStructFields(out *strings.Builder, typ *structType, destination, source string) {
+	for _, field := range typ.fields {
+		fmt.Fprintf(out, "                      (struct.set $type%d %d %s (struct.get $type%d %d %s))\n",
+			typ.id, field.physicalIndex, destination,
+			typ.id, field.physicalIndex, source)
+		if field.pointer {
+			fmt.Fprintf(out, "                      (struct.set $type%d %d %s (struct.get $type%d %d %s))\n",
+				typ.id, field.physicalIndex+1, destination,
+				typ.id, field.physicalIndex+1, source)
+		}
+	}
 }
 
 func (fc *functionCompiler) expression(value ssa.Value) string {

@@ -360,17 +360,29 @@ func main() {
 	}
 }
 
-func TestRejectStructSliceAppend(t *testing.T) {
+func TestCompileStructSliceAppend(t *testing.T) {
 	const source = `package main
 type value struct { number int }
 func main() {
-	var values []value
-	values = append(values, value{number: 42})
+	values := make([]value, 1, 2)
+	values[0].number = 40
+	extended := values[:2]
+	spare := &extended[1]
+	values = append(values, value{number: 2})
+	values = append(values[:1], values...)
+	println(spare.number, values[0].number)
 }
 `
-	_, err := compileSourceError(t, source)
-	if err == nil || !strings.Contains(err.Error(), "append of struct slices requires managed value copies") {
-		t.Fatalf("unexpected error: %v", err)
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"_append_values (ref null $array",
+		"_append_destination (ref null $type",
+		"_append_added_snapshot",
+		"_append_assign",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
 	}
 }
 
