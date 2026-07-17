@@ -26,6 +26,7 @@ type compiler struct {
 	pkg             *ssa.Package
 	functions       []*ssa.Function
 	functionIDs     map[*ssa.Function]int
+	initFunctions   []*ssa.Function
 	goIDs           map[*ssa.Go]int
 	structs         []*structType
 	structByGo      map[types.Type]*structType
@@ -221,13 +222,12 @@ func Compile(program Program) (string, error) {
 	}
 
 	mainFn := c.pkg.Func("main")
-	initFn := c.pkg.Func("init")
 	out.WriteString("  (func (export \"run\") (result i32)\n")
 	if len(c.strings) != 0 {
 		out.WriteString("    (call $initStrings)\n")
 		out.WriteString("    (drop (call $suspend))\n")
 	}
-	if initFn != nil {
+	for _, initFn := range c.initFunctions {
 		fmt.Fprintf(&out, "    (call $fn%d)\n", c.functionIDs[initFn])
 	}
 	fmt.Fprintf(&out, "    (call $fn%d)\n", c.functionIDs[mainFn])
@@ -247,9 +247,10 @@ func (c *compiler) findFunctions() error {
 		if _, ok := c.functionIDs[fn]; ok {
 			return nil
 		}
-		if fn.Pkg != c.pkg {
-			return c.errorAt(fn.Pos(), "calls outside the main package are not supported: %s", fn.String())
+		if fn.Pkg == nil {
+			return c.errorAt(fn.Pos(), "function has no Go package body: %s", fn.String())
 		}
+		fn.Pkg.Build()
 		c.functionIDs[fn] = len(c.functions)
 		c.functions = append(c.functions, fn)
 		for _, block := range fn.Blocks {
@@ -293,12 +294,38 @@ func (c *compiler) findFunctions() error {
 		return nil
 	}
 
-	if initFn := c.pkg.Func("init"); initFn != nil {
-		if err := visit(initFn); err != nil {
-			return err
+	initializedPackages := make(map[*ssa.Package]struct{})
+	var visitPackage func(*ssa.Package) error
+	visitPackage = func(pkg *ssa.Package) error {
+		if _, ok := initializedPackages[pkg]; ok {
+			return nil
 		}
+		initializedPackages[pkg] = struct{}{}
+		for _, imported := range pkg.Pkg.Imports() {
+			importedPkg := pkg.Prog.ImportedPackage(imported.Path())
+			if importedPkg == nil {
+				return c.errorAt(token.NoPos, "SSA package is unavailable for import %s", imported.Path())
+			}
+			if err := visitPackage(importedPkg); err != nil {
+				return err
+			}
+		}
+		pkg.Build()
+		if initFn := pkg.Func("init"); initFn != nil {
+			if err := visit(initFn); err != nil {
+				return err
+			}
+			c.initFunctions = append(c.initFunctions, initFn)
+		}
+		return nil
 	}
-	return visit(mainFn)
+	if err := visitPackage(c.pkg); err != nil {
+		return err
+	}
+	if err := visit(mainFn); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *compiler) findArrays() error {
@@ -562,14 +589,32 @@ func (c *compiler) findGlobals() error {
 }
 
 func (c *compiler) packageGlobals() []*ssa.Global {
+	packages := make(map[*ssa.Package]struct{})
+	for _, fn := range c.functions {
+		if fn.Pkg != nil {
+			packages[fn.Pkg] = struct{}{}
+		}
+	}
+	sortedPackages := make([]*ssa.Package, 0, len(packages))
+	for pkg := range packages {
+		sortedPackages = append(sortedPackages, pkg)
+	}
+	sort.Slice(sortedPackages, func(i, j int) bool {
+		return sortedPackages[i].Pkg.Path() < sortedPackages[j].Pkg.Path()
+	})
+
 	var globals []*ssa.Global
-	for _, member := range c.pkg.Members {
-		if global, ok := member.(*ssa.Global); ok {
-			globals = append(globals, global)
+	for _, pkg := range sortedPackages {
+		for _, member := range pkg.Members {
+			if global, ok := member.(*ssa.Global); ok {
+				globals = append(globals, global)
+			}
 		}
 	}
 	sort.Slice(globals, func(i, j int) bool {
-		return globals[i].Name() < globals[j].Name()
+		left := globals[i].Pkg.Pkg.Path() + "." + globals[i].Name()
+		right := globals[j].Pkg.Pkg.Path() + "." + globals[j].Name()
+		return left < right
 	})
 	return globals
 }
