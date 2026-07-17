@@ -121,6 +121,20 @@ func Compile(program Program) (string, error) {
 		return "", err
 	}
 
+	var functions strings.Builder
+	for _, fn := range c.functions {
+		fc := &functionCompiler{
+			compiler: c,
+			fn:       fn,
+			values:   make(map[ssa.Value]valueInfo),
+		}
+		text, err := fc.compile()
+		if err != nil {
+			return "", err
+		}
+		functions.WriteString(text)
+	}
+
 	var out strings.Builder
 	out.WriteString("(module\n")
 	for _, typ := range c.arrays {
@@ -142,24 +156,35 @@ func Compile(program Program) (string, error) {
 		}
 		out.WriteString("  )\n")
 	}
+	goCalls := make([]*ssa.Go, len(c.goIDs))
+	for instruction, id := range c.goIDs {
+		goCalls[id] = instruction
+	}
+	if len(goCalls) != 0 {
+		out.WriteString("  (rec\n")
+		for id, instruction := range goCalls {
+			fmt.Fprintf(&out, "    (type $task%d (struct\n", id)
+			fmt.Fprintf(&out, "      (field (mut (ref null $task%d)))", id)
+			for _, value := range goCallValues(instruction) {
+				info, err := c.info(value)
+				if err != nil {
+					return "", err
+				}
+				for _, typ := range wasmValueTypes(info) {
+					fmt.Fprintf(&out, "\n      (field %s)", typ)
+				}
+			}
+			out.WriteString("))\n")
+		}
+		out.WriteString("  )\n")
+	}
 	out.WriteString("  (import \"env\" \"printInt\" (func $printInt (param i32)))\n")
 	out.WriteString("  (import \"env\" \"suspend\" (func $suspend (result i32)))\n")
 	out.WriteString("  (import \"env\" \"makeChan\" (func $makeChan (param i32) (result i32)))\n")
 	out.WriteString("  (import \"env\" \"channelSend\" (func $channelSend (param i32 i32) (result i32)))\n")
 	out.WriteString("  (import \"env\" \"channelRecv\" (func $channelRecv (param i32) (result i32)))\n")
-	goCalls := make([]*ssa.Go, len(c.goIDs))
-	for instruction, id := range c.goIDs {
-		goCalls[id] = instruction
-	}
-	for id, instruction := range goCalls {
-		fmt.Fprintf(&out, "  (import \"env\" \"spawn%d\" (func $spawn%d", id, id)
-		for _, arg := range instruction.Call.Args {
-			if wasmScalarType(arg.Type()) != "i32" {
-				return "", c.errorAt(instruction.Pos(), "goroutine arguments must be 32-bit scalar values")
-			}
-			out.WriteString(" (param i32)")
-		}
-		out.WriteString("))\n")
+	if len(goCalls) != 0 {
+		out.WriteString("  (import \"env\" \"scheduleTask\" (func $scheduleTask (param i32)))\n")
 	}
 	for _, global := range c.globals {
 		if global.array != nil {
@@ -180,6 +205,10 @@ func Compile(program Program) (string, error) {
 		array := c.stringArray
 		fmt.Fprintf(&out, "  (global $string%d (mut (ref null $array%d)) (ref.null $array%d))\n", id, array.id, array.id)
 	}
+	for id := range goCalls {
+		fmt.Fprintf(&out, "  (global $tasks%d_head (mut (ref null $task%d)) (ref.null $task%d))\n", id, id, id)
+		fmt.Fprintf(&out, "  (global $tasks%d_tail (mut (ref null $task%d)) (ref.null $task%d))\n", id, id, id)
+	}
 	if len(c.strings) != 0 {
 		array := c.stringArray
 		out.WriteString("  (func $initStrings\n")
@@ -196,29 +225,11 @@ func Compile(program Program) (string, error) {
 		c.writeStringEqual(&out, c.stringArray)
 	}
 
-	for _, fn := range c.functions {
-		fc := &functionCompiler{
-			compiler: c,
-			fn:       fn,
-			values:   make(map[ssa.Value]valueInfo),
-		}
-		text, err := fc.compile()
-		if err != nil {
+	out.WriteString(functions.String())
+	if len(goCalls) != 0 {
+		if err := c.writeTaskRunner(&out, goCalls); err != nil {
 			return "", err
 		}
-		out.WriteString(text)
-	}
-	for id, instruction := range goCalls {
-		callee := instruction.Call.StaticCallee()
-		fmt.Fprintf(&out, "  (func (export \"goroutine%d\")", id)
-		for i := range instruction.Call.Args {
-			fmt.Fprintf(&out, " (param $arg%d i32)", i)
-		}
-		fmt.Fprintf(&out, "\n    (call $fn%d", c.functionIDs[callee])
-		for i := range instruction.Call.Args {
-			fmt.Fprintf(&out, " (local.get $arg%d)", i)
-		}
-		out.WriteString("))\n")
 	}
 
 	mainFn := c.pkg.Func("main")
@@ -275,10 +286,7 @@ func (c *compiler) findFunctions() error {
 				}
 				goInstruction, ok := instruction.(*ssa.Go)
 				if ok {
-					if _, ok := goInstruction.Call.Value.(*ssa.MakeClosure); ok {
-						return c.errorAt(goInstruction.Pos(), "spawned closures require an in-module WasmGC task queue")
-					}
-					callee := goInstruction.Call.StaticCallee()
+					callee := goCallee(goInstruction)
 					if callee == nil {
 						return c.errorAt(goInstruction.Pos(), "indirect goroutine calls are not supported")
 					}
@@ -325,6 +333,65 @@ func (c *compiler) findFunctions() error {
 	if err := visit(mainFn); err != nil {
 		return err
 	}
+	return nil
+}
+
+func goCallee(instruction *ssa.Go) *ssa.Function {
+	if closure, ok := instruction.Call.Value.(*ssa.MakeClosure); ok {
+		return closure.Fn.(*ssa.Function)
+	}
+	return instruction.Call.StaticCallee()
+}
+
+func goCallValues(instruction *ssa.Go) []ssa.Value {
+	var values []ssa.Value
+	if closure, ok := instruction.Call.Value.(*ssa.MakeClosure); ok {
+		values = append(values, closure.Bindings...)
+	}
+	return append(values, instruction.Call.Args...)
+}
+
+func (c *compiler) writeTaskRunner(out *strings.Builder, goCalls []*ssa.Go) error {
+	out.WriteString("  (func (export \"runTask\") (param $site i32)\n")
+	for id := range goCalls {
+		fmt.Fprintf(out, "    (local $task%d (ref null $task%d))\n", id, id)
+	}
+	for id, instruction := range goCalls {
+		fmt.Fprintf(out, "    (if (i32.eq (local.get $site) (i32.const %d))\n", id)
+		out.WriteString("      (then\n")
+		fmt.Fprintf(out, "        (if (ref.is_null (global.get $tasks%d_head)) (then (return)))\n", id)
+		fmt.Fprintf(out, "        (local.set $task%d (global.get $tasks%d_head))\n", id, id)
+		task := fmt.Sprintf("(ref.as_non_null (local.get $task%d))", id)
+		fmt.Fprintf(out, "        (global.set $tasks%d_head (struct.get $task%d 0 %s))\n", id, id, task)
+		fmt.Fprintf(out, "        (struct.set $task%d 0 %s (ref.null $task%d))\n", id, task, id)
+		fmt.Fprintf(out, "        (if (ref.is_null (global.get $tasks%d_head))\n", id)
+		fmt.Fprintf(out, "          (then (global.set $tasks%d_tail (ref.null $task%d))))\n", id, id)
+		callee := goCallee(instruction)
+		fmt.Fprintf(out, "        (call $fn%d", c.functionIDs[callee])
+		fieldIndex := 1
+		for _, value := range goCallValues(instruction) {
+			info, err := c.info(value)
+			if err != nil {
+				return err
+			}
+			for range wasmValueTypes(info) {
+				fmt.Fprintf(out, " (struct.get $task%d %d %s)", id, fieldIndex, task)
+				fieldIndex++
+			}
+		}
+		out.WriteString(")\n")
+		for i := 0; i < callee.Signature.Results().Len(); i++ {
+			info, err := c.infoForType(callee.Signature.Results().At(i).Type())
+			if err != nil {
+				return c.errorAt(instruction.Pos(), "%v", err)
+			}
+			for range wasmValueTypes(info) {
+				out.WriteString("        (drop)\n")
+			}
+		}
+		out.WriteString("        (return)))\n")
+	}
+	out.WriteString("  )\n")
 	return nil
 }
 
@@ -699,6 +766,14 @@ func (fc *functionCompiler) compile() (string, error) {
 			}
 		}
 	}
+	for _, block := range fc.fn.Blocks {
+		for _, instruction := range block.Instrs {
+			if instruction, ok := instruction.(*ssa.Go); ok {
+				id := fc.compiler.goIDs[instruction]
+				fmt.Fprintf(&out, "    (local $task%d_new (ref null $task%d))\n", id, id)
+			}
+		}
+	}
 
 	if len(fc.fn.Blocks) == 1 {
 		for _, instruction := range fc.fn.Blocks[0].Instrs {
@@ -991,14 +1066,26 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 		if !ok {
 			return fc.compiler.errorAt(instruction.Pos(), "missing goroutine identifier")
 		}
-		fmt.Fprintf(out, "    (call $spawn%d", id)
-		for _, arg := range instruction.Call.Args {
-			if wasmScalarType(arg.Type()) != "i32" {
-				return fc.compiler.errorAt(instruction.Pos(), "goroutine arguments must be 32-bit scalar values")
+		fmt.Fprintf(out, "    (local.set $task%d_new (struct.new $task%d (ref.null $task%d)", id, id, id)
+		for _, value := range goCallValues(instruction) {
+			info, err := fc.info(value)
+			if err != nil {
+				return err
 			}
-			fmt.Fprintf(out, " %s", fc.expression(arg))
+			expressions, err := fc.valueExpressions(value, info)
+			if err != nil {
+				return err
+			}
+			for _, expression := range expressions {
+				fmt.Fprintf(out, " %s", expression)
+			}
 		}
-		out.WriteString(")\n")
+		out.WriteString("))\n")
+		fmt.Fprintf(out, "    (if (ref.is_null (global.get $tasks%d_tail))\n", id)
+		fmt.Fprintf(out, "      (then (global.set $tasks%d_head (local.get $task%d_new)))\n", id, id)
+		fmt.Fprintf(out, "      (else (struct.set $task%d 0 (ref.as_non_null (global.get $tasks%d_tail)) (local.get $task%d_new))))\n", id, id, id)
+		fmt.Fprintf(out, "    (global.set $tasks%d_tail (local.get $task%d_new))\n", id, id)
+		fmt.Fprintf(out, "    (call $scheduleTask (i32.const %d))\n", id)
 	case *ssa.ChangeType:
 		return fc.emitChangeType(out, instruction)
 	case *ssa.Convert:
@@ -1591,6 +1678,21 @@ func (fc *functionCompiler) info(value ssa.Value) (valueInfo, error) {
 		return valueInfo{}, fc.compiler.errorAt(value.Pos(), "missing value information for %s", value.Name())
 	}
 	return info, nil
+}
+
+func (c *compiler) info(value ssa.Value) (valueInfo, error) {
+	if constant, ok := value.(*ssa.Const); ok {
+		return c.infoForType(constant.Type())
+	}
+	info, ok := c.knownValues[value]
+	if !ok {
+		return valueInfo{}, c.errorAt(value.Pos(), "missing value information for %s", value.Name())
+	}
+	return info, nil
+}
+
+func (c *compiler) infoForType(goType types.Type) (valueInfo, error) {
+	return (&functionCompiler{compiler: c}).infoForType(goType)
 }
 
 func (fc *functionCompiler) infoForType(goType types.Type) (valueInfo, error) {
