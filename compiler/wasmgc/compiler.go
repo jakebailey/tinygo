@@ -1378,7 +1378,29 @@ func (fc *functionCompiler) emitBinOp(out *strings.Builder, instruction *ssa.Bin
 		return nil
 	}
 	if left.structValue || right.structValue {
-		return fc.compiler.errorAt(instruction.Pos(), "struct value comparisons are not supported")
+		if !left.structValue || !right.structValue || left.base != right.base {
+			return fc.compiler.errorAt(instruction.Pos(), "struct comparison has incompatible managed values")
+		}
+		if instruction.Op != token.EQL && instruction.Op != token.NEQ {
+			return fc.compiler.errorAt(instruction.Pos(), "unsupported struct comparison: %s", instruction.Op)
+		}
+		leftExpressions, err := fc.valueExpressions(instruction.X, left)
+		if err != nil {
+			return err
+		}
+		rightExpressions, err := fc.valueExpressions(instruction.Y, right)
+		if err != nil {
+			return err
+		}
+		expression := structEqualExpression(
+			left.base,
+			"(ref.as_non_null "+leftExpressions[0]+")",
+			"(ref.as_non_null "+rightExpressions[0]+")")
+		if instruction.Op == token.NEQ {
+			expression = "(i32.eqz " + expression + ")"
+		}
+		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), expression)
+		return nil
 	}
 	if left.base != nil || right.base != nil {
 		if left.base == nil || right.base == nil || left.base != right.base {
@@ -1411,6 +1433,26 @@ func (fc *functionCompiler) emitBinOp(out *strings.Builder, instruction *ssa.Bin
 	}
 	fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), expression)
 	return nil
+}
+
+func structEqualExpression(typ *structType, left, right string) string {
+	expression := "(i32.const 1)"
+	for _, field := range typ.fields {
+		fieldExpression := fmt.Sprintf("(i32.eq (struct.get $type%d %d %s) (struct.get $type%d %d %s))",
+			typ.id, field.physicalIndex, left,
+			typ.id, field.physicalIndex, right)
+		if field.pointer {
+			offsetExpression := fmt.Sprintf("(i32.eq (struct.get $type%d %d %s) (struct.get $type%d %d %s))",
+				typ.id, field.physicalIndex+1, left,
+				typ.id, field.physicalIndex+1, right)
+			fieldExpression = fmt.Sprintf("(i32.and (ref.eq (struct.get $type%d %d %s) (struct.get $type%d %d %s)) %s)",
+				typ.id, field.physicalIndex, left,
+				typ.id, field.physicalIndex, right,
+				offsetExpression)
+		}
+		expression = "(i32.and " + expression + " " + fieldExpression + ")"
+	}
+	return expression
 }
 
 func isNilConst(value ssa.Value) bool {
