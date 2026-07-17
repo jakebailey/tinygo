@@ -33,12 +33,14 @@ func main() {
 		"(type $type0 (struct",
 		"(field (mut (ref null $type0)))",
 		"(struct.new_default $type0)",
-		"(drop (call $suspend))",
 		"(call $printInt",
 	} {
 		if !strings.Contains(wat, expected) {
 			t.Fatalf("output does not contain %q:\n%s", expected, wat)
 		}
+	}
+	if strings.Contains(wat, "$suspend") {
+		t.Fatalf("managed allocation emitted a host suspension:\n%s", wat)
 	}
 }
 

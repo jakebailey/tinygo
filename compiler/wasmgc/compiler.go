@@ -186,7 +186,6 @@ func Compile(program Program) (string, error) {
 		out.WriteString("  )\n")
 	}
 	out.WriteString("  (import \"env\" \"printInt\" (func $printInt (param i32)))\n")
-	out.WriteString("  (import \"env\" \"suspend\" (func $suspend (result i32)))\n")
 	out.WriteString("  (import \"env\" \"makeChan\" (func $makeChan (param i32) (result i32)))\n")
 	out.WriteString("  (import \"env\" \"channelSend\" (func $channelSend (param i32 i32) (result i32)))\n")
 	out.WriteString("  (import \"env\" \"channelRecv\" (func $channelRecv (param i32) (result i32)))\n")
@@ -250,7 +249,6 @@ func Compile(program Program) (string, error) {
 	out.WriteString("  (func (export \"run\") (result i32)\n")
 	if len(c.strings) != 0 {
 		out.WriteString("    (call $initStrings)\n")
-		out.WriteString("    (drop (call $suspend))\n")
 	}
 	for _, initFn := range c.initFunctions {
 		fmt.Fprintf(&out, "    (call $fn%d)\n", c.functionIDs[initFn])
@@ -1228,7 +1226,6 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 			fmt.Fprintf(out, "    (local.set %s (struct.new_default $type%d))\n", baseName(instruction), info.base.id)
 		}
 		fmt.Fprintf(out, "    (local.set %s (i32.const 0))\n", offsetName(instruction))
-		out.WriteString("    (drop (call $suspend))\n")
 	case *ssa.FieldAddr:
 		source, err := fc.info(instruction.X)
 		if err != nil {
@@ -1260,7 +1257,6 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 		fmt.Fprintf(out, "    (local.set %s (i32.const 0))\n", offsetName(instruction))
 		fmt.Fprintf(out, "    (local.set %s %s)\n", lenName(instruction), length)
 		fmt.Fprintf(out, "    (local.set %s %s)\n", capName(instruction), capacity)
-		out.WriteString("    (drop (call $suspend))\n")
 	case *ssa.MakeClosure:
 	case *ssa.UnOp:
 		if instruction.Op == token.ARROW {
@@ -2206,7 +2202,6 @@ func (fc *functionCompiler) emitAppend(out *strings.Builder, instruction *ssa.Ca
 	fmt.Fprintf(out, "        (local.set %s (array.new_default $array%d (local.get %s)))\n", baseName(instruction), source.array.id, newCapacity)
 	fmt.Fprintf(out, "        (local.set %s (i32.const 0))\n", offsetName(instruction))
 	fmt.Fprintf(out, "        (local.set %s (local.get %s))\n", capName(instruction), newCapacity)
-	out.WriteString("        (drop (call $suspend))\n")
 	fmt.Fprintf(out, "        (if %s\n", oldLength)
 	fmt.Fprintf(out, "          (then (array.copy $array%d $array%d (ref.as_non_null (local.get %s)) (i32.const 0)\n", source.array.id, source.array.id, baseName(instruction))
 	fmt.Fprintf(out, "            (ref.as_non_null %s) %s %s)))))\n", sourceExpressions[0], physicalArrayIndexExpression(sourceExpressions[1], "(i32.const 0)", source.array), oldLength)
@@ -2255,7 +2250,6 @@ func (fc *functionCompiler) emitStructAppend(out *strings.Builder, instruction *
 	fmt.Fprintf(out, "        (local.set %s (array.new_default $array%d (local.get %s)))\n", baseName(instruction), array.id, newCapacity)
 	fmt.Fprintf(out, "        (local.set %s (i32.const 0))\n", offsetName(instruction))
 	fmt.Fprintf(out, "        (local.set %s (local.get %s))\n", capName(instruction), newCapacity)
-	out.WriteString("        (drop (call $suspend))\n")
 	fc.writeStructCopyLoop(out,
 		valueName(instruction)+"_append_existing",
 		array, index, sourceElement,
