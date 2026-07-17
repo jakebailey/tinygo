@@ -62,6 +62,28 @@ func main() {
 	structSlice[1] = structSlice[0]
 	structSlice[1].number++
 	structSlice[1].pointer.value++
+	grownStructSlice := append(structSlice, structSlice[0])
+	grownStructSlice[0].number++
+	grownStructSlice[2].number += 2
+	grownStructSlice[2].pointer.value++
+	reusedStructSlice := make([]wasmGCStructValue, 1, 3)
+	reusedStructSlice[0].number = 5
+	extendedStructSlice := reusedStructSlice[:3]
+	spareStructPointer := &extendedStructSlice[1]
+	reusedStructSlice = append(reusedStructSlice, reusedStructSlice[0], reusedStructSlice[0])
+	reusedStructSlice[1].number++
+	overlappingStructSlice := make([]wasmGCStructValue, 2, 4)
+	overlappingStructSlice[0].number = 1
+	overlappingStructSlice[1].number = 2
+	overlappingStructSlice = append(overlappingStructSlice[:1], overlappingStructSlice...)
+	overlappingStructSlice[2].number++
+	zeroDestinationSlice := make([]wasmGCStructValue, 1, 2)
+	zeroDestinationExtended := zeroDestinationSlice[:2]
+	zeroDestinationPointer := &zeroDestinationExtended[1]
+	zeroDestinationPointer.number = 99
+	zeroSourceSlice := make([]wasmGCStructValue, 1)
+	zeroDestinationSlice = append(zeroDestinationSlice, zeroSourceSlice...)
+	emptyStructSlice := append(make([]struct{}, 0, 1), struct{}{})
 	println(
 		original.number,
 		original.pointer.value,
@@ -82,5 +104,17 @@ func main() {
 		elementPointer.pointer.value,
 		structSlice[1].pointer.value,
 		wasmGCStructSliceGlobal[0].number,
+		elementPointer.number,
+		grownStructSlice[0].number,
+		grownStructSlice[2].number,
+		elementPointer.pointer.value,
+		spareStructPointer.number,
+		len(reusedStructSlice),
+		overlappingStructSlice[1].number,
+		overlappingStructSlice[2].number,
+		zeroDestinationPointer.number,
+		zeroDestinationPointer.pointer == nil,
+		len(emptyStructSlice),
+		cap(emptyStructSlice),
 	)
 }
