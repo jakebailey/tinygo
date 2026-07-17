@@ -64,8 +64,9 @@ func main() {
 	for _, expected := range []string{
 		`(import "env" "channelSend"`,
 		`(import "env" "channelRecv"`,
-		`(import "env" "spawn0"`,
-		`(export "goroutine0")`,
+		`(import "env" "scheduleTask"`,
+		`(global $tasks0_head`,
+		`(export "runTask")`,
 	} {
 		if !strings.Contains(wat, expected) {
 			t.Fatalf("output does not contain %q:\n%s", expected, wat)
@@ -213,16 +214,25 @@ func main() {
 	}
 }
 
-func TestRejectSpawnedClosure(t *testing.T) {
+func TestSpawnedClosureUsesManagedTask(t *testing.T) {
 	const source = `package main
+type value struct { number int }
 func main() {
-	value := 42
-	go func() { println(value) }()
+	value := &value{number: 42}
+	go func() { println(value.number) }()
 }
 `
-	_, err := compileSourceError(t, source)
-	if err == nil || !strings.Contains(err.Error(), "spawned closures require an in-module WasmGC task queue") {
-		t.Fatalf("unexpected error: %v", err)
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(type $task0 (struct",
+		"(global $tasks0_head (mut (ref null $task0))",
+		"(global $tasks0_tail (mut (ref null $task0))",
+		"(local.set $task0_new (struct.new $task0",
+		"(export \"runTask\")",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
 	}
 }
 

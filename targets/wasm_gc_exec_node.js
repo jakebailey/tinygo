@@ -18,6 +18,13 @@ let nextChannelID = 1;
 let instance;
 let goroutineFailure;
 
+function trackGoroutine(promise) {
+    goroutines.add(promise);
+    promise.catch((err) => {
+        goroutineFailure ??= err;
+    }).finally(() => goroutines.delete(promise));
+}
+
 function makeChan(capacity) {
     const id = nextChannelID++;
     channels.set(id, {
@@ -89,28 +96,21 @@ const environment = {
     makeChan,
     channelSend: new WebAssembly.Suspending(channelSend),
     channelRecv: new WebAssembly.Suspending(channelRecv),
+    scheduleTask(site) {
+        const promise = (async () => {
+            await new Promise((resolve) => setImmediate(resolve));
+            if (global.gc) {
+                global.gc();
+            }
+            const entry = WebAssembly.promising(instance.exports.runTask);
+            await entry(site);
+        })();
+        trackGoroutine(promise);
+    },
 };
 
 const imports = {
-    env: new Proxy(environment, {
-        get(target, name) {
-            if (name in target) {
-                return target[name];
-            }
-            const match = /^spawn(\d+)$/.exec(name);
-            if (!match) {
-                return undefined;
-            }
-            return (...args) => {
-                const entry = instance.exports[`goroutine${match[1]}`];
-                const promise = WebAssembly.promising(entry)(...args);
-                goroutines.add(promise);
-                promise.catch((err) => {
-                    goroutineFailure ??= err;
-                }).finally(() => goroutines.delete(promise));
-            };
-        },
-    }),
+    env: environment,
 };
 
 WebAssembly.instantiate(fs.readFileSync(process.argv[2]), imports).then(async (result) => {
