@@ -70,4 +70,14 @@ func main() {
 	println(copy(pointerCopyDestination, pointerCopySource), (*pointerCopySlot).value)
 	*pointerCopySlot = &wasmGCSliceValue{value: 30}
 	println(pointerCopySource[0].value, pointerCopyDestination[0].value)
+
+	clearNumbers := []int{1, 2, 3}
+	clear(clearNumbers[1:])
+	println(clearNumbers[0], clearNumbers[1], clearNumbers[2])
+	clearPointers := []*wasmGCSliceValue{{value: 4}, {value: 5}}
+	clearPointerSlot := &clearPointers[0]
+	clear(clearPointers[:1])
+	println(*clearPointerSlot == nil, clearPointers[1].value)
+	var nilNumbers []int
+	clear(nilNumbers)
 }

@@ -112,6 +112,16 @@ func main() {
 	equalityRight := wasmGCStructValue{number: 3, pointer: equalityNode}
 	equalityDifferentNumber := wasmGCStructValue{number: 4, pointer: equalityNode}
 	equalityDifferentPointer := wasmGCStructValue{number: 3, pointer: &wasmGCStructNode{value: 7}}
+	clearStructSlice := []wasmGCStructValue{
+		{number: 8, pointer: &wasmGCStructNode{value: 9}},
+		{number: 10, pointer: &wasmGCStructNode{value: 11}},
+	}
+	clearStructPointer := &clearStructSlice[0]
+	clear(clearStructSlice[:1])
+	var nilClearStructSlice []wasmGCStructValue
+	clear(nilClearStructSlice)
+	emptyClearStructSlice := make([]struct{}, 1)
+	clear(emptyClearStructSlice)
 	println(
 		original.number,
 		original.pointer.value,
@@ -168,5 +178,10 @@ func main() {
 		equalityLeft == equalityDifferentPointer,
 		wasmGCStructValue{} == wasmGCStructValue{},
 		struct{}{} == struct{}{},
+		clearStructPointer.number,
+		clearStructPointer.pointer == nil,
+		clearStructSlice[1].number,
+		clearStructSlice[1].pointer.value,
+		len(emptyClearStructSlice),
 	)
 }
