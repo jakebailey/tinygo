@@ -921,6 +921,7 @@ func TestWasmGC(t *testing.T) {
 			}
 			output := &bytes.Buffer{}
 			cmd := exec.Command(emulator[0], emulator[1:]...)
+			cmd.Env = append(os.Environ(), "TINYGO_WASMGC_STRESS_GC=1")
 			cmd.Stdout = output
 			cmd.Stderr = output
 			if err := cmd.Run(); err != nil {
