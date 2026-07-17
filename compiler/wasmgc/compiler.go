@@ -23,19 +23,22 @@ type Program struct {
 }
 
 type compiler struct {
-	pkg         *ssa.Package
-	functions   []*ssa.Function
-	functionIDs map[*ssa.Function]int
-	goIDs       map[*ssa.Go]int
-	structs     []*structType
-	structByGo  map[types.Type]*structType
-	arrays      []*arrayType
-	arrayByElem map[types.Type]*arrayType
-	stringArray *arrayType
-	strings     []string
-	stringIDs   map[string]int
-	globals     []*globalInfo
-	globalBySSA map[*ssa.Global]*globalInfo
+	pkg             *ssa.Package
+	functions       []*ssa.Function
+	functionIDs     map[*ssa.Function]int
+	goIDs           map[*ssa.Go]int
+	structs         []*structType
+	structByGo      map[types.Type]*structType
+	boxByGo         map[types.Type]*structType
+	arrays          []*arrayType
+	arrayByElem     map[types.Type]*arrayType
+	stringArray     *arrayType
+	strings         []string
+	stringIDs       map[string]int
+	globals         []*globalInfo
+	globalBySSA     map[*ssa.Global]*globalInfo
+	closureBindings map[*ssa.Function][]ssa.Value
+	knownValues     map[ssa.Value]valueInfo
 }
 
 type structType struct {
@@ -59,14 +62,15 @@ type field struct {
 }
 
 type valueInfo struct {
-	goType types.Type
-	base   *structType
-	array  *arrayType
-	slice  bool
-	string bool
-	length int64
-	field  int
-	global *globalInfo
+	goType  types.Type
+	base    *structType
+	array   *arrayType
+	slice   bool
+	string  bool
+	length  int64
+	field   int
+	global  *globalInfo
+	closure *ssa.MakeClosure
 }
 
 type globalInfo struct {
@@ -92,13 +96,16 @@ func Compile(program Program) (string, error) {
 	program.Main.Build()
 
 	c := &compiler{
-		pkg:         program.Main,
-		functionIDs: make(map[*ssa.Function]int),
-		goIDs:       make(map[*ssa.Go]int),
-		structByGo:  make(map[types.Type]*structType),
-		arrayByElem: make(map[types.Type]*arrayType),
-		stringIDs:   make(map[string]int),
-		globalBySSA: make(map[*ssa.Global]*globalInfo),
+		pkg:             program.Main,
+		functionIDs:     make(map[*ssa.Function]int),
+		goIDs:           make(map[*ssa.Go]int),
+		structByGo:      make(map[types.Type]*structType),
+		boxByGo:         make(map[types.Type]*structType),
+		arrayByElem:     make(map[types.Type]*arrayType),
+		stringIDs:       make(map[string]int),
+		globalBySSA:     make(map[*ssa.Global]*globalInfo),
+		closureBindings: make(map[*ssa.Function][]ssa.Value),
+		knownValues:     make(map[ssa.Value]valueInfo),
 	}
 	if err := c.findFunctions(); err != nil {
 		return "", err
@@ -247,6 +254,15 @@ func (c *compiler) findFunctions() error {
 		c.functions = append(c.functions, fn)
 		for _, block := range fn.Blocks {
 			for _, instruction := range block.Instrs {
+				if closure, ok := instruction.(*ssa.MakeClosure); ok {
+					callee := closure.Fn.(*ssa.Function)
+					if _, exists := c.closureBindings[callee]; !exists {
+						c.closureBindings[callee] = closure.Bindings
+					}
+					if err := visit(callee); err != nil {
+						return err
+					}
+				}
 				call, ok := instruction.(*ssa.Call)
 				if ok {
 					callee := call.Call.StaticCallee()
@@ -258,6 +274,9 @@ func (c *compiler) findFunctions() error {
 				}
 				goInstruction, ok := instruction.(*ssa.Go)
 				if ok {
+					if _, ok := goInstruction.Call.Value.(*ssa.MakeClosure); ok {
+						return c.errorAt(goInstruction.Pos(), "spawned closures require an in-module WasmGC task queue")
+					}
 					callee := goInstruction.Call.StaticCallee()
 					if callee == nil {
 						return c.errorAt(goInstruction.Pos(), "indirect goroutine calls are not supported")
@@ -393,6 +412,7 @@ func (c *compiler) writeStringEqual(out *strings.Builder, array *arrayType) {
 
 func (c *compiler) findStructs() error {
 	var addType func(types.Type) error
+	var addBox func(types.Type) error
 	addType = func(goType types.Type) error {
 		goType = dereference(goType)
 		if _, ok := c.structByGo[goType]; ok {
@@ -432,7 +452,7 @@ func (c *compiler) findStructs() error {
 				f.target = c.structByGo[targetType]
 				physicalIndex += 2
 			} else {
-				if !isScalar(fieldType) {
+				if !isI32ValueType(fieldType) {
 					return fmt.Errorf("wasm-gc: unsupported field type %s.%s: %s", goType, underlying.Field(i).Name(), fieldType)
 				}
 				physicalIndex++
@@ -441,15 +461,53 @@ func (c *compiler) findStructs() error {
 		}
 		return nil
 	}
+	addBox = func(valueType types.Type) error {
+		if _, ok := c.boxByGo[valueType]; ok {
+			return nil
+		}
+		typ := &structType{
+			id:     len(c.structs),
+			goType: valueType,
+		}
+		c.structs = append(c.structs, typ)
+		c.boxByGo[valueType] = typ
+		field := field{
+			goType:        valueType,
+			virtualOffset: 0,
+			physicalIndex: 0,
+		}
+		if pointer, ok := valueType.Underlying().(*types.Pointer); ok {
+			targetType := pointer.Elem()
+			if _, ok := targetType.Underlying().(*types.Struct); !ok {
+				return fmt.Errorf("wasm-gc: boxed pointer does not point to a struct: %s", valueType)
+			}
+			if err := addType(targetType); err != nil {
+				return err
+			}
+			field.pointer = true
+			field.target = c.structByGo[targetType]
+		} else if !isI32ValueType(valueType) {
+			return fmt.Errorf("wasm-gc: unsupported boxed value type: %s", valueType)
+		}
+		typ.fields = append(typ.fields, field)
+		return nil
+	}
 
 	for _, fn := range c.functions {
 		for _, block := range fn.Blocks {
 			for _, instruction := range block.Instrs {
 				if alloc, ok := instruction.(*ssa.Alloc); ok {
-					if _, ok := dereference(alloc.Type()).Underlying().(*types.Array); ok {
+					valueType := dereference(alloc.Type())
+					if _, ok := valueType.Underlying().(*types.Array); ok {
 						continue
 					}
-					if err := addType(alloc.Type()); err != nil {
+					var err error
+					if _, ok := valueType.Underlying().(*types.Struct); ok {
+						err = addType(valueType)
+					} else {
+						err = addBox(valueType)
+					}
+					if err != nil {
 						return c.errorAt(alloc.Pos(), "%v", err)
 					}
 				}
@@ -521,12 +579,31 @@ func (fc *functionCompiler) compile() (string, error) {
 		return "", fc.compiler.errorAt(fc.fn.Pos(), "function %s has no body", fc.fn.String())
 	}
 
+	bindings := fc.compiler.closureBindings[fc.fn]
+	if len(bindings) != len(fc.fn.FreeVars) {
+		if len(fc.fn.FreeVars) != 0 {
+			return "", fc.compiler.errorAt(fc.fn.Pos(), "closure binding count does not match free variables")
+		}
+	} else {
+		for i, freeVar := range fc.fn.FreeVars {
+			info, ok := fc.compiler.knownValues[bindings[i]]
+			if !ok {
+				return "", fc.compiler.errorAt(freeVar.Pos(), "closure binding information is unavailable for %s", freeVar.Name())
+			}
+			if info.array != nil && !info.slice && !info.string {
+				return "", fc.compiler.errorAt(freeVar.Pos(), "captured array variables are not supported")
+			}
+			fc.values[freeVar] = info
+			fc.compiler.knownValues[freeVar] = info
+		}
+	}
 	for _, param := range fc.fn.Params {
 		info, err := fc.infoForType(param.Type())
 		if err != nil {
 			return "", fc.compiler.errorAt(param.Pos(), "%v", err)
 		}
 		fc.values[param] = info
+		fc.compiler.knownValues[param] = info
 	}
 	for _, block := range fc.fn.Blocks {
 		for _, instruction := range block.Instrs {
@@ -539,11 +616,15 @@ func (fc *functionCompiler) compile() (string, error) {
 				return "", err
 			}
 			fc.values[value] = info
+			fc.compiler.knownValues[value] = info
 		}
 	}
 
 	var out strings.Builder
 	fmt.Fprintf(&out, "  (func $fn%d", fc.compiler.functionIDs[fc.fn])
+	for _, freeVar := range fc.fn.FreeVars {
+		writeDeclaration(&out, "param", valueName(freeVar), fc.values[freeVar])
+	}
 	for _, param := range fc.fn.Params {
 		writeDeclaration(&out, "param", valueName(param), fc.values[param])
 	}
@@ -562,6 +643,9 @@ func (fc *functionCompiler) compile() (string, error) {
 		for _, instruction := range block.Instrs {
 			value, ok := instruction.(ssa.Value)
 			if !ok || isZeroTuple(value.Type()) {
+				continue
+			}
+			if fc.values[value].closure != nil {
 				continue
 			}
 			writeDeclaration(&out, "local", valueName(value), fc.values[value])
@@ -671,18 +755,24 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 	case *ssa.Phi:
 		return fc.infoForType(value.Type())
 	case *ssa.Alloc:
-		if array, ok := dereference(value.Type()).Underlying().(*types.Array); ok {
+		valueType := dereference(value.Type())
+		if array, ok := valueType.Underlying().(*types.Array); ok {
 			typ := fc.compiler.arrayByElem[array.Elem()]
 			if typ == nil {
 				return valueInfo{}, fc.compiler.errorAt(value.Pos(), "managed array type was not discovered: %s", array.Elem())
 			}
 			return valueInfo{goType: value.Type(), array: typ, length: array.Len(), field: -1}, nil
 		}
-		base := fc.compiler.structByGo[dereference(value.Type())]
+		base := fc.compiler.structByGo[valueType]
+		field := -1
+		if base == nil {
+			base = fc.compiler.boxByGo[valueType]
+			field = 0
+		}
 		if base == nil {
 			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "unsupported allocation type: %s", value.Type())
 		}
-		return valueInfo{goType: value.Type(), base: base, field: -1}, nil
+		return valueInfo{goType: value.Type(), base: base, field: field}, nil
 	case *ssa.FieldAddr:
 		source, err := fc.info(value.X)
 		if err != nil {
@@ -733,6 +823,8 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "managed array type was not discovered: %s", slice.Elem())
 		}
 		return valueInfo{goType: value.Type(), array: typ, slice: true, field: -1}, nil
+	case *ssa.MakeClosure:
+		return valueInfo{goType: value.Type(), field: -1, closure: value}, nil
 	case *ssa.UnOp:
 		if value.Op == token.ARROW {
 			if wasmScalarType(value.Type()) != "i32" {
@@ -831,6 +923,7 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 		fmt.Fprintf(out, "    (local.set %s %s)\n", lenName(instruction), length)
 		fmt.Fprintf(out, "    (local.set %s %s)\n", capName(instruction), capacity)
 		out.WriteString("    (drop (call $suspend))\n")
+	case *ssa.MakeClosure:
 	case *ssa.UnOp:
 		if instruction.Op == token.ARROW {
 			fmt.Fprintf(out, "    (local.set %s (call $channelRecv %s))\n", valueName(instruction), fc.expression(instruction.X))
@@ -1281,13 +1374,21 @@ func (fc *functionCompiler) emitCall(out *strings.Builder, instruction *ssa.Call
 		}
 	}
 
-	callee := instruction.Call.StaticCallee()
-	if callee == nil {
-		return fc.compiler.errorAt(instruction.Pos(), "indirect calls are not supported")
+	var bindings []ssa.Value
+	var callee *ssa.Function
+	if closure, ok := instruction.Call.Value.(*ssa.MakeClosure); ok {
+		callee = closure.Fn.(*ssa.Function)
+		bindings = closure.Bindings
+	} else {
+		callee = instruction.Call.StaticCallee()
+		if callee == nil {
+			return fc.compiler.errorAt(instruction.Pos(), "indirect calls are not supported")
+		}
 	}
 	var call strings.Builder
 	fmt.Fprintf(&call, "(call $fn%d", fc.compiler.functionIDs[callee])
-	for _, arg := range instruction.Call.Args {
+	arguments := append(append([]ssa.Value(nil), bindings...), instruction.Call.Args...)
+	for _, arg := range arguments {
 		info, err := fc.info(arg)
 		if err != nil {
 			return err
@@ -1516,6 +1617,13 @@ func isScalar(goType types.Type) bool {
 	default:
 		return false
 	}
+}
+
+func isI32ValueType(goType types.Type) bool {
+	if _, ok := goType.Underlying().(*types.Chan); ok {
+		return true
+	}
+	return isScalar(goType)
 }
 
 func isUint8(goType types.Type) bool {
