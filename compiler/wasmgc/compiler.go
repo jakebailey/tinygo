@@ -913,7 +913,6 @@ func (fc *functionCompiler) compile() (string, error) {
 						fmt.Fprintf(&out, "    (local %s_append_cap i32)\n", valueName(value))
 						if fc.values[value].array.elementStruct != nil {
 							fmt.Fprintf(&out, "    (local %s_append_index i32)\n", valueName(value))
-							fmt.Fprintf(&out, "    (local %s_append_values (ref null $array%d))\n", valueName(value), fc.values[value].array.id)
 							fmt.Fprintf(&out, "    (local %s_append_source (ref null $type%d))\n", valueName(value), fc.values[value].array.elementStruct.id)
 							fmt.Fprintf(&out, "    (local %s_append_destination (ref null $type%d))\n", valueName(value), fc.values[value].array.elementStruct.id)
 						}
@@ -2084,33 +2083,36 @@ func (fc *functionCompiler) emitStructCopy(out *strings.Builder, instruction *ss
 	index := count + "_copy_index"
 	sourceElement := count + "_copy_source"
 	destinationElement := count + "_copy_destination"
-	backwardLabel := count + "_copy_backward"
-	forwardLabel := count + "_copy_forward"
 
 	// Mutate existing slot objects so pointers to destination elements remain
 	// valid, and copy backward when a later subslice overlaps its source.
-	fmt.Fprintf(out, "    (if (local.get %s)\n", count)
+	fc.writeStructCopyLoop(out, count+"_copy", array, index, sourceElement, destinationElement,
+		destination[0], destination[1], source[0], source[1], "(local.get "+count+")")
+	return nil
+}
+
+func (fc *functionCompiler) writeStructCopyLoop(out *strings.Builder, label string, array *arrayType, index, sourceElement, destinationElement, destinationBase, destinationOffset, sourceBase, sourceOffset, count string) {
+	fmt.Fprintf(out, "    (if %s\n", count)
 	out.WriteString("      (then\n")
 	fmt.Fprintf(out, "        (if (i32.and (ref.eq %s %s) (i32.gt_u %s %s))\n",
-		destination[0], source[0], destination[1], source[1])
+		destinationBase, sourceBase, destinationOffset, sourceOffset)
 	out.WriteString("          (then\n")
-	fmt.Fprintf(out, "            (local.set %s (local.get %s))\n", index, count)
-	fmt.Fprintf(out, "            (loop %s\n", backwardLabel)
+	fmt.Fprintf(out, "            (local.set %s %s)\n", index, count)
+	fmt.Fprintf(out, "            (loop %s_backward\n", label)
 	fmt.Fprintf(out, "              (local.set %s (i32.sub (local.get %s) (i32.const 1)))\n", index, index)
 	fc.writeStructCopyElement(out, array, index, sourceElement, destinationElement,
-		destination[0], destination[1], source[0], source[1])
-	fmt.Fprintf(out, "              (br_if %s (local.get %s)))\n", backwardLabel, index)
+		destinationBase, destinationOffset, sourceBase, sourceOffset)
+	fmt.Fprintf(out, "              (br_if %s_backward (local.get %s)))\n", label, index)
 	out.WriteString("          )\n")
 	out.WriteString("          (else\n")
 	fmt.Fprintf(out, "            (local.set %s (i32.const 0))\n", index)
-	fmt.Fprintf(out, "            (loop %s\n", forwardLabel)
+	fmt.Fprintf(out, "            (loop %s_forward\n", label)
 	fc.writeStructCopyElement(out, array, index, sourceElement, destinationElement,
-		destination[0], destination[1], source[0], source[1])
+		destinationBase, destinationOffset, sourceBase, sourceOffset)
 	fmt.Fprintf(out, "              (local.set %s (i32.add (local.get %s) (i32.const 1)))\n", index, index)
-	fmt.Fprintf(out, "              (br_if %s (i32.lt_u (local.get %s) (local.get %s))))\n", forwardLabel, index, count)
+	fmt.Fprintf(out, "              (br_if %s_forward (i32.lt_u (local.get %s) %s)))\n", label, index, count)
 	out.WriteString("          ))\n")
 	out.WriteString("      ))\n")
-	return nil
 }
 
 func (fc *functionCompiler) writeStructCopyElement(out *strings.Builder, array *arrayType, index, sourceElement, destinationElement, destinationBase, destinationOffset, sourceBase, sourceOffset string) {
@@ -2119,23 +2121,18 @@ func (fc *functionCompiler) writeStructCopyElement(out *strings.Builder, array *
 	fmt.Fprintf(out, "              (local.set %s (array.get $array%d (ref.as_non_null %s) %s))\n", sourceElement, array.id, sourceBase, sourceIndex)
 	fmt.Fprintf(out, "              (local.set %s (array.get $array%d (ref.as_non_null %s) %s))\n", destinationElement, array.id, destinationBase, destinationIndex)
 	fc.writeStructElementAssignment(out, array, sourceElement, destinationElement,
-		"(ref.as_non_null "+destinationBase+")", destinationIndex, true)
+		"(ref.as_non_null "+destinationBase+")", destinationIndex)
 }
 
-func (fc *functionCompiler) writeStructElementAssignment(out *strings.Builder, array *arrayType, sourceElement, destinationElement, destinationBase, destinationIndex string, cloneSource bool) {
+func (fc *functionCompiler) writeStructElementAssignment(out *strings.Builder, array *arrayType, sourceElement, destinationElement, destinationBase, destinationIndex string) {
 	fmt.Fprintf(out, "              (if (ref.is_null (local.get %s))\n", destinationElement)
 	out.WriteString("                (then\n")
 	fmt.Fprintf(out, "                  (if (ref.is_null (local.get %s))\n", sourceElement)
 	out.WriteString("                    (then)\n")
-	if cloneSource {
-		fmt.Fprintf(out, "                    (else (array.set $array%d %s %s (struct.new $type%d",
-			array.id, destinationBase, destinationIndex, array.elementStruct.id)
-		fc.writeStructFields(out, array.elementStruct, "(ref.as_non_null (local.get "+sourceElement+"))")
-		out.WriteString("))))\n")
-	} else {
-		fmt.Fprintf(out, "                    (else (array.set $array%d %s %s (local.get %s))))\n",
-			array.id, destinationBase, destinationIndex, sourceElement)
-	}
+	fmt.Fprintf(out, "                    (else (array.set $array%d %s %s (struct.new $type%d",
+		array.id, destinationBase, destinationIndex, array.elementStruct.id)
+	fc.writeStructFields(out, array.elementStruct, "(ref.as_non_null (local.get "+sourceElement+"))")
+	out.WriteString("))))\n")
 	out.WriteString("                )\n")
 	out.WriteString("                (else\n")
 	fmt.Fprintf(out, "                  (if (ref.is_null (local.get %s))\n", sourceElement)
@@ -2239,27 +2236,12 @@ func (fc *functionCompiler) emitStructAppend(out *strings.Builder, instruction *
 	newLength := lenName(instruction)
 	newCapacity := valueName(instruction) + "_append_cap"
 	index := valueName(instruction) + "_append_index"
-	values := valueName(instruction) + "_append_values"
 	sourceElement := valueName(instruction) + "_append_source"
 	destinationElement := valueName(instruction) + "_append_destination"
 
 	fmt.Fprintf(out, "    (local.set %s (i32.add %s %s))\n", newLength, oldLength, addedLength)
 	fmt.Fprintf(out, "    (if (i32.lt_u (local.get %s) %s) (then (unreachable)))\n", newLength, oldLength)
 	fmt.Fprintf(out, "    (if (i32.lt_s (local.get %s) (i32.const 0)) (then (unreachable)))\n", newLength)
-
-	// Snapshot before writing for overlap, then preserve existing slot objects when
-	// capacity is reused so pointers to those elements remain valid.
-	fmt.Fprintf(out, "    (if %s\n", addedLength)
-	out.WriteString("      (then\n")
-	fmt.Fprintf(out, "        (local.set %s (array.new_default $array%d %s))\n", values, array.id, addedLength)
-	out.WriteString("        (drop (call $suspend))\n")
-	fc.writeStructSnapshotLoop(out,
-		valueName(instruction)+"_append_added_snapshot",
-		array, index, sourceElement,
-		"(ref.as_non_null (local.get "+values+"))", "(i32.const 0)",
-		"(ref.as_non_null "+addedExpressions[0]+")", addedExpressions[1],
-		addedLength)
-	out.WriteString("      ))\n")
 
 	fmt.Fprintf(out, "    (if (i32.le_u (local.get %s) %s)\n", newLength, oldCapacity)
 	out.WriteString("      (then\n")
@@ -2274,60 +2256,25 @@ func (fc *functionCompiler) emitStructAppend(out *strings.Builder, instruction *
 	fmt.Fprintf(out, "        (local.set %s (i32.const 0))\n", offsetName(instruction))
 	fmt.Fprintf(out, "        (local.set %s (local.get %s))\n", capName(instruction), newCapacity)
 	out.WriteString("        (drop (call $suspend))\n")
-	fc.writeStructSnapshotLoop(out,
-		valueName(instruction)+"_append_existing_snapshot",
+	fc.writeStructCopyLoop(out,
+		valueName(instruction)+"_append_existing",
 		array, index, sourceElement,
-		"(ref.as_non_null (local.get "+baseName(instruction)+"))", "(i32.const 0)",
-		"(ref.as_non_null "+sourceExpressions[0]+")", sourceExpressions[1],
+		destinationElement,
+		"(local.get "+baseName(instruction)+")", "(i32.const 0)",
+		sourceExpressions[0], sourceExpressions[1],
 		oldLength)
 	out.WriteString("      ))\n")
 
-	fc.writeStructAssignmentLoop(out,
-		valueName(instruction)+"_append_assign",
+	// Directional copying preserves overlap while mutating existing destination
+	// slots keeps pointers to reused-capacity elements valid.
+	fc.writeStructCopyLoop(out,
+		valueName(instruction)+"_append_added",
 		array, index, sourceElement, destinationElement,
-		"(ref.as_non_null (local.get "+baseName(instruction)+"))",
+		"(local.get "+baseName(instruction)+")",
 		"(i32.add (local.get "+offsetName(instruction)+") "+scaleArrayIndex(oldLength, array)+")",
-		"(ref.as_non_null (local.get "+values+"))", "(i32.const 0)",
+		addedExpressions[0], addedExpressions[1],
 		addedLength)
 	return nil
-}
-
-func (fc *functionCompiler) writeStructSnapshotLoop(out *strings.Builder, label string, array *arrayType, index, sourceElement, destinationBase, destinationOffset, sourceBase, sourceOffset, length string) {
-	fmt.Fprintf(out, "        (local.set %s (i32.const 0))\n", index)
-	fmt.Fprintf(out, "        (loop %s\n", label)
-	fmt.Fprintf(out, "          (if (i32.lt_u (local.get %s) %s)\n", index, length)
-	out.WriteString("            (then\n")
-	fmt.Fprintf(out, "              (local.set %s (array.get $array%d %s %s))\n",
-		sourceElement, array.id, sourceBase,
-		physicalArrayIndexExpression(sourceOffset, "(local.get "+index+")", array))
-	fmt.Fprintf(out, "              (if (ref.is_null (local.get %s))\n", sourceElement)
-	out.WriteString("                (then)\n")
-	fmt.Fprintf(out, "                (else (array.set $array%d %s %s (struct.new $type%d",
-		array.id, destinationBase,
-		physicalArrayIndexExpression(destinationOffset, "(local.get "+index+")", array),
-		array.elementStruct.id)
-	fc.writeStructFields(out, array.elementStruct, "(ref.as_non_null (local.get "+sourceElement+"))")
-	out.WriteString("))))\n")
-	fmt.Fprintf(out, "              (local.set %s (i32.add (local.get %s) (i32.const 1)))\n", index, index)
-	fmt.Fprintf(out, "              (br %s))))\n", label)
-}
-
-func (fc *functionCompiler) writeStructAssignmentLoop(out *strings.Builder, label string, array *arrayType, index, sourceElement, destinationElement, destinationBase, destinationOffset, sourceBase, sourceOffset, length string) {
-	fmt.Fprintf(out, "    (if %s\n", length)
-	out.WriteString("      (then\n")
-	fmt.Fprintf(out, "        (local.set %s (i32.const 0))\n", index)
-	fmt.Fprintf(out, "        (loop %s\n", label)
-	fmt.Fprintf(out, "          (if (i32.lt_u (local.get %s) %s)\n", index, length)
-	out.WriteString("            (then\n")
-	sourceIndex := physicalArrayIndexExpression(sourceOffset, "(local.get "+index+")", array)
-	destinationIndex := physicalArrayIndexExpression(destinationOffset, "(local.get "+index+")", array)
-	fmt.Fprintf(out, "              (local.set %s (array.get $array%d %s %s))\n", sourceElement, array.id, sourceBase, sourceIndex)
-	fmt.Fprintf(out, "              (local.set %s (array.get $array%d %s %s))\n", destinationElement, array.id, destinationBase, destinationIndex)
-	fc.writeStructElementAssignment(out, array, sourceElement, destinationElement,
-		destinationBase, destinationIndex, false)
-	fmt.Fprintf(out, "              (local.set %s (i32.add (local.get %s) (i32.const 1)))\n", index, index)
-	fmt.Fprintf(out, "              (br %s))))\n", label)
-	out.WriteString("        ))\n")
 }
 
 func (fc *functionCompiler) writeStructFields(out *strings.Builder, typ *structType, receiver string) {

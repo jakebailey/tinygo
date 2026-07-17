@@ -122,6 +122,15 @@ func main() {
 	clear(nilClearStructSlice)
 	emptyClearStructSlice := make([]struct{}, 1)
 	clear(emptyClearStructSlice)
+	growthAppendSource := []wasmGCStructValue{{number: 4}, {number: 5}}
+	growthAppendPointer := &growthAppendSource[0]
+	growthAppendResult := append(growthAppendSource, growthAppendSource...)
+	growthAppendResult[0].number++
+	growthAppendResult[2].number += 2
+	forwardAppendBacking := make([]wasmGCStructValue, 4)
+	forwardAppendBacking[2].number = 12
+	forwardAppendBacking[3].number = 13
+	forwardAppendResult := append(forwardAppendBacking[:1], forwardAppendBacking[2:4]...)
 	println(
 		original.number,
 		original.pointer.value,
@@ -183,5 +192,11 @@ func main() {
 		clearStructSlice[1].number,
 		clearStructSlice[1].pointer.value,
 		len(emptyClearStructSlice),
+		growthAppendPointer.number,
+		growthAppendResult[0].number,
+		growthAppendResult[2].number,
+		growthAppendResult[3].number,
+		forwardAppendResult[1].number,
+		forwardAppendResult[2].number,
 	)
 }
