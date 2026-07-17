@@ -108,6 +108,41 @@ func main() {
 	}
 }
 
+func TestCompileIntegerOperations(t *testing.T) {
+	const source = `package main
+func operations(left, right int, unsignedLeft uint, shift uint) {
+	println(left / right, left % right)
+	println(unsignedLeft / uint(right), unsignedLeft % uint(right))
+	println(left << shift, left >> shift, unsignedLeft >> shift)
+	println(left &^ right)
+}
+func signedShift(value, shift int) int {
+	return value << shift
+}
+func main() {
+	operations(17, 5, 17, 35)
+	println(signedShift(1, 3))
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(i32.div_s",
+		"(i32.div_u",
+		"(i32.rem_s",
+		"(i32.rem_u",
+		"(i32.shl",
+		"(i32.shr_s",
+		"(i32.shr_u",
+		"(i32.xor",
+		"(i32.ge_u",
+		"(i32.lt_s",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
 func TestCompileManagedSlice(t *testing.T) {
 	const source = `package main
 func makeValues(count int) []int {

@@ -32,4 +32,13 @@ func main() {
 	go wasmGCProduce(ch)
 	println(<-ch)
 	println(wasmGCRoot.value)
+
+	left := 17
+	right := 5
+	minimum := -2147483647 - 1
+	negativeOne := -1
+	largeShift := uint(35)
+	println(left/right, left%right, minimum/negativeOne)
+	println(uint(left)/uint(right), uint(left)%uint(right))
+	println(1<<largeShift, -8>>largeShift, uint(8)>>largeShift, 7&^3)
 }
