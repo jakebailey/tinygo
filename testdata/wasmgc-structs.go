@@ -15,6 +15,7 @@ type wasmGCConvertedStructValue struct {
 }
 
 var wasmGCStructGlobal = makeWasmGCStructValue()
+var wasmGCStructSliceGlobal = []wasmGCStructValue{{number: 6}}
 
 func makeWasmGCStructValue() wasmGCStructValue {
 	return wasmGCStructValue{
@@ -51,6 +52,16 @@ func main() {
 		number:  50,
 		pointer: &wasmGCStructNode{value: 4},
 	}
+	structSlice := make([]wasmGCStructValue, 2)
+	println(structSlice[0].number, structSlice[0].pointer == nil)
+	elementPointer := &structSlice[0]
+	structSlice[0] = wasmGCStructValue{
+		number:  7,
+		pointer: &wasmGCStructNode{value: 8},
+	}
+	structSlice[1] = structSlice[0]
+	structSlice[1].number++
+	structSlice[1].pointer.value++
 	println(
 		original.number,
 		original.pointer.value,
@@ -66,5 +77,10 @@ func main() {
 		globalSnapshot.pointer.value,
 		globalPointer.number,
 		globalPointer.pointer.value,
+		elementPointer.number,
+		structSlice[1].number,
+		elementPointer.pointer.value,
+		structSlice[1].pointer.value,
+		wasmGCStructSliceGlobal[0].number,
 	)
 }
