@@ -176,6 +176,46 @@ func main() {
 	}
 }
 
+func TestCompilePointerSlice(t *testing.T) {
+	const source = `package main
+type value struct { number int }
+func main() {
+	values := []*value{{number: 40}, nil}
+	values[1] = &value{number: 2}
+	values = append(values, values...)
+	println(values[0].number + values[1].number)
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(array (mut (ref null $type",
+		"(struct.new $type",
+		"(array.get $array",
+		"(array.copy $array",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
+func TestCompileAnonymousPointerSlice(t *testing.T) {
+	const source = `package main
+func replace(values []*struct{ number int }) {
+	values[0] = &struct{ number int }{number: 42}
+}
+func number(value *struct{ number int }) int {
+	return value.number
+}
+func main() {
+	values := []*struct{ number int }{{number: 1}}
+	replace(values)
+	println(number(values[0]))
+}
+`
+	compileSource(t, source)
+}
+
 func TestCompileManagedString(t *testing.T) {
 	const source = `package main
 var message = "wasmgc!"

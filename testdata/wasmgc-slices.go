@@ -1,5 +1,11 @@
 package main
 
+type wasmGCSliceValue struct {
+	value int
+}
+
+var wasmGCSlicePointers = []*wasmGCSliceValue{{value: 5}}
+
 func makeWasmGCValues(count int) []int {
 	values := make([]int, count)
 	for i := 0; i < len(values); i++ {
@@ -37,4 +43,15 @@ func main() {
 	bytes = append(bytes, 250, 6)
 	bytes = append(bytes, "go"...)
 	println(int(bytes[0]), int(bytes[1]), int(bytes[2]), int(bytes[3]))
+
+	pointers := []*wasmGCSliceValue{{value: 10}, nil}
+	println(pointers[1] == nil)
+	pointers[1] = &wasmGCSliceValue{value: 20}
+	pointers = append(pointers, &wasmGCSliceValue{value: 12})
+	pointers = append(pointers[:1], pointers...)
+	total := 0
+	for _, pointer := range pointers {
+		total += pointer.value
+	}
+	println(total, len(pointers), wasmGCSlicePointers[0].value)
 }
