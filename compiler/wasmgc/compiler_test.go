@@ -216,6 +216,97 @@ func main() {
 	compileSource(t, source)
 }
 
+func TestCompileStructValue(t *testing.T) {
+	const source = `package main
+type node struct { number int }
+type value struct { number int; pointer *node }
+type converted struct { number int; pointer *node }
+func makeValue() value {
+	return value{number: 40, pointer: &node{number: 2}}
+}
+func update(input value) value {
+	input.number++
+	return input
+}
+func main() {
+	original := makeValue()
+	updated := update(original)
+	other := converted(updated)
+	println(original.number, updated.number, other.pointer.number)
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(result (ref null $type",
+		"(struct.new $type",
+		"(struct.get $type",
+		"(struct.set $type",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
+func TestCompileZeroAndEmptyStructValues(t *testing.T) {
+	const source = `package main
+type value struct { number int }
+func zero() value {
+	var result value
+	return result
+}
+func load(pointer *struct{}) struct{} {
+	return *pointer
+}
+func store(pointer *struct{}) {
+	*pointer = struct{}{}
+}
+func main() {
+	empty := struct{}{}
+	load(&empty)
+	store(&empty)
+	println(zero().number)
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(struct.new_default $type",
+		"(drop (ref.as_non_null",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
+func TestCompileNilStructDereference(t *testing.T) {
+	const source = `package main
+type value struct{ number int }
+func load() value {
+	return *(*value)(nil)
+}
+func store() {
+	*(*value)(nil) = value{}
+}
+func field() {
+	pointer := &(*value)(nil).number
+	*pointer = 1
+}
+func main() {
+	load()
+	store()
+	field()
+}
+`
+	wat, err := compileSourceError(t, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(wat, "(ref.as_non_null (ref.null") {
+		t.Fatalf("output does not contain a constant nil check:\n%s", wat)
+	}
+}
+
 func TestCompileManagedString(t *testing.T) {
 	const source = `package main
 var message = "wasmgc!"
