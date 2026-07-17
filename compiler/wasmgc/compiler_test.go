@@ -307,6 +307,34 @@ func main() {
 	}
 }
 
+func TestCompileStructGlobal(t *testing.T) {
+	const source = `package main
+type value struct { number int }
+var global = value{number: 40}
+func use(pointer *value) {
+	println(pointer.number)
+}
+func main() {
+	snapshot := global
+	pointer := &global
+	global = value{number: 42}
+	go use(&global)
+	println(snapshot.number, pointer.number)
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(global $global",
+		"(struct.new_default $type",
+		"(global.get $global",
+		"(struct.set $type",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
 func TestCompileManagedString(t *testing.T) {
 	const source = `package main
 var message = "wasmgc!"

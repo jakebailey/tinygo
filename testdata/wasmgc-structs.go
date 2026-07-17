@@ -14,6 +14,8 @@ type wasmGCConvertedStructValue struct {
 	pointer *wasmGCStructNode
 }
 
+var wasmGCStructGlobal = makeWasmGCStructValue()
+
 func makeWasmGCStructValue() wasmGCStructValue {
 	return wasmGCStructValue{
 		number:  40,
@@ -43,6 +45,12 @@ func main() {
 	mutated := mutateWasmGCStructTarget(original)
 	zero := zeroWasmGCStructValue()
 	converted := wasmGCConvertedStructValue(replaced)
+	globalSnapshot := wasmGCStructGlobal
+	globalPointer := &wasmGCStructGlobal
+	wasmGCStructGlobal = wasmGCStructValue{
+		number:  50,
+		pointer: &wasmGCStructNode{value: 4},
+	}
 	println(
 		original.number,
 		original.pointer.value,
@@ -54,5 +62,9 @@ func main() {
 		zero.pointer == nil,
 		converted.number,
 		converted.pointer.value,
+		globalSnapshot.number,
+		globalSnapshot.pointer.value,
+		globalPointer.number,
+		globalPointer.pointer.value,
 	)
 }
