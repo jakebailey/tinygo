@@ -891,15 +891,25 @@ func TestWasmGC(t *testing.T) {
 		t.Skip("NodeJS does not support --experimental-wasm-jspi")
 	}
 
-	for _, name := range []string{"wasmgc", "wasmgc-slices", "wasmgc-strings", "wasmgc-closures"} {
-		t.Run(name, func(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{name: "wasmgc", source: "testdata/wasmgc.go"},
+		{name: "wasmgc-slices", source: "testdata/wasmgc-slices.go"},
+		{name: "wasmgc-strings", source: "testdata/wasmgc-strings.go"},
+		{name: "wasmgc-closures", source: "testdata/wasmgc-closures.go"},
+		{name: "wasmgc-imports", source: "./testdata/wasmgc-imports"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			tmpdir := t.TempDir()
 			options := optionsFromTarget("wasm-gc", sema)
 			config, err := builder.NewConfig(&options)
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := builder.Build("testdata/"+name+".go", ".wasm", tmpdir, config)
+			result, err := builder.Build(test.source, ".wasm", tmpdir, config)
 			if err != nil {
 				t.Fatal("failed to build binary:", err)
 			}
@@ -915,7 +925,7 @@ func TestWasmGC(t *testing.T) {
 			if err := cmd.Run(); err != nil {
 				t.Fatalf("failed to run WasmGC module: %v\n%s", err, output)
 			}
-			checkOutput(t, "testdata/"+name+".txt", output.Bytes())
+			checkOutput(t, "testdata/"+test.name+".txt", output.Bytes())
 		})
 	}
 }
