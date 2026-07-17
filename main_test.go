@@ -899,6 +899,7 @@ func TestWasmGC(t *testing.T) {
 		{name: "wasmgc-slices", source: "testdata/wasmgc-slices.go"},
 		{name: "wasmgc-strings", source: "testdata/wasmgc-strings.go"},
 		{name: "wasmgc-closures", source: "testdata/wasmgc-closures.go"},
+		{name: "wasmgc-structs", source: "testdata/wasmgc-structs.go"},
 		{name: "wasmgc-imports", source: "./testdata/wasmgc-imports"},
 	}
 	for _, test := range tests {

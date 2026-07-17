@@ -64,15 +64,16 @@ type field struct {
 }
 
 type valueInfo struct {
-	goType  types.Type
-	base    *structType
-	array   *arrayType
-	slice   bool
-	string  bool
-	length  int64
-	field   int
-	global  *globalInfo
-	closure *ssa.MakeClosure
+	goType      types.Type
+	base        *structType
+	array       *arrayType
+	structValue bool
+	slice       bool
+	string      bool
+	length      int64
+	field       int
+	global      *globalInfo
+	closure     *ssa.MakeClosure
 }
 
 type globalInfo struct {
@@ -616,8 +617,43 @@ func (c *compiler) findStructs() error {
 	}
 
 	for _, fn := range c.functions {
+		for i := 0; i < fn.Signature.Params().Len(); i++ {
+			paramType := fn.Signature.Params().At(i).Type()
+			if _, ok := paramType.Underlying().(*types.Struct); ok {
+				if err := addType(paramType); err != nil {
+					return c.errorAt(fn.Pos(), "%v", err)
+				}
+			}
+		}
+		for i := 0; i < fn.Signature.Results().Len(); i++ {
+			resultType := fn.Signature.Results().At(i).Type()
+			if _, ok := resultType.Underlying().(*types.Struct); ok {
+				if err := addType(resultType); err != nil {
+					return c.errorAt(fn.Pos(), "%v", err)
+				}
+			}
+		}
+	}
+	for _, fn := range c.functions {
 		for _, block := range fn.Blocks {
 			for _, instruction := range block.Instrs {
+				if value, ok := instruction.(ssa.Value); ok {
+					if _, ok := value.Type().Underlying().(*types.Struct); ok {
+						if err := addType(value.Type()); err != nil {
+							return c.errorAt(value.Pos(), "%v", err)
+						}
+					}
+				}
+				for _, operand := range instruction.Operands(nil) {
+					if operand == nil || *operand == nil {
+						continue
+					}
+					if _, ok := (*operand).Type().Underlying().(*types.Struct); ok {
+						if err := addType((*operand).Type()); err != nil {
+							return c.errorAt(instruction.Pos(), "%v", err)
+						}
+					}
+				}
 				if alloc, ok := instruction.(*ssa.Alloc); ok {
 					valueType := dereference(alloc.Type())
 					if _, ok := valueType.Underlying().(*types.Array); ok {
@@ -954,6 +990,22 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "invalid field index %d", value.Field)
 		}
 		return valueInfo{goType: value.Type(), base: base, field: value.Field}, nil
+	case *ssa.Field:
+		source, err := fc.info(value.X)
+		if err != nil {
+			return valueInfo{}, err
+		}
+		if !source.structValue || source.base == nil {
+			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "field value has no managed struct")
+		}
+		if value.Field < 0 || value.Field >= len(source.base.fields) {
+			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "invalid field index %d", value.Field)
+		}
+		field := source.base.fields[value.Field]
+		if field.pointer {
+			return valueInfo{goType: value.Type(), base: field.target, field: -1}, nil
+		}
+		return valueInfo{goType: value.Type(), field: -1}, nil
 	case *ssa.IndexAddr:
 		source, err := fc.info(value.X)
 		if err != nil {
@@ -1030,6 +1082,16 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 				}
 				return valueInfo{goType: value.Type(), field: -1}, nil
 			}
+			if _, ok := value.Type().Underlying().(*types.Struct); ok {
+				result, err := fc.infoForType(value.Type())
+				if err != nil {
+					return valueInfo{}, fc.compiler.errorAt(value.Pos(), "%v", err)
+				}
+				if result.base != source.base {
+					return valueInfo{}, fc.compiler.errorAt(value.Pos(), "struct load has incompatible managed base")
+				}
+				return result, nil
+			}
 			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "loading whole structs is not supported")
 		}
 		field := source.base.fields[source.field]
@@ -1071,10 +1133,17 @@ func (fc *functionCompiler) emitInstruction(out *strings.Builder, instruction ss
 		fmt.Fprintf(out, "    (local.set %s (i32.const 0))\n", offsetName(instruction))
 		out.WriteString("    (drop (call $suspend))\n")
 	case *ssa.FieldAddr:
-		source := fc.values[instruction.X]
+		source, err := fc.info(instruction.X)
+		if err != nil {
+			return err
+		}
 		field := source.base.fields[instruction.Field]
-		fmt.Fprintf(out, "    (local.set %s (local.get %s))\n", baseName(instruction), baseName(instruction.X))
-		fmt.Fprintf(out, "    (local.set %s (i32.add (local.get %s) (i32.const %d)))\n", offsetName(instruction), offsetName(instruction.X), field.virtualOffset)
+		base, offset := fc.pointerExpressions(instruction.X, source)
+		fmt.Fprintf(out, "    (drop (ref.as_non_null %s))\n", base)
+		fmt.Fprintf(out, "    (local.set %s %s)\n", baseName(instruction), base)
+		fmt.Fprintf(out, "    (local.set %s (i32.add %s (i32.const %d)))\n", offsetName(instruction), offset, field.virtualOffset)
+	case *ssa.Field:
+		return fc.emitField(out, instruction)
 	case *ssa.Store:
 		return fc.emitStore(out, instruction)
 	case *ssa.IndexAddr:
@@ -1251,6 +1320,9 @@ func (fc *functionCompiler) emitBinOp(out *strings.Builder, instruction *ssa.Bin
 		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), expression)
 		return nil
 	}
+	if left.structValue || right.structValue {
+		return fc.compiler.errorAt(instruction.Pos(), "struct value comparisons are not supported")
+	}
 	if left.base != nil || right.base != nil {
 		if left.base == nil || right.base == nil || left.base != right.base {
 			return fc.compiler.errorAt(instruction.Pos(), "pointer comparison has incompatible managed bases")
@@ -1294,6 +1366,36 @@ func (fc *functionCompiler) emitChangeType(out *strings.Builder, instruction *ss
 	source, err := fc.info(instruction.X)
 	if err != nil {
 		return err
+	}
+	if destination.structValue {
+		if !source.structValue {
+			return fc.compiler.errorAt(instruction.Pos(), "struct change has incompatible managed type")
+		}
+		expressions, err := fc.valueExpressions(instruction.X, source)
+		if err != nil {
+			return err
+		}
+		if source.base == destination.base {
+			fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), expressions[0])
+			return nil
+		}
+		if len(source.base.fields) != len(destination.base.fields) {
+			return fc.compiler.errorAt(instruction.Pos(), "struct change has incompatible field layout")
+		}
+		receiver := "(ref.as_non_null " + expressions[0] + ")"
+		fmt.Fprintf(out, "    (local.set %s (struct.new $type%d", valueName(instruction), destination.base.id)
+		for i, destinationField := range destination.base.fields {
+			sourceField := source.base.fields[i]
+			if sourceField.pointer != destinationField.pointer {
+				return fc.compiler.errorAt(instruction.Pos(), "struct change has incompatible field layout")
+			}
+			fmt.Fprintf(out, " (struct.get $type%d %d %s)", source.base.id, sourceField.physicalIndex, receiver)
+			if sourceField.pointer {
+				fmt.Fprintf(out, " (struct.get $type%d %d %s)", source.base.id, sourceField.physicalIndex+1, receiver)
+			}
+		}
+		out.WriteString("))\n")
+		return nil
 	}
 	if destination.base != nil {
 		if source.base != destination.base {
@@ -1476,6 +1578,35 @@ func (fc *functionCompiler) emitStore(out *strings.Builder, instruction *ssa.Sto
 		fmt.Fprintf(out, "    (array.set $array%d (ref.as_non_null (local.get %s)) %s %s)\n", address.array.id, baseName(instruction.Addr), physicalArrayIndex(instruction.Addr, address.array), fc.expression(instruction.Val))
 		return nil
 	}
+	if address.base != nil && address.field < 0 {
+		value, err := fc.info(instruction.Val)
+		if err != nil {
+			return err
+		}
+		if !value.structValue || value.base != address.base {
+			return fc.compiler.errorAt(instruction.Pos(), "whole struct store has incompatible managed value")
+		}
+		destinationBase, _ := fc.pointerExpressions(instruction.Addr, address)
+		destination := "(ref.as_non_null " + destinationBase + ")"
+		valueExpressions, err := fc.valueExpressions(instruction.Val, value)
+		if err != nil {
+			return err
+		}
+		source := "(ref.as_non_null " + valueExpressions[0] + ")"
+		fmt.Fprintf(out, "    (drop %s)\n", destination)
+		fmt.Fprintf(out, "    (drop %s)\n", source)
+		for _, field := range address.base.fields {
+			fmt.Fprintf(out, "    (struct.set $type%d %d %s (struct.get $type%d %d %s))\n",
+				address.base.id, field.physicalIndex, destination,
+				address.base.id, field.physicalIndex, source)
+			if field.pointer {
+				fmt.Fprintf(out, "    (struct.set $type%d %d %s (struct.get $type%d %d %s))\n",
+					address.base.id, field.physicalIndex+1, destination,
+					address.base.id, field.physicalIndex+1, source)
+			}
+		}
+		return nil
+	}
 	if address.base == nil || address.field < 0 {
 		return fc.compiler.errorAt(instruction.Pos(), "store destination is not a managed struct field")
 	}
@@ -1494,6 +1625,29 @@ func (fc *functionCompiler) emitStore(out *strings.Builder, instruction *ssa.Sto
 		fmt.Fprintf(out, "    (struct.set $type%d %d %s %s)\n", address.base.id, field.physicalIndex+1, receiver, offset)
 	} else {
 		fmt.Fprintf(out, "    (struct.set $type%d %d %s %s)\n", address.base.id, field.physicalIndex, receiver, fc.expression(instruction.Val))
+	}
+	return nil
+}
+
+func (fc *functionCompiler) emitField(out *strings.Builder, instruction *ssa.Field) error {
+	source, err := fc.info(instruction.X)
+	if err != nil {
+		return err
+	}
+	if !source.structValue || source.base == nil {
+		return fc.compiler.errorAt(instruction.Pos(), "field value has no managed struct")
+	}
+	field := source.base.fields[instruction.Field]
+	sourceExpressions, err := fc.valueExpressions(instruction.X, source)
+	if err != nil {
+		return err
+	}
+	receiver := "(ref.as_non_null " + sourceExpressions[0] + ")"
+	if field.pointer {
+		fmt.Fprintf(out, "    (local.set %s (struct.get $type%d %d %s))\n", baseName(instruction), source.base.id, field.physicalIndex, receiver)
+		fmt.Fprintf(out, "    (local.set %s (struct.get $type%d %d %s))\n", offsetName(instruction), source.base.id, field.physicalIndex+1, receiver)
+	} else {
+		fmt.Fprintf(out, "    (local.set %s (struct.get $type%d %d %s))\n", valueName(instruction), source.base.id, field.physicalIndex, receiver)
 	}
 	return nil
 }
@@ -1531,6 +1685,21 @@ func (fc *functionCompiler) emitLoad(out *strings.Builder, instruction *ssa.UnOp
 			return nil
 		}
 		fmt.Fprintf(out, "    (local.set %s (%s $array%d (ref.as_non_null (local.get %s)) %s))\n", valueName(instruction), arrayGetOp(source.array), source.array.id, baseName(instruction.X), physicalArrayIndex(instruction.X, source.array))
+		return nil
+	}
+	result := fc.values[instruction]
+	if source.base != nil && source.field < 0 && result.structValue {
+		sourceBase, _ := fc.pointerExpressions(instruction.X, source)
+		receiver := "(ref.as_non_null " + sourceBase + ")"
+		fmt.Fprintf(out, "    (drop %s)\n", receiver)
+		fmt.Fprintf(out, "    (local.set %s (struct.new $type%d", valueName(instruction), source.base.id)
+		for _, field := range source.base.fields {
+			fmt.Fprintf(out, " (struct.get $type%d %d %s)", source.base.id, field.physicalIndex, receiver)
+			if field.pointer {
+				fmt.Fprintf(out, " (struct.get $type%d %d %s)", source.base.id, field.physicalIndex+1, receiver)
+			}
+		}
+		out.WriteString("))\n")
 		return nil
 	}
 	if source.base == nil || source.field < 0 {
@@ -1734,6 +1903,12 @@ func (fc *functionCompiler) pointerExpressions(value ssa.Value, info valueInfo) 
 }
 
 func (fc *functionCompiler) valueExpressions(value ssa.Value, info valueInfo) ([]string, error) {
+	if info.structValue {
+		if constant, ok := value.(*ssa.Const); ok && constant.Value == nil {
+			return []string{fmt.Sprintf("(struct.new_default $type%d)", info.base.id)}, nil
+		}
+		return []string{"(local.get " + valueName(value) + ")"}, nil
+	}
 	if info.array != nil {
 		if constant, ok := value.(*ssa.Const); ok && constant.IsNil() {
 			expressions := []string{fmt.Sprintf("(ref.null $array%d)", info.array.id), "(i32.const 0)"}
@@ -1898,6 +2073,13 @@ func (fc *functionCompiler) infoForType(goType types.Type) (valueInfo, error) {
 		}
 		return valueInfo{goType: goType, base: base, field: -1}, nil
 	}
+	if _, ok := goType.Underlying().(*types.Struct); ok {
+		base := fc.compiler.structForType(goType)
+		if base == nil {
+			return valueInfo{}, fmt.Errorf("wasm-gc: managed struct value type was not discovered: %s", goType)
+		}
+		return valueInfo{goType: goType, base: base, structValue: true, field: -1}, nil
+	}
 	if !isScalar(goType) && !isZeroTuple(goType) {
 		if _, ok := goType.Underlying().(*types.Chan); ok {
 			return valueInfo{goType: goType, field: -1}, nil
@@ -2045,7 +2227,9 @@ func phiTempName(phi *ssa.Phi) string {
 }
 
 func writeDeclaration(out *strings.Builder, kind, name string, info valueInfo) {
-	if info.array != nil {
+	if info.structValue {
+		fmt.Fprintf(out, " (%s %s (ref null $type%d))", kind, name, info.base.id)
+	} else if info.array != nil {
 		fmt.Fprintf(out, " (%s %s_base (ref null $array%d))", kind, name, info.array.id)
 		fmt.Fprintf(out, " (%s %s_offset i32)", kind, name)
 		if info.slice || info.string {
@@ -2063,6 +2247,9 @@ func writeDeclaration(out *strings.Builder, kind, name string, info valueInfo) {
 }
 
 func wasmValueTypes(info valueInfo) []string {
+	if info.structValue {
+		return []string{fmt.Sprintf("(ref null $type%d)", info.base.id)}
+	}
 	if info.array != nil {
 		types := []string{fmt.Sprintf("(ref null $array%d)", info.array.id), "i32"}
 		if info.slice || info.string {
@@ -2080,6 +2267,9 @@ func wasmValueTypes(info valueInfo) []string {
 }
 
 func valuePartNames(name string, info valueInfo) []string {
+	if info.structValue {
+		return []string{name}
+	}
 	if info.array != nil {
 		names := []string{name + "_base", name + "_offset"}
 		if info.slice || info.string {
