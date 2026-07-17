@@ -761,6 +761,11 @@ func (fc *functionCompiler) compile() (string, error) {
 				continue
 			}
 			writeDeclaration(&out, "local", valueName(value), fc.values[value])
+			if call, ok := value.(*ssa.Call); ok {
+				if builtin, ok := call.Call.Value.(*ssa.Builtin); ok && builtin.Name() == "append" {
+					fmt.Fprintf(&out, "    (local %s_append_cap i32)\n", valueName(value))
+				}
+			}
 			if phi, ok := value.(*ssa.Phi); ok {
 				writeDeclaration(&out, "local", phiTempName(phi), fc.values[value])
 			}
@@ -1471,6 +1476,8 @@ func (fc *functionCompiler) emitLoad(out *strings.Builder, instruction *ssa.UnOp
 func (fc *functionCompiler) emitCall(out *strings.Builder, instruction *ssa.Call) error {
 	if builtin, ok := instruction.Call.Value.(*ssa.Builtin); ok {
 		switch builtin.Name() {
+		case "append":
+			return fc.emitAppend(out, instruction)
 		case "len", "cap":
 			if len(instruction.Call.Args) != 1 {
 				return fc.compiler.errorAt(instruction.Pos(), "invalid %s call", builtin.Name())
@@ -1549,6 +1556,76 @@ func (fc *functionCompiler) emitCall(out *strings.Builder, instruction *ssa.Call
 	} else {
 		fmt.Fprintf(out, "    (local.set %s %s)\n", valueName(instruction), call.String())
 	}
+	return nil
+}
+
+func (fc *functionCompiler) emitAppend(out *strings.Builder, instruction *ssa.Call) error {
+	if len(instruction.Call.Args) != 2 {
+		return fc.compiler.errorAt(instruction.Pos(), "append requires a slice and variadic slice")
+	}
+	sourceValue := instruction.Call.Args[0]
+	source, err := fc.info(sourceValue)
+	if err != nil {
+		return err
+	}
+	result := fc.values[instruction]
+	if !source.slice || source.array == nil || result.array != source.array || !result.slice {
+		return fc.compiler.errorAt(instruction.Pos(), "append only supports managed scalar slices")
+	}
+	addedValue := instruction.Call.Args[1]
+	added, err := fc.info(addedValue)
+	if err != nil {
+		return err
+	}
+	compatibleSlice := added.slice && added.array == source.array
+	compatibleString := added.string &&
+		added.array != nil &&
+		isUint8(source.array.element) &&
+		wasmArrayElementType(added.array) == wasmArrayElementType(source.array)
+	if !compatibleSlice && !compatibleString {
+		return fc.compiler.errorAt(instruction.Pos(), "append variadic argument has incompatible slice type")
+	}
+
+	sourceExpressions, err := fc.valueExpressions(sourceValue, source)
+	if err != nil {
+		return err
+	}
+	addedExpressions, err := fc.valueExpressions(addedValue, added)
+	if err != nil {
+		return err
+	}
+	oldLength := sourceExpressions[2]
+	oldCapacity := sourceExpressions[3]
+	addedLength := addedExpressions[2]
+	newLength := lenName(instruction)
+	newCapacity := valueName(instruction) + "_append_cap"
+
+	fmt.Fprintf(out, "    (local.set %s (i32.add %s %s))\n", newLength, oldLength, addedLength)
+	fmt.Fprintf(out, "    (if (i32.lt_u (local.get %s) %s) (then (unreachable)))\n", newLength, oldLength)
+	fmt.Fprintf(out, "    (if (i32.lt_s (local.get %s) (i32.const 0)) (then (unreachable)))\n", newLength)
+	fmt.Fprintf(out, "    (if (i32.le_u (local.get %s) %s)\n", newLength, oldCapacity)
+	out.WriteString("      (then\n")
+	fmt.Fprintf(out, "        (local.set %s %s)\n", baseName(instruction), sourceExpressions[0])
+	fmt.Fprintf(out, "        (local.set %s %s)\n", offsetName(instruction), sourceExpressions[1])
+	fmt.Fprintf(out, "        (local.set %s %s))\n", capName(instruction), oldCapacity)
+	out.WriteString("      (else\n")
+	fmt.Fprintf(out, "        (local.set %s (i32.mul %s (i32.const 2)))\n", newCapacity, oldCapacity)
+	fmt.Fprintf(out, "        (if (i32.or (i32.lt_s (local.get %s) (i32.const 0)) (i32.lt_u (local.get %s) (local.get %s)))\n", newCapacity, newCapacity, newLength)
+	fmt.Fprintf(out, "          (then (local.set %s (local.get %s))))\n", newCapacity, newLength)
+	fmt.Fprintf(out, "        (local.set %s (array.new_default $array%d (local.get %s)))\n", baseName(instruction), source.array.id, newCapacity)
+	fmt.Fprintf(out, "        (local.set %s (i32.const 0))\n", offsetName(instruction))
+	fmt.Fprintf(out, "        (local.set %s (local.get %s))\n", capName(instruction), newCapacity)
+	out.WriteString("        (drop (call $suspend))\n")
+	fmt.Fprintf(out, "        (if %s\n", oldLength)
+	fmt.Fprintf(out, "          (then (array.copy $array%d $array%d (ref.as_non_null (local.get %s)) (i32.const 0)\n", source.array.id, source.array.id, baseName(instruction))
+	fmt.Fprintf(out, "            (ref.as_non_null %s) %s %s)))))\n", sourceExpressions[0], physicalArrayIndexExpression(sourceExpressions[1], "(i32.const 0)", source.array), oldLength)
+	fmt.Fprintf(out, "    (if %s\n", addedLength)
+	fmt.Fprintf(out, "      (then (array.copy $array%d $array%d (ref.as_non_null (local.get %s))\n", source.array.id, added.array.id, baseName(instruction))
+	fmt.Fprintf(out, "        %s (ref.as_non_null %s) %s %s)))\n",
+		physicalArrayIndexExpression("(local.get "+offsetName(instruction)+")", oldLength, source.array),
+		addedExpressions[0],
+		physicalArrayIndexExpression(addedExpressions[1], "(i32.const 0)", source.array),
+		addedLength)
 	return nil
 }
 
@@ -1660,6 +1737,13 @@ func physicalArrayIndex(value ssa.Value, array *arrayType) string {
 		return offset
 	}
 	return fmt.Sprintf("(i32.div_u %s (i32.const %d))", offset, array.elementSize)
+}
+
+func physicalArrayIndexExpression(offset, index string, array *arrayType) string {
+	if array.elementSize != 1 {
+		offset = fmt.Sprintf("(i32.div_u %s (i32.const %d))", offset, array.elementSize)
+	}
+	return fmt.Sprintf("(i32.add %s %s)", offset, index)
 }
 
 func (fc *functionCompiler) info(value ssa.Value) (valueInfo, error) {
