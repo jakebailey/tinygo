@@ -152,6 +152,30 @@ func main() {
 	}
 }
 
+func TestCompileSliceAppend(t *testing.T) {
+	const source = `package main
+func main() {
+	values := make([]int, 1, 2)
+	values[0] = 40
+	values = append(values, 2)
+	values = append(values[:1], values...)
+	println(values[0] + values[1] + values[2])
+	var bytes []byte
+	bytes = append(bytes, "go"...)
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(array.copy $array",
+		"_append_cap i32",
+		"(i32.mul",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
 func TestCompileManagedString(t *testing.T) {
 	const source = `package main
 var message = "wasmgc!"
