@@ -84,6 +84,29 @@ func main() {
 	zeroSourceSlice := make([]wasmGCStructValue, 1)
 	zeroDestinationSlice = append(zeroDestinationSlice, zeroSourceSlice...)
 	emptyStructSlice := append(make([]struct{}, 0, 1), struct{}{})
+	copySourceSlice := []wasmGCStructValue{
+		{number: 1, pointer: &wasmGCStructNode{value: 4}},
+		{number: 2},
+	}
+	copyDestinationSlice := make([]wasmGCStructValue, 2)
+	copyDestinationPointer := &copyDestinationSlice[0]
+	copyDestinationPointer.number = 99
+	copyCount := copy(copyDestinationSlice, copySourceSlice)
+	copyDestinationSlice[0].number++
+	copyDestinationSlice[0].pointer.value++
+	copyDestinationSlice[1].number++
+	backwardCopySlice := []wasmGCStructValue{{number: 1}, {number: 2}, {number: 3}}
+	backwardCopyPointer := &backwardCopySlice[1]
+	backwardCopyCount := copy(backwardCopySlice[1:], backwardCopySlice[:2])
+	forwardCopySlice := []wasmGCStructValue{{number: 1}, {number: 2}, {number: 3}}
+	forwardCopyPointer := &forwardCopySlice[0]
+	forwardCopyCount := copy(forwardCopySlice[:2], forwardCopySlice[1:])
+	zeroCopyDestination := []wasmGCStructValue{{number: 99, pointer: &wasmGCStructNode{value: 5}}}
+	zeroCopyPointer := &zeroCopyDestination[0]
+	zeroCopyCount := copy(zeroCopyDestination, make([]wasmGCStructValue, 1))
+	emptyCopyCount := copy(make([]struct{}, 1), make([]struct{}, 2))
+	var nilCopySlice []wasmGCStructValue
+	nilCopyCount := copy(nilCopySlice, copySourceSlice)
 	println(
 		original.number,
 		original.pointer.value,
@@ -116,5 +139,24 @@ func main() {
 		zeroDestinationPointer.pointer == nil,
 		len(emptyStructSlice),
 		cap(emptyStructSlice),
+		copyCount,
+		copyDestinationPointer.number,
+		copySourceSlice[0].number,
+		copySourceSlice[0].pointer.value,
+		copyDestinationSlice[1].number,
+		copySourceSlice[1].number,
+		backwardCopyCount,
+		backwardCopySlice[0].number,
+		backwardCopyPointer.number,
+		backwardCopySlice[2].number,
+		forwardCopyCount,
+		forwardCopyPointer.number,
+		forwardCopySlice[1].number,
+		forwardCopySlice[2].number,
+		zeroCopyCount,
+		zeroCopyPointer.number,
+		zeroCopyPointer.pointer == nil,
+		emptyCopyCount,
+		nilCopyCount,
 	)
 }

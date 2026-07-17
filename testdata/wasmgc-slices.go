@@ -54,4 +54,20 @@ func main() {
 		total += pointer.value
 	}
 	println(total, len(pointers), wasmGCSlicePointers[0].value)
+
+	copySource := []int{1, 2, 3, 4}
+	copyDestination := make([]int, 3)
+	println(copy(copyDestination, copySource[1:]), sumWasmGCValues(copyDestination))
+	copyRight := []int{1, 2, 3, 4}
+	println(copy(copyRight[1:], copyRight[:3]), copyRight[0], copyRight[1], copyRight[2], copyRight[3])
+	copyLeft := []int{1, 2, 3, 4}
+	println(copy(copyLeft[:3], copyLeft[1:]), copyLeft[0], copyLeft[1], copyLeft[2], copyLeft[3])
+	copyBytes := make([]byte, 3)
+	println(copy(copyBytes, "wasm"), int(copyBytes[0]), int(copyBytes[1]), int(copyBytes[2]))
+	pointerCopySource := []*wasmGCSliceValue{{value: 10}}
+	pointerCopyDestination := make([]*wasmGCSliceValue, 1)
+	pointerCopySlot := &pointerCopyDestination[0]
+	println(copy(pointerCopyDestination, pointerCopySource), (*pointerCopySlot).value)
+	*pointerCopySlot = &wasmGCSliceValue{value: 30}
+	println(pointerCopySource[0].value, pointerCopyDestination[0].value)
 }

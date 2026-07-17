@@ -199,6 +199,56 @@ func main() {
 	}
 }
 
+func TestCompileSliceCopy(t *testing.T) {
+	const source = `package main
+type value struct { number int }
+func main() {
+	numbers := []int{1, 2, 3}
+	other := make([]int, len(numbers))
+	copy(other, numbers)
+	bytes := make([]byte, 2)
+	copy(bytes, "go")
+	pointers := []*value{{number: 40}}
+	copiedPointers := make([]*value, 1)
+	copy(copiedPointers, pointers)
+	println(other[0], bytes[0], copiedPointers[0].number)
+}
+`
+	wat := compileSource(t, source)
+	if count := strings.Count(wat, "(array.copy $array"); count != 3 {
+		t.Fatalf("expected three array.copy instructions, got %d:\n%s", count, wat)
+	}
+}
+
+func TestCompileStructSliceCopy(t *testing.T) {
+	const source = `package main
+type value struct { number int }
+func main() {
+	source := []value{{number: 1}, {number: 2}, {number: 3}}
+	destination := make([]value, 3)
+	slot := &destination[0]
+	copy(destination, source)
+	var nilDestination []value
+	copy(nilDestination, source)
+	copy(source[1:], source[:2])
+	copy(source[:2], source[1:])
+	println(slot.number, source[0].number)
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"_copy_source (ref null $type",
+		"_copy_destination (ref null $type",
+		"_copy_backward",
+		"_copy_forward",
+		"(struct.new $type",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
 func TestCompileAnonymousPointerSlice(t *testing.T) {
 	const source = `package main
 func replace(values []*struct{ number int }) {
