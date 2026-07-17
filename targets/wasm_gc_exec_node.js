@@ -14,9 +14,16 @@ if (typeof WebAssembly.Suspending !== "function" ||
 const fs = require("fs");
 const channels = new Map();
 const goroutines = new Set();
+const stressGC = process.env.TINYGO_WASMGC_STRESS_GC === "1";
 let nextChannelID = 1;
 let instance;
 let goroutineFailure;
+
+function collectGarbage() {
+    if (stressGC && global.gc) {
+        global.gc();
+    }
+}
 
 function trackGoroutine(promise) {
     goroutines.add(promise);
@@ -58,6 +65,7 @@ async function channelSend(id, value) {
     await new Promise((resolve) => {
         ch.senders.push({value, resolve});
     });
+    collectGarbage();
     return 0;
 }
 
@@ -77,31 +85,24 @@ async function channelRecv(id) {
         sender.resolve();
         return sender.value;
     }
-    return new Promise((resolve) => {
+    const value = await new Promise((resolve) => {
         ch.receivers.push(resolve);
     });
+    collectGarbage();
+    return value;
 }
 
 const environment = {
     printInt(value) {
         console.log(value);
     },
-    suspend: new WebAssembly.Suspending(async () => {
-        await new Promise((resolve) => setImmediate(resolve));
-        if (global.gc) {
-            global.gc();
-        }
-        return 0;
-    }),
     makeChan,
     channelSend: new WebAssembly.Suspending(channelSend),
     channelRecv: new WebAssembly.Suspending(channelRecv),
     scheduleTask(site) {
         const promise = (async () => {
             await new Promise((resolve) => setImmediate(resolve));
-            if (global.gc) {
-                global.gc();
-            }
+            collectGarbage();
             const entry = WebAssembly.promising(instance.exports.runTask);
             await entry(site);
         })();

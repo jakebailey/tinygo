@@ -22,4 +22,22 @@ func main() {
 		}(other, values, pointers, message, delta)
 	}
 	println(<-done + <-done)
+
+	blocked := make(chan int, 1)
+	blocked <- 0
+	ready := make(chan int, 1)
+	liveDone := make(chan int)
+	livePointer := &wasmGCClosureValue{value: 5}
+	liveValues := []int{6, 7}
+	livePointers := []*wasmGCClosureValue{{value: 8}}
+	liveMessage := "live"
+	go func(pointer *wasmGCClosureValue, values []int, pointers []*wasmGCClosureValue, message string) {
+		ready <- 1
+		blocked <- 1
+		liveDone <- pointer.value + values[0] + pointers[0].value + len(message)
+	}(livePointer, liveValues, livePointers, liveMessage)
+	println(<-ready)
+	println(<-blocked)
+	println(<-liveDone)
+	println(value.value, other.value, values[1], pointers[0].value, len(message))
 }
