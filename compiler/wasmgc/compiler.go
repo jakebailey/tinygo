@@ -77,12 +77,13 @@ type valueInfo struct {
 }
 
 type globalInfo struct {
-	id        int
-	valueType types.Type
-	base      *structType
-	array     *arrayType
-	slice     bool
-	string    bool
+	id          int
+	valueType   types.Type
+	base        *structType
+	array       *arrayType
+	structValue bool
+	slice       bool
+	string      bool
 }
 
 type functionCompiler struct {
@@ -189,7 +190,9 @@ func Compile(program Program) (string, error) {
 		out.WriteString("  (import \"env\" \"scheduleTask\" (func $scheduleTask (param i32)))\n")
 	}
 	for _, global := range c.globals {
-		if global.array != nil {
+		if global.structValue {
+			fmt.Fprintf(&out, "  (global $global%d (mut (ref null $type%d)) (struct.new_default $type%d))\n", global.id, global.base.id, global.base.id)
+		} else if global.array != nil {
 			fmt.Fprintf(&out, "  (global $global%d_base (mut (ref null $array%d)) (ref.null $array%d))\n", global.id, global.array.id, global.array.id)
 			fmt.Fprintf(&out, "  (global $global%d_offset (mut i32) (i32.const 0))\n", global.id)
 			fmt.Fprintf(&out, "  (global $global%d_len (mut i32) (i32.const 0))\n", global.id)
@@ -681,6 +684,10 @@ func (c *compiler) findStructs() error {
 			if err := addType(pointer.Elem()); err != nil {
 				return c.errorAt(global.Pos(), "%v", err)
 			}
+		} else if _, ok := valueType.Underlying().(*types.Struct); ok {
+			if err := addType(valueType); err != nil {
+				return c.errorAt(global.Pos(), "%v", err)
+			}
 		}
 	}
 	for _, array := range c.arrays {
@@ -718,6 +725,12 @@ func (c *compiler) findGlobals() error {
 			info.string = true
 			if info.array == nil {
 				return c.errorAt(global.Pos(), "managed string type was not discovered for global %s", global.Name())
+			}
+		} else if _, ok := valueType.Underlying().(*types.Struct); ok {
+			info.base = c.structForType(valueType)
+			info.structValue = true
+			if info.base == nil {
+				return c.errorAt(global.Pos(), "managed struct type was not discovered for global %s", global.Name())
 			}
 		} else if !isScalar(valueType) {
 			return c.errorAt(global.Pos(), "unsupported global type %s: %s", global.Name(), valueType)
@@ -1068,6 +1081,9 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 		}
 		if source.field < 0 {
 			if source.global != nil {
+				if source.global.structValue {
+					return valueInfo{goType: value.Type(), base: source.global.base, structValue: true, field: -1}, nil
+				}
 				if source.global.base != nil {
 					return valueInfo{goType: value.Type(), base: source.global.base, field: -1}, nil
 				}
@@ -1522,7 +1538,33 @@ func (fc *functionCompiler) emitStore(out *strings.Builder, instruction *ssa.Sto
 		return err
 	}
 	if address.global != nil {
-		if address.global.array != nil {
+		if address.global.structValue {
+			value, err := fc.info(instruction.Val)
+			if err != nil {
+				return err
+			}
+			if !value.structValue || value.base != address.global.base {
+				return fc.compiler.errorAt(instruction.Pos(), "global struct store has incompatible managed value")
+			}
+			expressions, err := fc.valueExpressions(instruction.Val, value)
+			if err != nil {
+				return err
+			}
+			source := "(ref.as_non_null " + expressions[0] + ")"
+			destination := fmt.Sprintf("(ref.as_non_null (global.get $global%d))", address.global.id)
+			fmt.Fprintf(out, "    (drop %s)\n", source)
+			fmt.Fprintf(out, "    (drop %s)\n", destination)
+			for _, field := range address.global.base.fields {
+				fmt.Fprintf(out, "    (struct.set $type%d %d %s (struct.get $type%d %d %s))\n",
+					address.global.base.id, field.physicalIndex, destination,
+					address.global.base.id, field.physicalIndex, source)
+				if field.pointer {
+					fmt.Fprintf(out, "    (struct.set $type%d %d %s (struct.get $type%d %d %s))\n",
+						address.global.base.id, field.physicalIndex+1, destination,
+						address.global.base.id, field.physicalIndex+1, source)
+				}
+			}
+		} else if address.global.array != nil {
 			value, err := fc.info(instruction.Val)
 			if err != nil {
 				return err
@@ -1658,7 +1700,18 @@ func (fc *functionCompiler) emitLoad(out *strings.Builder, instruction *ssa.UnOp
 		return err
 	}
 	if source.global != nil {
-		if source.global.array != nil {
+		if source.global.structValue {
+			receiver := fmt.Sprintf("(ref.as_non_null (global.get $global%d))", source.global.id)
+			fmt.Fprintf(out, "    (drop %s)\n", receiver)
+			fmt.Fprintf(out, "    (local.set %s (struct.new $type%d", valueName(instruction), source.global.base.id)
+			for _, field := range source.global.base.fields {
+				fmt.Fprintf(out, " (struct.get $type%d %d %s)", source.global.base.id, field.physicalIndex, receiver)
+				if field.pointer {
+					fmt.Fprintf(out, " (struct.get $type%d %d %s)", source.global.base.id, field.physicalIndex+1, receiver)
+				}
+			}
+			out.WriteString("))\n")
+		} else if source.global.array != nil {
 			fmt.Fprintf(out, "    (local.set %s (global.get $global%d_base))\n", baseName(instruction), source.global.id)
 			fmt.Fprintf(out, "    (local.set %s (global.get $global%d_offset))\n", offsetName(instruction), source.global.id)
 			fmt.Fprintf(out, "    (local.set %s (global.get $global%d_len))\n", lenName(instruction), source.global.id)
@@ -1899,6 +1952,9 @@ func (fc *functionCompiler) pointerExpressions(value ssa.Value, info valueInfo) 
 	if constant, ok := value.(*ssa.Const); ok && constant.IsNil() {
 		return fmt.Sprintf("(ref.null $type%d)", info.base.id), "(i32.const 0)"
 	}
+	if info.global != nil && info.global.structValue {
+		return fmt.Sprintf("(global.get $global%d)", info.global.id), "(i32.const 0)"
+	}
 	return "(local.get " + baseName(value) + ")", "(local.get " + offsetName(value) + ")"
 }
 
@@ -2004,7 +2060,11 @@ func (fc *functionCompiler) info(value ssa.Value) (valueInfo, error) {
 		if info == nil {
 			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "missing global information for %s", value.Name())
 		}
-		return valueInfo{goType: value.Type(), field: -1, global: info}, nil
+		valueInfo := valueInfo{goType: value.Type(), field: -1, global: info}
+		if info.structValue {
+			valueInfo.base = info.base
+		}
+		return valueInfo, nil
 	}
 	info, ok := fc.values[value]
 	if !ok {
@@ -2016,6 +2076,17 @@ func (fc *functionCompiler) info(value ssa.Value) (valueInfo, error) {
 func (c *compiler) info(value ssa.Value) (valueInfo, error) {
 	if constant, ok := value.(*ssa.Const); ok {
 		return c.infoForType(constant.Type())
+	}
+	if global, ok := value.(*ssa.Global); ok {
+		info := c.globalBySSA[global]
+		if info == nil {
+			return valueInfo{}, c.errorAt(value.Pos(), "missing global information for %s", value.Name())
+		}
+		valueInfo := valueInfo{goType: value.Type(), field: -1, global: info}
+		if info.structValue {
+			valueInfo.base = info.base
+		}
+		return valueInfo, nil
 	}
 	info, ok := c.knownValues[value]
 	if !ok {
