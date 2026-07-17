@@ -49,10 +49,11 @@ type structType struct {
 }
 
 type arrayType struct {
-	id          int
-	element     types.Type
-	elementSize int64
-	elementBox  *structType
+	id            int
+	element       types.Type
+	elementSize   int64
+	elementBox    *structType
+	elementStruct *structType
 }
 
 type field struct {
@@ -64,16 +65,17 @@ type field struct {
 }
 
 type valueInfo struct {
-	goType      types.Type
-	base        *structType
-	array       *arrayType
-	structValue bool
-	slice       bool
-	string      bool
-	length      int64
-	field       int
-	global      *globalInfo
-	closure     *ssa.MakeClosure
+	goType       types.Type
+	base         *structType
+	array        *arrayType
+	elementArray *arrayType
+	structValue  bool
+	slice        bool
+	string       bool
+	length       int64
+	field        int
+	global       *globalInfo
+	closure      *ssa.MakeClosure
 }
 
 type globalInfo struct {
@@ -403,15 +405,21 @@ func (c *compiler) writeTaskRunner(out *strings.Builder, goCalls []*ssa.Go) erro
 func (c *compiler) findArrays() error {
 	addArray := func(element types.Type, pos token.Pos) error {
 		if !isScalar(element) {
-			pointer, ok := element.Underlying().(*types.Pointer)
-			if !ok {
+			if pointer, ok := element.Underlying().(*types.Pointer); ok {
+				if _, ok := pointer.Elem().Underlying().(*types.Struct); !ok {
+					return c.errorAt(pos, "managed pointer array element does not point to a struct: %s", element)
+				}
+			} else if _, ok := element.Underlying().(*types.Struct); !ok {
 				return c.errorAt(pos, "unsupported managed array element type: %s", element)
 			}
-			if _, ok := pointer.Elem().Underlying().(*types.Struct); !ok {
-				return c.errorAt(pos, "managed pointer array element does not point to a struct: %s", element)
+		}
+		elementSize := types.SizesFor("gc", "wasm").Sizeof(element)
+		if elementSize == 0 {
+			if _, ok := element.Underlying().(*types.Struct); ok {
+				elementSize = 1
 			}
 		}
-		if size := types.SizesFor("gc", "wasm").Sizeof(element); size <= 0 {
+		if elementSize <= 0 {
 			return c.errorAt(pos, "unsupported managed array element type: %s", element)
 		}
 		if _, ok := c.arrayByElem[element]; ok {
@@ -426,7 +434,7 @@ func (c *compiler) findArrays() error {
 		typ := &arrayType{
 			id:          len(c.arrays),
 			element:     element,
-			elementSize: types.SizesFor("gc", "wasm").Sizeof(element),
+			elementSize: elementSize,
 		}
 		c.arrays = append(c.arrays, typ)
 		c.arrayByElem[element] = typ
@@ -691,13 +699,17 @@ func (c *compiler) findStructs() error {
 		}
 	}
 	for _, array := range c.arrays {
-		if _, ok := array.element.Underlying().(*types.Pointer); !ok {
-			continue
+		if _, ok := array.element.Underlying().(*types.Pointer); ok {
+			if err := addBox(array.element); err != nil {
+				return err
+			}
+			array.elementBox = c.boxByGo[array.element]
+		} else if _, ok := array.element.Underlying().(*types.Struct); ok {
+			if err := addType(array.element); err != nil {
+				return err
+			}
+			array.elementStruct = c.structForType(array.element)
 		}
-		if err := addBox(array.element); err != nil {
-			return err
-		}
-		array.elementBox = c.boxByGo[array.element]
 	}
 	return nil
 }
@@ -1026,6 +1038,14 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 		}
 		if source.array == nil {
 			return valueInfo{}, fc.compiler.errorAt(value.Pos(), "index address has no managed array")
+		}
+		if source.array.elementStruct != nil {
+			return valueInfo{
+				goType:       value.Type(),
+				base:         source.array.elementStruct,
+				elementArray: source.array,
+				field:        -1,
+			}, nil
 		}
 		return valueInfo{goType: value.Type(), array: source.array, field: -1}, nil
 	case *ssa.Index:
@@ -1461,6 +1481,16 @@ func (fc *functionCompiler) emitIndexAddr(out *strings.Builder, instruction *ssa
 		fmt.Fprintf(out, "    (drop (ref.as_non_null %s))\n", sourceExpressions[0])
 	}
 	fmt.Fprintf(out, "    (if (i32.ge_u %s %s) (then (unreachable)))\n", index, length)
+	if source.array.elementStruct != nil {
+		receiver := "(ref.as_non_null " + sourceExpressions[0] + ")"
+		physicalIndex := physicalArrayIndexExpression(sourceExpressions[1], index, source.array)
+		fmt.Fprintf(out, "    (local.set %s (array.get $array%d %s %s))\n", baseName(instruction), source.array.id, receiver, physicalIndex)
+		fmt.Fprintf(out, "    (if (ref.is_null (local.get %s))\n", baseName(instruction))
+		fmt.Fprintf(out, "      (then (local.set %s (struct.new_default $type%d))\n", baseName(instruction), source.array.elementStruct.id)
+		fmt.Fprintf(out, "        (array.set $array%d %s %s (local.get %s))))\n", source.array.id, receiver, physicalIndex, baseName(instruction))
+		fmt.Fprintf(out, "    (local.set %s (i32.const 0))\n", offsetName(instruction))
+		return nil
+	}
 	fmt.Fprintf(out, "    (local.set %s %s)\n", baseName(instruction), sourceExpressions[0])
 	fmt.Fprintf(out, "    (local.set %s (i32.add %s %s))\n", offsetName(instruction), sourceExpressions[1], scaleArrayIndex(index, source.array))
 	return nil
@@ -1868,6 +1898,9 @@ func (fc *functionCompiler) emitAppend(out *strings.Builder, instruction *ssa.Ca
 	if !source.slice || source.array == nil || result.array != source.array || !result.slice {
 		return fc.compiler.errorAt(instruction.Pos(), "append only supports managed scalar slices")
 	}
+	if source.array.elementStruct != nil {
+		return fc.compiler.errorAt(instruction.Pos(), "append of struct slices requires managed value copies")
+	}
 	addedValue := instruction.Call.Args[1]
 	added, err := fc.info(addedValue)
 	if err != nil {
@@ -2210,6 +2243,9 @@ func isStringType(goType types.Type) bool {
 func wasmArrayElementType(array *arrayType) string {
 	if array.elementBox != nil {
 		return fmt.Sprintf("(ref null $type%d)", array.elementBox.id)
+	}
+	if array.elementStruct != nil {
+		return fmt.Sprintf("(ref null $type%d)", array.elementStruct.id)
 	}
 	if basic, ok := array.element.Underlying().(*types.Basic); ok && basic.Kind() == types.Uint8 {
 		return "i8"
