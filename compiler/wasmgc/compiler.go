@@ -1458,12 +1458,16 @@ func (fc *functionCompiler) emitBinOp(out *strings.Builder, instruction *ssa.Bin
 		return fc.compiler.errorAt(instruction.Pos(), "global address comparisons are not supported")
 	}
 
-	op, err := wasmBinOp(instruction.Op, instruction.X.Type())
+	expression, err := wasmBinOpExpression(
+		instruction.Op,
+		instruction.X.Type(),
+		instruction.Y.Type(),
+		fc.expression(instruction.X),
+		fc.expression(instruction.Y))
 	if err != nil {
 		return fc.compiler.errorAt(instruction.Pos(), "%v", err)
 	}
 
-	expression := fmt.Sprintf("(%s %s %s)", op, fc.expression(instruction.X), fc.expression(instruction.Y))
 	if isUint8(instruction.Type()) {
 		expression = "(i32.and " + expression + " (i32.const 255))"
 	}
@@ -2621,7 +2625,7 @@ func wasmBinOp(op token.Token, goType types.Type) (string, error) {
 	comparisonSuffix := "_s"
 	if basic, ok := goType.Underlying().(*types.Basic); ok {
 		switch basic.Kind() {
-		case types.Uint, types.Uint32, types.Uintptr:
+		case types.Uint, types.Uint8, types.Uint32, types.Uintptr:
 			comparisonSuffix = "_u"
 		}
 	}
@@ -2644,6 +2648,8 @@ func wasmBinOp(op token.Token, goType types.Type) (string, error) {
 		return prefix + ".sub", nil
 	case token.MUL:
 		return prefix + ".mul", nil
+	case token.REM:
+		return prefix + ".rem" + comparisonSuffix, nil
 	case token.AND:
 		return prefix + ".and", nil
 	case token.OR:
@@ -2652,6 +2658,65 @@ func wasmBinOp(op token.Token, goType types.Type) (string, error) {
 		return prefix + ".xor", nil
 	default:
 		return "", fmt.Errorf("unsupported binary operation: %s", op)
+	}
+}
+
+func wasmBinOpExpression(op token.Token, goType, rightType types.Type, left, right string) (string, error) {
+	unsigned := isUnsignedI32(goType)
+	switch op {
+	case token.QUO:
+		if unsigned {
+			return "(i32.div_u " + left + " " + right + ")", nil
+		}
+		return "(if (result i32) (i32.eq " + right + " (i32.const -1))" +
+			" (then (i32.sub (i32.const 0) " + left + "))" +
+			" (else (i32.div_s " + left + " " + right + ")))", nil
+	case token.SHL:
+		expression := "(if (result i32) (i32.ge_u " + right + " (i32.const 32))" +
+			" (then (i32.const 0))" +
+			" (else (i32.shl " + left + " " + right + ")))"
+		return checkedShiftExpression(expression, rightType, right), nil
+	case token.SHR:
+		operation := "i32.shr_s"
+		overflow := "(i32.shr_s " + left + " (i32.const 31))"
+		if unsigned {
+			operation = "i32.shr_u"
+			overflow = "(i32.const 0)"
+		}
+		expression := "(if (result i32) (i32.ge_u " + right + " (i32.const 32))" +
+			" (then " + overflow + ")" +
+			" (else (" + operation + " " + left + " " + right + ")))"
+		return checkedShiftExpression(expression, rightType, right), nil
+	case token.AND_NOT:
+		return "(i32.and " + left + " (i32.xor " + right + " (i32.const -1)))", nil
+	default:
+		wasmOp, err := wasmBinOp(op, goType)
+		if err != nil {
+			return "", err
+		}
+		return "(" + wasmOp + " " + left + " " + right + ")", nil
+	}
+}
+
+func checkedShiftExpression(expression string, shiftType types.Type, shift string) string {
+	if isUnsignedI32(shiftType) {
+		return expression
+	}
+	return "(if (result i32) (i32.lt_s " + shift + " (i32.const 0))" +
+		" (then (unreachable))" +
+		" (else " + expression + "))"
+}
+
+func isUnsignedI32(goType types.Type) bool {
+	basic, ok := goType.Underlying().(*types.Basic)
+	if !ok {
+		return false
+	}
+	switch basic.Kind() {
+	case types.Uint, types.Uint8, types.Uint32, types.Uintptr:
+		return true
+	default:
+		return false
 	}
 }
 
