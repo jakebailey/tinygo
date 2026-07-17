@@ -192,6 +192,54 @@ func main() {
 	}
 }
 
+func TestCompileDirectClosure(t *testing.T) {
+	const source = `package main
+type value struct { number int }
+func main() {
+	item := &value{number: 40}
+	add := func(delta int) int { return item.number + delta }
+	println(add(2))
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(field (mut (ref null $type",
+		"(call $fn",
+		"(param $item_base",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
+func TestRejectSpawnedClosure(t *testing.T) {
+	const source = `package main
+func main() {
+	value := 42
+	go func() { println(value) }()
+}
+`
+	_, err := compileSourceError(t, source)
+	if err == nil || !strings.Contains(err.Error(), "spawned closures require an in-module WasmGC task queue") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRejectCapturedArray(t *testing.T) {
+	const source = `package main
+func main() {
+	values := [2]int{40, 2}
+	add := func() int { return values[0] + values[1] }
+	println(add())
+}
+`
+	_, err := compileSourceError(t, source)
+	if err == nil || !strings.Contains(err.Error(), "captured array variables are not supported") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRejectUnsupportedPrograms(t *testing.T) {
 	tests := []struct {
 		name    string
