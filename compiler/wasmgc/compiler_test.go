@@ -277,6 +277,35 @@ func main() {
 	}
 }
 
+func TestCompileSliceClear(t *testing.T) {
+	const source = `package main
+type value struct { number int }
+func main() {
+	numbers := []int{1, 2}
+	clear(numbers)
+	pointers := []*value{{number: 3}}
+	clear(pointers)
+	structs := []value{{number: 4}}
+	slot := &structs[0]
+	clear(structs)
+	var nilStructs []value
+	clear(nilStructs)
+	println(numbers[0], pointers[0] == nil, slot.number)
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(array.fill $array",
+		"(func $clearStructArray",
+		"(call $clearStructArray",
+		"(struct.set $type",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
 func TestCompileAnonymousPointerSlice(t *testing.T) {
 	const source = `package main
 func replace(values []*struct{ number int }) {
