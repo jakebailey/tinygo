@@ -335,6 +335,58 @@ func main() {
 	}
 }
 
+func TestCompileStructSlice(t *testing.T) {
+	const source = `package main
+type value struct { number int }
+func main() {
+	values := make([]value, 2)
+	pointer := &values[0]
+	values[0] = value{number: 40}
+	values[1] = values[0]
+	values[1].number += 2
+	println(pointer.number, values[1].number)
+}
+`
+	wat := compileSource(t, source)
+	for _, expected := range []string{
+		"(array (mut (ref null $type",
+		"(array.get $array",
+		"(struct.new_default $type",
+		"(array.set $array",
+	} {
+		if !strings.Contains(wat, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, wat)
+		}
+	}
+}
+
+func TestRejectStructSliceAppend(t *testing.T) {
+	const source = `package main
+type value struct { number int }
+func main() {
+	var values []value
+	values = append(values, value{number: 42})
+}
+`
+	_, err := compileSourceError(t, source)
+	if err == nil || !strings.Contains(err.Error(), "append of struct slices requires managed value copies") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompileEmptyStructSlice(t *testing.T) {
+	const source = `package main
+func main() {
+	values := make([]struct{}, 2)
+	first := &values[0]
+	second := &values[1]
+	*first = *second
+	println(len(values))
+}
+`
+	compileSource(t, source)
+}
+
 func TestCompileManagedString(t *testing.T) {
 	const source = `package main
 var message = "wasmgc!"
