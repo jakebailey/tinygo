@@ -52,6 +52,7 @@ type arrayType struct {
 	id          int
 	element     types.Type
 	elementSize int64
+	elementBox  *structType
 }
 
 type field struct {
@@ -137,11 +138,11 @@ func Compile(program Program) (string, error) {
 
 	var out strings.Builder
 	out.WriteString("(module\n")
-	for _, typ := range c.arrays {
-		fmt.Fprintf(&out, "  (type $array%d (array (mut %s)))\n", typ.id, wasmArrayElementType(typ))
-	}
-	if len(c.structs) != 0 {
+	if len(c.arrays) != 0 || len(c.structs) != 0 {
 		out.WriteString("  (rec\n")
+		for _, typ := range c.arrays {
+			fmt.Fprintf(&out, "    (type $array%d (array (mut %s)))\n", typ.id, wasmArrayElementType(typ))
+		}
 		for _, typ := range c.structs {
 			fmt.Fprintf(&out, "    (type $type%d (struct", typ.id)
 			for _, field := range typ.fields {
@@ -398,10 +399,25 @@ func (c *compiler) writeTaskRunner(out *strings.Builder, goCalls []*ssa.Go) erro
 func (c *compiler) findArrays() error {
 	addArray := func(element types.Type, pos token.Pos) error {
 		if !isScalar(element) {
+			pointer, ok := element.Underlying().(*types.Pointer)
+			if !ok {
+				return c.errorAt(pos, "unsupported managed array element type: %s", element)
+			}
+			if _, ok := pointer.Elem().Underlying().(*types.Struct); !ok {
+				return c.errorAt(pos, "managed pointer array element does not point to a struct: %s", element)
+			}
+		}
+		if size := types.SizesFor("gc", "wasm").Sizeof(element); size <= 0 {
 			return c.errorAt(pos, "unsupported managed array element type: %s", element)
 		}
 		if _, ok := c.arrayByElem[element]; ok {
 			return nil
+		}
+		for existingElement, array := range c.arrayByElem {
+			if types.Identical(element, existingElement) {
+				c.arrayByElem[element] = array
+				return nil
+			}
 		}
 		typ := &arrayType{
 			id:          len(c.arrays),
@@ -512,6 +528,12 @@ func (c *compiler) findStructs() error {
 		if _, ok := c.structByGo[goType]; ok {
 			return nil
 		}
+		for existingType, typ := range c.structByGo {
+			if types.Identical(goType, existingType) {
+				c.structByGo[goType] = typ
+				return nil
+			}
+		}
 		underlying, ok := goType.Underlying().(*types.Struct)
 		if !ok {
 			return fmt.Errorf("wasm-gc: allocation type is not a struct: %s", goType)
@@ -558,6 +580,12 @@ func (c *compiler) findStructs() error {
 	addBox = func(valueType types.Type) error {
 		if _, ok := c.boxByGo[valueType]; ok {
 			return nil
+		}
+		for existingType, typ := range c.boxByGo {
+			if types.Identical(valueType, existingType) {
+				c.boxByGo[valueType] = typ
+				return nil
+			}
 		}
 		typ := &structType{
 			id:     len(c.structs),
@@ -618,6 +646,15 @@ func (c *compiler) findStructs() error {
 				return c.errorAt(global.Pos(), "%v", err)
 			}
 		}
+	}
+	for _, array := range c.arrays {
+		if _, ok := array.element.Underlying().(*types.Pointer); !ok {
+			continue
+		}
+		if err := addBox(array.element); err != nil {
+			return err
+		}
+		array.elementBox = c.boxByGo[array.element]
 	}
 	return nil
 }
@@ -761,6 +798,12 @@ func (fc *functionCompiler) compile() (string, error) {
 				continue
 			}
 			writeDeclaration(&out, "local", valueName(value), fc.values[value])
+			if load, ok := value.(*ssa.UnOp); ok && load.Op == token.MUL {
+				source := fc.values[load.X]
+				if source.array != nil && source.array.elementBox != nil {
+					fmt.Fprintf(&out, "    (local %s_element (ref null $type%d))\n", valueName(value), source.array.elementBox.id)
+				}
+			}
 			if call, ok := value.(*ssa.Call); ok {
 				if builtin, ok := call.Call.Value.(*ssa.Builtin); ok && builtin.Name() == "append" {
 					fmt.Fprintf(&out, "    (local %s_append_cap i32)\n", valueName(value))
@@ -965,6 +1008,10 @@ func (fc *functionCompiler) analyzeValue(value ssa.Value) (valueInfo, error) {
 			return valueInfo{}, err
 		}
 		if source.array != nil {
+			if source.array.elementBox != nil {
+				field := source.array.elementBox.fields[0]
+				return valueInfo{goType: value.Type(), base: field.target, field: -1}, nil
+			}
 			return valueInfo{goType: value.Type(), field: -1}, nil
 		}
 		if source.field < 0 {
@@ -1409,6 +1456,23 @@ func (fc *functionCompiler) emitStore(out *strings.Builder, instruction *ssa.Sto
 		return nil
 	}
 	if address.array != nil {
+		if address.array.elementBox != nil {
+			value, err := fc.info(instruction.Val)
+			if err != nil {
+				return err
+			}
+			field := address.array.elementBox.fields[0]
+			if value.base != field.target {
+				return fc.compiler.errorAt(instruction.Pos(), "pointer array store has incompatible managed base")
+			}
+			base, offset := fc.pointerExpressions(instruction.Val, value)
+			receiver := fmt.Sprintf("(ref.as_non_null (local.get %s))", baseName(instruction.Addr))
+			index := physicalArrayIndex(instruction.Addr, address.array)
+			fmt.Fprintf(out, "    (if (ref.is_null %s)\n", base)
+			fmt.Fprintf(out, "      (then (array.set $array%d %s %s (ref.null $type%d)))\n", address.array.id, receiver, index, address.array.elementBox.id)
+			fmt.Fprintf(out, "      (else (array.set $array%d %s %s (struct.new $type%d %s %s))))\n", address.array.id, receiver, index, address.array.elementBox.id, base, offset)
+			return nil
+		}
 		fmt.Fprintf(out, "    (array.set $array%d (ref.as_non_null (local.get %s)) %s %s)\n", address.array.id, baseName(instruction.Addr), physicalArrayIndex(instruction.Addr, address.array), fc.expression(instruction.Val))
 		return nil
 	}
@@ -1456,6 +1520,16 @@ func (fc *functionCompiler) emitLoad(out *strings.Builder, instruction *ssa.UnOp
 		return nil
 	}
 	if source.array != nil {
+		if source.array.elementBox != nil {
+			element := valueName(instruction) + "_element"
+			fmt.Fprintf(out, "    (local.set %s (array.get $array%d (ref.as_non_null (local.get %s)) %s))\n", element, source.array.id, baseName(instruction.X), physicalArrayIndex(instruction.X, source.array))
+			field := source.array.elementBox.fields[0]
+			fmt.Fprintf(out, "    (if (ref.is_null (local.get %s))\n", element)
+			fmt.Fprintf(out, "      (then (local.set %s (ref.null $type%d)) (local.set %s (i32.const 0)))\n", baseName(instruction), field.target.id, offsetName(instruction))
+			fmt.Fprintf(out, "      (else (local.set %s (struct.get $type%d 0 (ref.as_non_null (local.get %s))))\n", baseName(instruction), source.array.elementBox.id, element)
+			fmt.Fprintf(out, "        (local.set %s (struct.get $type%d 1 (ref.as_non_null (local.get %s))))))\n", offsetName(instruction), source.array.elementBox.id, element)
+			return nil
+		}
 		fmt.Fprintf(out, "    (local.set %s (%s $array%d (ref.as_non_null (local.get %s)) %s))\n", valueName(instruction), arrayGetOp(source.array), source.array.id, baseName(instruction.X), physicalArrayIndex(instruction.X, source.array))
 		return nil
 	}
@@ -1779,6 +1853,19 @@ func (c *compiler) infoForType(goType types.Type) (valueInfo, error) {
 	return (&functionCompiler{compiler: c}).infoForType(goType)
 }
 
+func (c *compiler) structForType(goType types.Type) *structType {
+	if typ := c.structByGo[goType]; typ != nil {
+		return typ
+	}
+	for existingType, typ := range c.structByGo {
+		if types.Identical(goType, existingType) {
+			c.structByGo[goType] = typ
+			return typ
+		}
+	}
+	return nil
+}
+
 func (fc *functionCompiler) infoForType(goType types.Type) (valueInfo, error) {
 	if isStringType(goType) {
 		if fc.compiler.stringArray == nil {
@@ -1805,7 +1892,7 @@ func (fc *functionCompiler) infoForType(goType types.Type) (valueInfo, error) {
 		if _, ok := target.Underlying().(*types.Struct); !ok {
 			return valueInfo{}, fmt.Errorf("wasm-gc: pointer type has no statically known managed base: %s", goType)
 		}
-		base := fc.compiler.structByGo[target]
+		base := fc.compiler.structForType(target)
 		if base == nil {
 			return valueInfo{}, fmt.Errorf("wasm-gc: managed type was not discovered: %s", target)
 		}
@@ -1868,6 +1955,9 @@ func isStringType(goType types.Type) bool {
 }
 
 func wasmArrayElementType(array *arrayType) string {
+	if array.elementBox != nil {
+		return fmt.Sprintf("(ref null $type%d)", array.elementBox.id)
+	}
 	if basic, ok := array.element.Underlying().(*types.Basic); ok && basic.Kind() == types.Uint8 {
 		return "i8"
 	}
