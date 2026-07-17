@@ -482,14 +482,16 @@ func main() {
 `
 	wat := compileSource(t, source)
 	for _, expected := range []string{
-		"_append_values (ref null $array",
 		"_append_destination (ref null $type",
-		"_append_added_snapshot",
-		"_append_assign",
+		"_append_added_backward",
+		"_append_added_forward",
 	} {
 		if !strings.Contains(wat, expected) {
 			t.Fatalf("output does not contain %q:\n%s", expected, wat)
 		}
+	}
+	if strings.Contains(wat, "_append_values") {
+		t.Fatalf("struct append allocated a temporary snapshot array:\n%s", wat)
 	}
 }
 
