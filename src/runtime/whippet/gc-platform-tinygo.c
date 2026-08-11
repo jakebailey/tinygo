@@ -32,11 +32,7 @@ uint64_t gc_platform_monotonic_nanoseconds(void) {
 }
 
 size_t gc_platform_page_size(void) {
-#ifdef __wasm__
-  return 65536;
-#else
   return 4096;
-#endif
 }
 
 static void *allocate_aligned(size_t size, size_t alignment) {
