@@ -30,9 +30,48 @@ struct descriptor_cache_entry {
     struct descriptor_cache_entry *next;
 };
 
+struct array_descriptor_cache_entry {
+    uintptr_t layout;
+    uintptr_t element_count;
+    GC_descr descriptor;
+    struct array_descriptor_cache_entry *next;
+};
+
 static struct descriptor_cache_entry **descriptor_cache;
 static size_t descriptor_cache_capacity;
 static size_t descriptor_cache_count;
+static uintptr_t last_descriptor_layout;
+static GC_descr last_descriptor;
+static struct array_descriptor_cache_entry *array_descriptor_cache[64];
+static size_t array_descriptor_cache_count;
+
+static inline void mutex_relax(void) {
+#if defined(__i386__) || defined(__x86_64__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__) || \
+      (defined(__arm__) && defined(__ARM_ARCH) && __ARM_ARCH >= 7)
+    __asm__ __volatile__("yield");
+#endif
+}
+
+uint32_t tinygo_runtime_bdwgc_mutex_try_lock(uint32_t *state) {
+    uint32_t unlocked = 0;
+    return __atomic_compare_exchange_n(state, &unlocked, 1, 1,
+                                       __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+
+void tinygo_runtime_bdwgc_mutex_lock(uint32_t *state) {
+    do {
+        if (tinygo_runtime_bdwgc_mutex_try_lock(state)) {
+            return;
+        }
+        mutex_relax();
+    } while (1);
+}
+
+void tinygo_runtime_bdwgc_mutex_unlock(uint32_t *state) {
+    __atomic_store_n(state, 0, __ATOMIC_RELEASE);
+}
 
 static size_t descriptor_cache_index(uintptr_t layout, size_t capacity) {
 #if UINTPTR_MAX > UINT32_MAX
@@ -42,6 +81,11 @@ static size_t descriptor_cache_index(uintptr_t layout, size_t capacity) {
     layout *= 0x45d9f3b;
     layout ^= layout >> 16;
     return layout & (capacity - 1);
+}
+
+static size_t array_descriptor_cache_index(uintptr_t layout,
+                                           uintptr_t element_count) {
+    return descriptor_cache_index(layout ^ element_count, 64);
 }
 
 static int grow_descriptor_cache(void) {
@@ -110,6 +154,10 @@ GC_descr tinygo_runtime_bdwgc_make_descriptor(uintptr_t layout) {
     size_t word_count;
     GC_descr descriptor;
 
+    if (layout == last_descriptor_layout) {
+        return last_descriptor;
+    }
+
     if (descriptor_cache_count >= descriptor_cache_capacity * 2 &&
         !grow_descriptor_cache()) {
         return 0;
@@ -118,6 +166,8 @@ GC_descr tinygo_runtime_bdwgc_make_descriptor(uintptr_t layout) {
     index = descriptor_cache_index(layout, descriptor_cache_capacity);
     for (entry = descriptor_cache[index]; entry != NULL; entry = entry->next) {
         if (entry->layout == layout) {
+            last_descriptor_layout = layout;
+            last_descriptor = entry->descriptor;
             return entry->descriptor;
         }
     }
@@ -167,5 +217,80 @@ GC_descr tinygo_runtime_bdwgc_make_descriptor(uintptr_t layout) {
     entry->next = descriptor_cache[index];
     descriptor_cache[index] = entry;
     descriptor_cache_count++;
+    last_descriptor_layout = layout;
+    last_descriptor = descriptor;
+    return descriptor;
+}
+
+GC_descr tinygo_runtime_bdwgc_make_array_descriptor(
+    uintptr_t layout, uintptr_t element_count, uintptr_t element_size) {
+    const size_t size_bits = 4 + sizeof(uintptr_t) / 4;
+    const uintptr_t size_mask = ((uintptr_t)1 << size_bits) - 1;
+    struct array_descriptor_cache_entry *entry;
+    const uint8_t *bytes = NULL;
+    uintptr_t inline_bitmap = 0;
+    GC_word bitmap[512 / GC_WORDSZ];
+    size_t element_bits;
+    size_t total_bits;
+    size_t index;
+    size_t element;
+    size_t bit;
+    GC_descr descriptor;
+
+    // Flatten modest repeated layouts so Boehm can use its faster ordinary
+    // typed-object marker. Bound both bitmap and cache size because extended
+    // descriptors are permanent collector metadata.
+    if (layout & 1) {
+        element_bits = (layout >> 1) & size_mask;
+        inline_bitmap = layout >> (size_bits + 1);
+    } else {
+        element_bits = *(const uintptr_t *)layout;
+        bytes = (const uint8_t *)(layout + sizeof(uintptr_t));
+    }
+    if (element_bits == 0 ||
+        element_bits != element_size / sizeof(uintptr_t) ||
+        element_count > 512 / element_bits) {
+        return 0;
+    }
+
+    index = array_descriptor_cache_index(layout, element_count);
+    for (entry = array_descriptor_cache[index]; entry != NULL;
+         entry = entry->next) {
+        if (entry->layout == layout &&
+            entry->element_count == element_count) {
+            return entry->descriptor;
+        }
+    }
+    if (array_descriptor_cache_count >= 128) {
+        return 0;
+    }
+
+    memset(bitmap, 0, sizeof(bitmap));
+    total_bits = element_bits * element_count;
+    for (element = 0; element < element_count; element++) {
+        for (bit = 0; bit < element_bits; bit++) {
+            int is_pointer = layout & 1
+                                 ? (inline_bitmap >> bit) & 1
+                                 : (bytes[bit / 8] >> (bit % 8)) & 1;
+            if (is_pointer) {
+                GC_set_bit(bitmap, element * element_bits + bit);
+            }
+        }
+    }
+    descriptor = GC_make_descriptor(bitmap, total_bits);
+    if (descriptor == 0) {
+        return 0;
+    }
+
+    entry = GC_malloc_atomic_uncollectable(sizeof(*entry));
+    if (entry == NULL) {
+        return 0;
+    }
+    entry->layout = layout;
+    entry->element_count = element_count;
+    entry->descriptor = descriptor;
+    entry->next = array_descriptor_cache[index];
+    array_descriptor_cache[index] = entry;
+    array_descriptor_cache_count++;
     return descriptor;
 }
