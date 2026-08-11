@@ -1,4 +1,4 @@
-//go:build tinygo.wasm && !(custommalloc || wasm_unknown || gc.boehm)
+//go:build tinygo.wasm && !(custommalloc || wasm_unknown || gc.boehm || gc.whippet)
 
 package runtime
 

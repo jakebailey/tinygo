@@ -1,7 +1,6 @@
 #ifndef SERIAL_TRACER_H
 #define SERIAL_TRACER_H
 
-#include <sys/mman.h>
 #include <unistd.h>
 
 #include "assert.h"

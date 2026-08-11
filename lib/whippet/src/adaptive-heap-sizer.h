@@ -69,7 +69,7 @@ gc_adaptive_heap_sizer_calculate_size(struct gc_adaptive_heap_sizer *sizer) {
     (double)sizer->smoothed_pause_time / (double)sizer->smoothed_live_bytes;
   double radicand = sizer->live_bytes * allocation_rate / collection_rate;
   double multiplier = 1.0 + sizer->expansiveness * sqrt(radicand);
-  if (isnan(multiplier) || multiplier < sizer->minimum_multiplier)
+  if (multiplier != multiplier || multiplier < sizer->minimum_multiplier)
     multiplier = sizer->minimum_multiplier;
   else if (multiplier > sizer->maximum_multiplier)
     multiplier = sizer->maximum_multiplier;

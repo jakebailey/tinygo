@@ -1,4 +1,4 @@
-//go:build gc.conservative || gc.precise
+//go:build gc.conservative || gc.precise || gc.whippet
 
 package runtime
 

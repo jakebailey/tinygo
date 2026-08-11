@@ -1,7 +1,6 @@
 #ifndef ADDRESS_MAP_H
 #define ADDRESS_MAP_H
 
-#include <malloc.h>
 #include <stdint.h>
 #include <string.h>
 

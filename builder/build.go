@@ -759,6 +759,14 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 		defer unlock()
 		linkerDependencies = append(linkerDependencies, job)
 	}
+	if config.GC() == "whippet" {
+		job, unlock, err := WhippetGC.load(config, tmpdir)
+		if err != nil {
+			return BuildResult{}, err
+		}
+		defer unlock()
+		linkerDependencies = append(linkerDependencies, job)
+	}
 
 	// Add jobs to compile extra files. These files are in C or assembly and
 	// contain things like the interrupt vector table and low level operations

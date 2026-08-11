@@ -27,6 +27,7 @@ var libVersions = map[string]int{
 	"bdwgc":        19,
 	"picolibc":     1,
 	"wasmbuiltins": 1,
+	"whippet":      11,
 }
 
 // Config keeps all configuration affecting the build in a single struct.
@@ -144,7 +145,7 @@ func (c *Config) GC() string {
 // that can be traced by the garbage collector.
 func (c *Config) NeedsStackObjects() bool {
 	switch c.GC() {
-	case "conservative", "custom", "precise", "boehm":
+	case "conservative", "custom", "precise", "boehm", "whippet":
 		return slices.Contains(c.BuildTags(), "tinygo.wasm")
 	default:
 		return false
@@ -266,7 +267,7 @@ func MuslArchitecture(triple string) string {
 // Returns true if the libc needs to include malloc, for the libcs where this
 // matters.
 func (c *Config) LibcNeedsMalloc() bool {
-	if c.GC() == "boehm" && c.Target.Libc == "wasi-libc" {
+	if (c.GC() == "boehm" || c.GC() == "whippet") && c.Target.Libc == "wasi-libc" {
 		return true
 	}
 	return false
@@ -285,8 +286,8 @@ func (c *Config) LibraryPath(name string) string {
 	if c.Target.SoftFloat {
 		archname += "-softfloat"
 	}
-	if name == "bdwgc" {
-		// Boehm GC is compiled against a particular libc.
+	if name == "bdwgc" || name == "whippet" {
+		// External collectors are compiled against a particular libc.
 		archname += "-" + c.Target.Libc
 	}
 
@@ -484,7 +485,16 @@ func (c *Config) LinkerFlavor() string {
 // ExtraFiles returns the list of extra files to be built and linked with the
 // executable. This can include extra C and assembly files.
 func (c *Config) ExtraFiles() []string {
-	return c.Target.ExtraFiles
+	files := c.Target.ExtraFiles
+	if c.GC() != "boehm" {
+		files = slices.DeleteFunc(slices.Clone(files), func(path string) bool {
+			return path == "src/runtime/gc_boehm.c"
+		})
+	}
+	if c.GC() == "whippet" && !slices.Contains(files, "src/runtime/whippet/gc-whippet.c") {
+		files = append(slices.Clone(files), "src/runtime/whippet/gc-whippet.c")
+	}
+	return files
 }
 
 // DumpSSA returns whether to dump Go SSA while compiling (-dumpssa flag). Only
