@@ -43,7 +43,7 @@ func alloc(size uintptr, layout unsafe.Pointer) unsafe.Pointer {
 	if ptr == nil {
 		runtimeFatal("gc: out of memory")
 	}
-	memzero(ptr, size)
+	// Whippet clears newly acquired memory and reclaimed holes before reuse.
 	return ptr
 }
 
