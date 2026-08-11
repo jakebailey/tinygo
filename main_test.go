@@ -219,6 +219,7 @@ func TestBuild(t *testing.T) {
 				optionsBoehm := optionsFromTarget("wasm", sema)
 				optionsBoehm.GC = "boehm"
 				runTest("gc.go", optionsBoehm, t, nil, nil)
+				runTest("gc-boehm.go", optionsBoehm, t, nil, nil)
 			})
 		})
 		t.Run("WASIp1", func(t *testing.T) {
@@ -231,6 +232,7 @@ func TestBuild(t *testing.T) {
 				optionsBoehm := optionsFromTarget("wasip1", sema)
 				optionsBoehm.GC = "boehm"
 				runTest("gc.go", optionsBoehm, t, nil, nil)
+				runTest("gc-boehm.go", optionsBoehm, t, nil, nil)
 			})
 		})
 		t.Run("WASIp2", func(t *testing.T) {
