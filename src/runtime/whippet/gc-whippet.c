@@ -41,6 +41,29 @@ static void tinygo_whippet_live_data_size(void *data, size_t size) {
   tinygo_whippet_live_bytes = size;
 }
 
+static inline void tinygo_whippet_mutex_relax(void) {
+#if defined(__i386__) || defined(__x86_64__)
+  __builtin_ia32_pause();
+#elif defined(__arm__) || defined(__aarch64__)
+  __asm__ __volatile__("yield");
+#endif
+}
+
+void tinygo_whippet_mutex_lock(uint32_t *state) {
+  uint32_t unlocked;
+  do {
+    unlocked = 0;
+    if (__atomic_compare_exchange_n(state, &unlocked, 1, 1,
+                                    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+      return;
+    tinygo_whippet_mutex_relax();
+  } while (1);
+}
+
+void tinygo_whippet_mutex_unlock(uint32_t *state) {
+  __atomic_store_n(state, 0, __ATOMIC_RELEASE);
+}
+
 static void tinygo_whippet_visit_pointer(
     uintptr_t value,
     void (*visit)(struct gc_edge, struct gc_heap *, void *),

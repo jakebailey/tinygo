@@ -4,7 +4,6 @@ package runtime
 
 import (
 	"internal/gclayout"
-	"internal/task"
 	"unsafe"
 )
 
@@ -16,7 +15,7 @@ const (
 	whippetAllocationUntaggedConservative
 )
 
-var gcLock task.PMutex
+var gcLock whippetMutex
 
 func initHeap() {
 	libwhippet_init()
