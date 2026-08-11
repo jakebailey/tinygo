@@ -938,6 +938,12 @@ nofl_allocator_next_hole(struct nofl_allocator *alloc,
       nofl_allocator_release_full_block(alloc, space);
     }
 
+    // Finishing a sweep only needs to process blocks that contain old mark
+    // metadata.  Empty blocks are already swept and should remain available
+    // for future allocations.
+    if (!min_granules)
+      return 0;
+
     // We are done sweeping for blocks.  Now take from the empties list.
     if (nofl_allocator_acquire_empty_block(alloc, space))
       return NOFL_GRANULES_PER_BLOCK;
