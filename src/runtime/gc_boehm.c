@@ -21,6 +21,7 @@ void GC_set_warn_proc(GC_warn_proc);
 void *GC_malloc_atomic_uncollectable(uintptr_t);
 void GC_free(void *);
 GC_descr GC_make_descriptor(const GC_word *, uintptr_t);
+GC_descr GC_make_sparse_descriptor(const GC_word *, uintptr_t);
 
 void tinygo_runtime_bdwgc_callback(void);
 
@@ -237,9 +238,9 @@ GC_descr tinygo_runtime_bdwgc_make_array_descriptor(
     size_t bit;
     GC_descr descriptor;
 
-    // Flatten modest repeated layouts so Boehm can use its faster ordinary
-    // typed-object marker. Bound both bitmap and cache size because extended
-    // descriptors are permanent collector metadata.
+    // Flatten modest repeated layouts so Boehm can visit only their pointer
+    // words. Bound both bitmap and cache size because these descriptors are
+    // permanent collector metadata.
     if (layout & 1) {
         element_bits = (layout >> 1) & size_mask;
         inline_bitmap = layout >> (size_bits + 1);
@@ -277,7 +278,7 @@ GC_descr tinygo_runtime_bdwgc_make_array_descriptor(
             }
         }
     }
-    descriptor = GC_make_descriptor(bitmap, total_bits);
+    descriptor = GC_make_sparse_descriptor(bitmap, total_bits);
     if (descriptor == 0) {
         return 0;
     }
