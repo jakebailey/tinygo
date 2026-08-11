@@ -17,6 +17,7 @@ var WhippetGC = Library{
 			"-DGC_CONSERVATIVE_ROOTS=1",
 			"-DGC_CONSERVATIVE_TRACE=1",
 			"-DGC_HAS_IMMEDIATES=0",
+			"-DTINYGO_WHIPPET=1",
 			"-DNDEBUG",
 			`-DGC_ATTRS="mmc-attrs.h"`,
 			`-DGC_EMBEDDER="tinygo-whippet-embedder.h"`,

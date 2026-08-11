@@ -5,6 +5,12 @@
 #include "gc-assert.h"
 #include "gc-attrs.h"
 
+#ifdef TINYGO_WHIPPET
+#define MMC_LARGE_OBJECT_THRESHOLD (8192 + 2 * sizeof(uintptr_t))
+#else
+#define MMC_LARGE_OBJECT_THRESHOLD 8192
+#endif
+
 static inline enum gc_inline_allocator_kind gc_inline_allocator_kind(enum gc_allocation_kind kind) {
   switch (kind) {
   case GC_ALLOCATION_UNTAGGED_CONSERVATIVE:
@@ -23,7 +29,7 @@ static inline size_t gc_allocator_small_granule_size(void) {
   return 16;
 }
 static inline size_t gc_allocator_large_threshold(void) {
-  return 8192;
+  return MMC_LARGE_OBJECT_THRESHOLD;
 }
 
 static inline size_t gc_allocator_allocation_pointer_offset(void) {

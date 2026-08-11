@@ -4,6 +4,7 @@
 #define GC_CONSERVATIVE_TRACE 1
 #define GC_HAS_IMMEDIATES 0
 #define GC_ATTRS "mmc-attrs.h"
+#define TINYGO_WHIPPET 1
 
 #include <stdint.h>
 #include <stdlib.h>

@@ -31,7 +31,7 @@
 #include "spin.h"
 #include "mmc-attrs.h"
 
-#define LARGE_OBJECT_THRESHOLD 8192
+#define LARGE_OBJECT_THRESHOLD MMC_LARGE_OBJECT_THRESHOLD
 
 struct gc_heap {
   struct nofl_space nofl_space;
