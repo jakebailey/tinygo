@@ -45,7 +45,11 @@ static inline size_t gc_allocator_freelist_offset(size_t size,
 }
 
 static inline size_t gc_allocator_alloc_table_alignment(void) {
+#if defined(TINYGO_WHIPPET) && defined(__wasm__)
+  return 1 * 1024 * 1024;
+#else
   return 4 * 1024 * 1024;
+#endif
 }
 static inline uint8_t gc_allocator_alloc_table_begin_pattern(enum gc_allocation_kind kind) {
   uint8_t young = 1;
