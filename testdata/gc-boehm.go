@@ -45,6 +45,21 @@ func expectCollected(setRoot func(uintptr)) {
 	panic("non-pointer field retained allocation")
 }
 
+func expectRepeatedPointersLive() {
+	repeatedRoots = make([]inlineFalseRoot, 128)
+	for i := range repeatedRoots {
+		value := new(byte)
+		*value = byte(i)
+		repeatedRoots[i].live = value
+	}
+	runtime.GC()
+	for i := range repeatedRoots {
+		if *repeatedRoots[i].live != byte(i) {
+			panic("repeated pointer field was not retained")
+		}
+	}
+}
+
 func main() {
 	expectCollected(func(address uintptr) {
 		inlineRoot = &inlineFalseRoot{
@@ -65,5 +80,6 @@ func main() {
 			live:  new(byte),
 		}
 	})
+	expectRepeatedPointersLive()
 	println("ok")
 }
