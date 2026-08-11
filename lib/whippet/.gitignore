@@ -1,0 +1,16 @@
+/*.o
+/*.bdw
+/*.semi
+/*.mmc
+/*.generational-mmc
+/*.parallel-mmc
+/*.parallel-generational-mmc
+/*.stack-conservative-mmc
+/*.stack-conservative-generational-mmc
+/*.stack-conservative-parallel-mmc
+/*.stack-conservative-parallel-generational-mmc
+/*.heap-conservative-mmc
+/*.heap-conservative-generational-mmc
+/*.heap-conservative-parallel-mmc
+/*.heap-conservative-parallel-generational-mmc
+/.deps/
