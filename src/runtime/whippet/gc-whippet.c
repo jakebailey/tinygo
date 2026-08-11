@@ -57,11 +57,19 @@ static void tinygo_whippet_trace_mask(
     void (*visit)(struct gc_edge, struct gc_heap *, void *),
     struct gc_heap *heap, void *data) {
   while (mask) {
-    if (mask & 1)
-      tinygo_whippet_visit_pointer(*(uintptr_t *)start, visit, heap, data);
-    mask >>= 1;
-    start += sizeof(uintptr_t);
+      unsigned skip = __builtin_ctzll((unsigned long long)mask);
+    uintptr_t addr = start + skip * sizeof(uintptr_t);
+    tinygo_whippet_visit_pointer(*(uintptr_t *)addr, visit, heap, data);
+    mask &= mask - 1;
   }
+}
+
+static uintptr_t tinygo_whippet_load_bitmap_tail(const uint8_t *bitmap,
+                                                  uintptr_t size) {
+  uintptr_t mask = 0;
+  for (uintptr_t i = 0; i < size; i++)
+    mask |= (uintptr_t)bitmap[i] << (i * 8);
+  return mask;
 }
 
 size_t tinygo_whippet_embedder_trace_object(
@@ -94,9 +102,18 @@ size_t tinygo_whippet_embedder_trace_object(
         (const uint8_t *)(layout + sizeof(uintptr_t));
     uintptr_t bitmap_size = (words + 7) / 8;
     while (remaining >= element_size) {
-      for (uintptr_t i = 0; i < bitmap_size; i++)
+      uintptr_t i = 0;
+      for (; i + sizeof(uintptr_t) <= bitmap_size; i += sizeof(uintptr_t)) {
+        uintptr_t mask = *(const uintptr_t *)(const void *)(bitmap + i);
         tinygo_whippet_trace_mask(start + i * 8 * sizeof(uintptr_t),
-                                  bitmap[i], visit, heap, data);
+                                  mask, visit, heap, data);
+      }
+      if (i < bitmap_size) {
+        uintptr_t mask =
+            tinygo_whippet_load_bitmap_tail(bitmap + i, bitmap_size - i);
+        tinygo_whippet_trace_mask(start + i * 8 * sizeof(uintptr_t),
+                                  mask, visit, heap, data);
+      }
       start += element_size;
       remaining -= element_size;
     }
