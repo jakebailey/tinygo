@@ -26,6 +26,7 @@ var BoehmGC = Library{
 			"-DIGNORE_DYNAMIC_LOADING", // we don't support dynamic loading at the moment
 			"-DNO_GETCONTEXT",          // musl doesn't support getcontext()
 			"-DGC_DISABLE_INCREMENTAL", // don't mess with SIGSEGV and such
+			"-DHBLKSIZE=8192",          // amortize metadata for medium objects
 
 			// Use a minimal environment.
 			"-DNO_MSGBOX_ON_ERROR", // don't call MessageBoxA on Windows
@@ -54,11 +55,6 @@ var BoehmGC = Library{
 			//"-DTHREAD_LOCAL_ALLOC",
 
 			"-I" + libdir + "/include",
-		}
-		if strings.HasPrefix(target, "wasm32-") {
-			// Wasm memory grows in 64KiB pages. Slightly larger heap blocks
-			// amortize Boehm's block metadata and traversal overhead.
-			flags = append(flags, "-DHBLKSIZE=8192")
 		}
 		return flags
 	},
