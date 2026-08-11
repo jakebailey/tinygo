@@ -41,7 +41,12 @@ STATIC_ASSERT_EQ(NOFL_MEDIUM_OBJECT_THRESHOLD,
 
 #include "nofl-holeset.h"
 
+#if defined(TINYGO_WHIPPET) && defined(__wasm__)
+// Large alignments force WASI malloc to overallocate by nearly the alignment.
+#define NOFL_SLAB_SIZE (1 * 1024 * 1024)
+#else
 #define NOFL_SLAB_SIZE (4 * 1024 * 1024)
+#endif
 #define NOFL_BLOCK_SIZE (64 * 1024)
 #define NOFL_METADATA_BYTES_PER_BLOCK (NOFL_BLOCK_SIZE / NOFL_GRANULE_SIZE)
 #define NOFL_BLOCKS_PER_SLAB (NOFL_SLAB_SIZE / NOFL_BLOCK_SIZE)
