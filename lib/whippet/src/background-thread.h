@@ -44,11 +44,7 @@ gc_background_thread(void *data) {
   pthread_mutex_lock(&thread->lock);
   while (thread->state == GC_BACKGROUND_THREAD_STARTING)
     pthread_cond_wait(&thread->cond, &thread->lock);
-  struct timespec ts;
-  if (clock_gettime(CLOCK_REALTIME, &ts)) {
-    perror("background thread: failed to get time!");
-    return NULL;
-  }
+  struct timespec ts = {0};
   while (thread->state == GC_BACKGROUND_THREAD_RUNNING) {
     ts.tv_sec += 1;
     pthread_cond_timedwait(&thread->cond, &thread->lock, &ts);

@@ -1,7 +1,6 @@
 #ifndef ADDRESS_SET_H
 #define ADDRESS_SET_H
 
-#include <malloc.h>
 #include <stdint.h>
 #include <string.h>
 

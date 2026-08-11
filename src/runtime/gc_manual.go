@@ -1,4 +1,4 @@
-//go:build !gc.custom
+//go:build !gc.custom && !gc.whippet
 
 package runtime
 

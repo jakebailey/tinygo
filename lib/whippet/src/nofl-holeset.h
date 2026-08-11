@@ -54,9 +54,11 @@ nofl_holeset_sparse_bucket(size_t granules, int for_insert) {
   size_t idx = NOFL_HOLESET_PACKED_GRANULES;
   size_t num = granules - NOFL_HOLESET_PACKED_GRANULES;
   size_t denom = NOFL_HOLESET_MAX_GRANULES - NOFL_HOLESET_PACKED_GRANULES;
-  double frac = (double) (num * NOFL_HOLESET_SPARSE_COUNT) / denom;
-  idx += fmin(for_insert ? floor(frac) : ceil(frac),
-              NOFL_HOLESET_SPARSE_COUNT);
+  size_t scaled = num * NOFL_HOLESET_SPARSE_COUNT;
+  size_t bucket = for_insert ? scaled / denom : (scaled + denom - 1) / denom;
+  if (bucket > NOFL_HOLESET_SPARSE_COUNT)
+    bucket = NOFL_HOLESET_SPARSE_COUNT;
+  idx += bucket;
   GC_ASSERT(idx < 64);
   return idx;
 }

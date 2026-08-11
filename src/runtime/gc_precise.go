@@ -1,4 +1,4 @@
-//go:build gc.precise
+//go:build gc.precise || gc.whippet
 
 // This implements the block-based GC as a partially precise GC. This means that
 // for most heap allocations it is known which words contain a pointer and which

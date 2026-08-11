@@ -1105,6 +1105,15 @@ gc_pin_object(struct gc_mutator *mut, struct gc_ref ref) {
   // Otherwise if it's a large or external object, it won't move.
 }
 
+size_t
+gc_heap_object_size(struct gc_heap *heap, struct gc_ref ref) {
+  struct large_object_node *large =
+    large_object_space_lookup(heap_large_object_space(heap), ref);
+  if (large)
+    return large->key.size;
+  return nofl_space_object_size(heap_nofl_space(heap), ref);
+}
+
 struct gc_ref
 gc_resolve_conservative_ref(struct gc_heap *heap,
                             struct gc_conservative_ref ref,

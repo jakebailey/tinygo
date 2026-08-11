@@ -2,7 +2,7 @@
 #define LARGE_OBJECT_SPACE_H
 
 #include <pthread.h>
-#include <malloc.h>
+
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -556,7 +556,7 @@ large_object_space_init(struct large_object_space *space,
   pthread_mutex_init(&space->object_tree_lock, NULL);
   pthread_mutex_init(&space->remembered_edges_lock, NULL);
 
-  space->page_size = getpagesize();
+  space->page_size = gc_platform_page_size();
   space->page_size_log2 = __builtin_ctz(space->page_size);
 
   space->marked = LARGE_OBJECT_MARK_0;

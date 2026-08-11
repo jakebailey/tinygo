@@ -2,7 +2,6 @@
 #define ROOT_WORKLIST_H
 
 #include <stdatomic.h>
-#include <sys/mman.h>
 #include <unistd.h>
 
 #include "assert.h"

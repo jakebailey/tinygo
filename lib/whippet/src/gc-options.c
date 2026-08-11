@@ -1,5 +1,4 @@
 #include <limits.h>
-#include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -87,21 +86,22 @@ DEFINE_SETTER(DOUBLE, double, double)
 
 static int parse_size(const char *arg, size_t *val) {
   char *end;
-  long i = strtol(arg, &end, 0);
-  if (i < 0 || i == LONG_MAX) return 0;
+  unsigned long long i = strtoull(arg, &end, 0);
+  if (*arg == '-' || i == ULLONG_MAX) return 0;
   if (end == arg) return 0;
+  unsigned long long multiplier = 1;
   char delim = *end;
   if (delim == 'k' || delim == 'K')
-    ++end, i *= 1024L;
+    ++end, multiplier = 1024ULL;
   else if (delim == 'm' || delim == 'M')
-    ++end, i *= 1024L * 1024L;
+    ++end, multiplier = 1024ULL * 1024ULL;
   else if (delim == 'g' || delim == 'G')
-    ++end, i *= 1024L * 1024L * 1024L;
+    ++end, multiplier = 1024ULL * 1024ULL * 1024ULL;
   else if (delim == 't' || delim == 'T')
-    ++end, i *= 1024L * 1024L * 1024L * 1024L;
+    ++end, multiplier = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
 
-  if (*end != '\0') return 0;
-  *val = i;
+  if (*end != '\0' || i > SIZE_MAX / multiplier) return 0;
+  *val = i * multiplier;
   return 1;
 }
 
