@@ -1683,7 +1683,12 @@ nofl_space_set_mark(struct nofl_space *space, uint8_t *metadata,
                     uint8_t byte) {
   uint8_t mask = NOFL_METADATA_BYTE_MARK_MASK;
   byte = (byte & ~mask) | space->current_mark;
+#if GC_PARALLEL
   uint8_t prev = gc_atomic_swap_relaxed(metadata, byte);
+#else
+  uint8_t prev = *metadata;
+  *metadata = byte;
+#endif
   return byte != prev;
 }
 
