@@ -49,12 +49,15 @@ static inline void tinygo_whippet_mutex_relax(void) {
 #endif
 }
 
+uint32_t tinygo_whippet_mutex_try_lock(uint32_t *state) {
+  uint32_t unlocked = 0;
+  return __atomic_compare_exchange_n(state, &unlocked, 1, 1,
+                                     __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+
 void tinygo_whippet_mutex_lock(uint32_t *state) {
-  uint32_t unlocked;
   do {
-    unlocked = 0;
-    if (__atomic_compare_exchange_n(state, &unlocked, 1, 1,
-                                    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+    if (tinygo_whippet_mutex_try_lock(state))
       return;
     tinygo_whippet_mutex_relax();
   } while (1);
