@@ -67,6 +67,7 @@ GC_API_ void gc_collect(struct gc_mutator *mut,
                         enum gc_collection_kind requested_kind);
 
 GC_API_ int gc_heap_contains(struct gc_heap *heap, struct gc_ref ref);
+GC_API_ size_t gc_heap_object_size(struct gc_heap *heap, struct gc_ref ref);
 
 GC_API_ struct gc_ref gc_resolve_conservative_ref(struct gc_heap *heap,
                                                   struct gc_conservative_ref ref,

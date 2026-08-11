@@ -70,7 +70,7 @@ simple_worklist_grow(struct simple_worklist *q) {
   for (size_t i = q->read; i < q->write; i++)
     new_buf[i & new_mask] = old_buf[i & old_mask];
 
-  munmap(old_buf, old_size * sizeof(struct gc_ref));
+  gc_platform_release_memory(old_buf, old_size * sizeof(struct gc_ref));
 
   q->size = new_size;
   q->buf = new_buf;
@@ -108,14 +108,14 @@ static void
 simple_worklist_release(struct simple_worklist *q) {
   size_t byte_size = q->size * sizeof(struct gc_ref);
   if (byte_size >= simple_worklist_release_byte_threshold)
-    madvise(q->buf, byte_size, MADV_DONTNEED);
+    gc_platform_discard_memory(q->buf, byte_size);
   q->read = q->write = 0;
 }
 
 static void
 simple_worklist_destroy(struct simple_worklist *q) {
   size_t byte_size = q->size * sizeof(struct gc_ref);
-  munmap(q->buf, byte_size);
+  gc_platform_release_memory(q->buf, byte_size);
 }
 
 #endif // SIMPLE_WORKLIST_H

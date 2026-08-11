@@ -36,7 +36,6 @@
 #error define SPLAY_TREE_PREFIX before including splay-tree.h
 #endif
 
-#include <malloc.h>
 #include <stdint.h>
 #include <string.h>
 

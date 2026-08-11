@@ -64,6 +64,9 @@ func makeArchive(arfile *os.File, objs []string) error {
 				}{symbol.Name, i})
 			}
 		} else if dbg, err := macho.NewFile(objfile); err == nil {
+			if dbg.Symtab == nil {
+				continue
+			}
 			for _, symbol := range dbg.Symtab.Syms {
 				// See mach-o/nlist.h
 				if symbol.Type&0x0e != 0xe { // (symbol.Type & N_TYPE) != N_SECT

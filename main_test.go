@@ -201,6 +201,14 @@ func TestBuild(t *testing.T) {
 			}
 		})
 
+		t.Run("gc=whippet", func(t *testing.T) {
+			t.Parallel()
+			opts := optionsFromTarget("", sema)
+			opts.GC = "whippet"
+			runTestWithConfig("gc.go", t, opts, nil, nil)
+			runTestWithConfig("gc-whippet.go", t, opts, nil, nil)
+		})
+
 		t.Run("ldflags", func(t *testing.T) {
 			t.Parallel()
 			opts := optionsFromTarget("", sema)
@@ -260,6 +268,13 @@ func TestBuild(t *testing.T) {
 				runTest("gc.go", optionsBoehm, t, nil, nil)
 				runTest("gc-boehm.go", optionsBoehm, t, nil, nil)
 			})
+			t.Run("gc.go-whippet", func(t *testing.T) {
+				t.Parallel()
+				optionsWhippet := optionsFromTarget("wasm", sema)
+				optionsWhippet.GC = "whippet"
+				runTest("gc.go", optionsWhippet, t, nil, nil)
+				runTest("gc-whippet.go", optionsWhippet, t, nil, nil)
+			})
 		})
 		t.Run("WASIp1", func(t *testing.T) {
 			t.Parallel()
@@ -276,6 +291,13 @@ func TestBuild(t *testing.T) {
 				optionsBoehm.GC = "boehm"
 				runTest("gc.go", optionsBoehm, t, nil, nil)
 				runTest("gc-boehm.go", optionsBoehm, t, nil, nil)
+			})
+			t.Run("gc.go-whippet", func(t *testing.T) {
+				t.Parallel()
+				optionsWhippet := optionsFromTarget("wasip1", sema)
+				optionsWhippet.GC = "whippet"
+				runTest("gc.go", optionsWhippet, t, nil, nil)
+				runTest("gc-whippet.go", optionsWhippet, t, nil, nil)
 			})
 		})
 		t.Run("WASIp2", func(t *testing.T) {
