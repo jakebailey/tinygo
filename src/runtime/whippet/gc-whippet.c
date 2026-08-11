@@ -67,7 +67,7 @@ void tinygo_whippet_mutex_unlock(uint32_t *state) {
   __atomic_store_n(state, 0, __ATOMIC_RELEASE);
 }
 
-static void tinygo_whippet_visit_pointer(
+static inline __attribute__((always_inline)) void tinygo_whippet_visit_pointer(
     uintptr_t value,
     void (*visit)(struct gc_edge, struct gc_heap *, void *),
     struct gc_heap *heap, void *data) {
@@ -79,7 +79,7 @@ static void tinygo_whippet_visit_pointer(
     visit(gc_edge(&ref), heap, data);
 }
 
-static void tinygo_whippet_trace_mask(
+static inline __attribute__((always_inline)) void tinygo_whippet_trace_mask(
     uintptr_t start, uintptr_t mask,
     void (*visit)(struct gc_edge, struct gc_heap *, void *),
     struct gc_heap *heap, void *data) {
