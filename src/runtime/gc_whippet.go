@@ -105,18 +105,6 @@ func markCurrentGoroutineStack(sp uintptr) {
 	markRoots(sp, base+libwhippet_object_size(base))
 }
 
-type whippetObjectHeader struct {
-	size   uintptr
-	layout gcLayout
-}
-
-//export tinygo_whippet_trace_object
-func whippetTraceObject(object uintptr) uintptr {
-	header := (*whippetObjectHeader)(unsafe.Pointer(object))
-	header.layout.scan(object+unsafe.Sizeof(*header), header.size-unsafe.Sizeof(*header))
-	return header.size
-}
-
 //export tinygo_whippet_trace_roots
 func whippetTraceRoots() {
 	whippetTracingRoots = true
@@ -140,13 +128,6 @@ func markRoot(addr, root uintptr) {
 		libwhippet_trace_range(addr, addr+unsafe.Sizeof(uintptr(0)))
 	} else {
 		libwhippet_trace_pointer(root)
-	}
-}
-
-func scanConservative(start, len uintptr) {
-	end := start + len
-	for addr := start; addr+unsafe.Sizeof(uintptr(0)) <= end; addr += unsafe.Alignof(uintptr(0)) {
-		markRoot(addr, *(*uintptr)(unsafe.Pointer(addr)))
 	}
 }
 
