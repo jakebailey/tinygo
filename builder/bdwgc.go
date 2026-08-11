@@ -55,6 +55,11 @@ var BoehmGC = Library{
 
 			"-I" + libdir + "/include",
 		}
+		if strings.HasPrefix(target, "wasm32-") {
+			// Wasm memory grows in 64KiB pages. Slightly larger heap blocks
+			// amortize Boehm's block metadata and traversal overhead.
+			flags = append(flags, "-DHBLKSIZE=8192")
+		}
 		return flags
 	},
 	needsLibc: true,

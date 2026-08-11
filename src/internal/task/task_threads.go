@@ -350,3 +350,9 @@ func tinygo_task_current() unsafe.Pointer
 func NumCPU() int {
 	return int(numCPU)
 }
+
+// ThreadsStarted reports whether this program has ever started another
+// scheduler thread. Once true, it remains true for the process lifetime.
+func ThreadsStarted() bool {
+	return atomic.LoadUintptr(&goroutineID) != 0
+}
