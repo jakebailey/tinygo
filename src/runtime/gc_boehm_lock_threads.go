@@ -12,6 +12,9 @@ type boehmMutex struct {
 // Boehm is built without its native thread support, so collector entry must be
 // serialized. Avoid the parking-mutex overhead on the uncontended fast path.
 func (m *boehmMutex) Lock() {
+	if !task.ThreadsStarted() {
+		return
+	}
 	if libgc_mutex_try_lock(&m.state) != 0 {
 		return
 	}
@@ -21,7 +24,9 @@ func (m *boehmMutex) Lock() {
 }
 
 func (m *boehmMutex) Unlock() {
-	libgc_mutex_unlock(&m.state)
+	if task.ThreadsStarted() {
+		libgc_mutex_unlock(&m.state)
+	}
 }
 
 //export tinygo_runtime_bdwgc_mutex_try_lock
