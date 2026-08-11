@@ -30,7 +30,6 @@ static void (*tinygo_whippet_visit_ambiguous)(uintptr_t, uintptr_t, int,
 static struct gc_heap *tinygo_whippet_trace_heap;
 static void *tinygo_whippet_trace_data;
 
-extern uintptr_t tinygo_whippet_trace_object(uintptr_t object);
 extern void tinygo_whippet_trace_roots(void);
 
 static void tinygo_whippet_heap_resized(void *data, size_t size) {
@@ -41,18 +40,68 @@ static void tinygo_whippet_live_data_size(void *data, size_t size) {
   tinygo_whippet_live_bytes = size;
 }
 
+static void tinygo_whippet_visit_pointer(
+    uintptr_t value,
+    void (*visit)(struct gc_edge, struct gc_heap *, void *),
+    struct gc_heap *heap, void *data) {
+  if (!value)
+    return;
+  struct gc_ref ref =
+      gc_resolve_conservative_ref(heap, gc_conservative_ref(value), 1);
+  if (!gc_ref_is_null(ref))
+    visit(gc_edge(&ref), heap, data);
+}
+
+static void tinygo_whippet_trace_mask(
+    uintptr_t start, uintptr_t mask,
+    void (*visit)(struct gc_edge, struct gc_heap *, void *),
+    struct gc_heap *heap, void *data) {
+  while (mask) {
+    if (mask & 1)
+      tinygo_whippet_visit_pointer(*(uintptr_t *)start, visit, heap, data);
+    mask >>= 1;
+    start += sizeof(uintptr_t);
+  }
+}
+
 size_t tinygo_whippet_embedder_trace_object(
     uintptr_t object,
     void (*visit)(struct gc_edge, struct gc_heap *, void *),
     struct gc_heap *heap, void *data) {
+  struct tinygo_whippet_header *header =
+      (struct tinygo_whippet_header *)object;
   if (!visit)
-    return ((struct tinygo_whippet_header *)object)->size;
-  tinygo_whippet_visit = visit;
-  tinygo_whippet_trace_heap = heap;
-  tinygo_whippet_trace_data = data;
-  size_t size = tinygo_whippet_trace_object(object);
-  tinygo_whippet_visit = NULL;
-  return size;
+    return header->size;
+
+  uintptr_t start = (uintptr_t)(header + 1);
+  uintptr_t remaining = header->size - sizeof(*header);
+  uintptr_t layout = header->layout;
+  const uintptr_t size_bits = 4 + sizeof(uintptr_t) / 4;
+
+  if (layout & 1) {
+    uintptr_t words = (layout >> 1) & (((uintptr_t)1 << size_bits) - 1);
+    uintptr_t element_size = words * sizeof(uintptr_t);
+    uintptr_t mask = layout >> (size_bits + 1);
+    while (remaining >= element_size) {
+      tinygo_whippet_trace_mask(start, mask, visit, heap, data);
+      start += element_size;
+      remaining -= element_size;
+    }
+  } else {
+    uintptr_t words = *(uintptr_t *)layout;
+    uintptr_t element_size = words * sizeof(uintptr_t);
+    const uint8_t *bitmap =
+        (const uint8_t *)(layout + sizeof(uintptr_t));
+    uintptr_t bitmap_size = (words + 7) / 8;
+    while (remaining >= element_size) {
+      for (uintptr_t i = 0; i < bitmap_size; i++)
+        tinygo_whippet_trace_mask(start + i * 8 * sizeof(uintptr_t),
+                                  bitmap[i], visit, heap, data);
+      start += element_size;
+      remaining -= element_size;
+    }
+  }
+  return header->size;
 }
 
 void tinygo_whippet_embedder_trace_roots(
@@ -115,14 +164,9 @@ uintptr_t tinygo_whippet_live_size(void) {
 }
 
 void tinygo_whippet_trace_pointer(uintptr_t value) {
-  if (!value)
-    return;
-  struct gc_ref ref = gc_resolve_conservative_ref(
-      tinygo_whippet_trace_heap, gc_conservative_ref(value), 1);
-  if (gc_ref_is_null(ref))
-    return;
-  tinygo_whippet_visit(gc_edge(&ref), tinygo_whippet_trace_heap,
-                       tinygo_whippet_trace_data);
+  tinygo_whippet_visit_pointer(value, tinygo_whippet_visit,
+                               tinygo_whippet_trace_heap,
+                               tinygo_whippet_trace_data);
 }
 
 void tinygo_whippet_trace_range(uintptr_t start, uintptr_t end) {
