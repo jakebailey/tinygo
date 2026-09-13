@@ -210,13 +210,13 @@ TEST_ADDITIONAL_FLAGS ?=
 
 # These packages spend almost all of their test time in a few tests that Go
 # marks as long running. -short omits those tests and keeps the rest.
-# encoding/xml gets the same treatment on its own line below.
 # See https://github.com/tinygo-org/tinygo/issues/5659
 TEST_PACKAGES_SHORT = \
-	archive/zip \
+	index/suffixarray \
 	$(nil)
 
 TEST_PACKAGES_SHORT_HOST := $(filter $(TEST_PACKAGES_SHORT),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
+TEST_ARCHIVE_ZIP_HOST := $(filter archive/zip,$(TEST_PACKAGES_HOST))
 TEST_PACKAGES_PRINTER_HOST := $(filter go/printer,$(TEST_PACKAGES_HOST))
 TEST_PACKAGES_ALLOC_SHA := crypto/sha256 crypto/sha512
 TEST_ALLOC_SHA_SKIP_FLAG := -skip='^(TestExtraMethods|TestAllocations|TestAllocatonsWithTypeAsserts)$$'
@@ -278,7 +278,10 @@ tinygo-test:
 	@# TestExtraMethods: used by many crypto packages and uses reflect.Type.Method which is not implemented.
 	@# TestUnmarshalNestingLimit{Slice,Struct}: encoding/asn1 nesting limit added in
 	@# https://github.com/golang/go/commit/6a6d115f9a7422b2fa081ba6f567eefb4a099462
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_NETIP_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out archive/zip encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_NETIP_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
+ifneq ($(TEST_ARCHIVE_ZIP_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -parallel=1 $(TEST_ARCHIVE_ZIP_HOST)
+endif
 ifneq ($(TEST_PACKAGES_SHORT_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short $(TEST_PACKAGES_SHORT_HOST)
 endif
@@ -293,7 +296,7 @@ endif
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$$' testing/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -run='^TestSynctestMarshal$$' encoding/json
 ifeq ($(TEST_ENCODING_XML),true)
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short -stack-size=16MB encoding/xml
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -stack-size=16MB encoding/xml
 endif
 	@# io/fs requires os.ReadDir, not yet supported on windows or wasi. It also
 	@# requires a large stack-size. Hence, io/fs is only run conditionally.
@@ -302,13 +305,16 @@ ifeq ($(TEST_IOFS),true)
 	$(TINYGO) test -stack-size=6MB io/fs
 endif
 tinygo-test-fast:
-	$(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_HOST))
+	$(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out archive/zip encoding/xml $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_HOST))
 ifneq ($(TEST_PACKAGES_PRINTER_HOST),)
 	$(TINYGO) test -stack-size=1MB $(TEST_PACKAGES_PRINTER_HOST)
 endif
 	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_HOST))
 ifeq ($(TEST_ENCODING_XML),true)
 	$(TINYGO) test $(TEST_SKIP_FLAG) -short -stack-size=16MB encoding/xml
+endif
+ifneq ($(TEST_ARCHIVE_ZIP_HOST),)
+	$(TINYGO) test $(TEST_SKIP_FLAG) -parallel=1 $(TEST_ARCHIVE_ZIP_HOST)
 endif
 tinygo-bench:
 	$(TINYGO) test -bench . $(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW)
