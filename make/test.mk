@@ -214,7 +214,6 @@ TEST_ADDITIONAL_FLAGS ?=
 # See https://github.com/tinygo-org/tinygo/issues/5659
 TEST_PACKAGES_SHORT = \
 	archive/zip \
-	index/suffixarray \
 	$(nil)
 
 TEST_PACKAGES_SHORT_HOST := $(filter $(TEST_PACKAGES_SHORT),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
