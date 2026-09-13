@@ -210,7 +210,6 @@ TEST_ADDITIONAL_FLAGS ?=
 
 # These packages spend almost all of their test time in a few tests that Go
 # marks as long running. -short omits those tests and keeps the rest.
-# encoding/xml gets the same treatment on its own line below.
 # See https://github.com/tinygo-org/tinygo/issues/5659
 TEST_PACKAGES_SHORT = \
 	archive/zip \
@@ -294,7 +293,7 @@ endif
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$$' testing/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -run='^TestSynctestMarshal$$' encoding/json
 ifeq ($(TEST_ENCODING_XML),true)
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short -stack-size=16MB encoding/xml
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -stack-size=16MB encoding/xml
 endif
 	@# io/fs requires os.ReadDir, not yet supported on windows or wasi. It also
 	@# requires a large stack-size. Hence, io/fs is only run conditionally.
