@@ -48,6 +48,7 @@ type Config struct {
 	BuildMode       string
 	CodeModel       string
 	RelocationModel string
+	SpeedLevel      int
 	SizeLevel       int
 	TinyGoVersion   string // for llvm.ident
 	TrimPath        bool
@@ -103,6 +104,8 @@ type context struct {
 	indirectCatchers            map[llvm.Type]llvm.Value
 	asyncifyReplays             map[llvm.Type]llvm.Value
 	functionABIs                map[functionABIKey]functionABI
+	inlineCosts                 map[*ssa.Function]inlineCost
+	inlineCycles                map[*ssa.Function]bool
 	astComments                 map[string]*ast.CommentGroup
 	cgoImportDynamic            map[string]string // //go:cgo_import_dynamic local name -> remote symbol
 	embedGlobals                map[string][]*loader.EmbedFile
@@ -132,6 +135,8 @@ func newContext(moduleName string, machine llvm.TargetMachine, config *Config, d
 		indirectCatchers: map[llvm.Type]llvm.Value{},
 		asyncifyReplays:  map[llvm.Type]llvm.Value{},
 		functionABIs:     map[functionABIKey]functionABI{},
+		inlineCosts:      map[*ssa.Function]inlineCost{},
+		inlineCycles:     map[*ssa.Function]bool{},
 		astComments:      map[string]*ast.CommentGroup{},
 		cgoImportDynamic: map[string]string{},
 	}
@@ -2500,7 +2505,10 @@ func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) 
 			result := b.createIndirectStorage(abi.resultType, "call.result")
 			params = append([]llvm.Value{result}, params...)
 			params = append(params, context)
-			b.createInvoke(calleeType, callee, params, "", instr)
+			call := b.createInvoke(calleeType, callee, params, "", instr)
+			if fn := instr.StaticCallee(); fn != nil {
+				b.addInlineCallSiteAttribute(call, fn)
+			}
 			return result, nil
 		}
 		// This function takes a context parameter.
@@ -2508,7 +2516,11 @@ func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) 
 		params = append(params, context)
 	}
 
-	return b.createInvoke(calleeType, callee, params, "", instr), nil
+	call := b.createInvoke(calleeType, callee, params, "", instr)
+	if fn := instr.StaticCallee(); fn != nil {
+		b.addInlineCallSiteAttribute(call, fn)
+	}
+	return call, nil
 }
 
 // getValue returns the LLVM value of a constant, function value, global, or
