@@ -41,6 +41,20 @@ func testByteSliceStringCompareEmpty() {
 		string(zeroLenWithBacking) == string(uint8Empty))
 }
 
+func testByteToString() {
+	for i := 0; i < 256; i++ {
+		buf := []byte{byte(i)}
+		str := string(buf)
+		buf[0] = 0
+		if len(str) != 1 || str[0] != byte(i) {
+			panic("incorrect one-byte string")
+		}
+	}
+	if string([]byte{}) != "" {
+		panic("incorrect empty string")
+	}
+}
+
 type myString string
 
 type myByte byte
@@ -381,5 +395,6 @@ func main() {
 		mutateGreaterByteString, namedGreaterByteStrings)
 	testByteSliceStringOrder(">=", greaterEqualByteStrings, escapeGreaterEqualByteString,
 		mutateGreaterEqualByteString, namedGreaterEqualByteStrings)
+	testByteToString()
 	var _ = len([]byte(myString("foobar"))) // issue 1246
 }
