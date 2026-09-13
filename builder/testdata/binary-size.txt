@@ -15,7 +15,7 @@ cortex-m-qemu   ./testdata/size-contains z    3093    763    4  4200
 pico2           ./testdata/size-contains z    6672   1160  112  5632
 pico2           ./testdata/size-os       z    6199   1209  128  5592
 pico2           ./testdata/size-os       2   17125   1003  128  5592
-cortex-m-qemu   ./testdata/size-corpus   z    9891   1301   80  4188
-cortex-m-qemu   ./testdata/size-corpus   2   20590    810   72  4188
-riscv-qemu      ./testdata/size-corpus   z   17588   1028   88 16660
-riscv-qemu      ./testdata/size-corpus   2   30184    744   80 16644
+cortex-m-qemu   ./testdata/size-corpus   z    9911   1553   80  4188
+cortex-m-qemu   ./testdata/size-corpus   2   20622   1066   72  4188
+riscv-qemu      ./testdata/size-corpus   z   17588   1284   88 16660
+riscv-qemu      ./testdata/size-corpus   2   30232   1000   80 16644
