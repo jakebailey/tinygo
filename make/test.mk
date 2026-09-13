@@ -232,7 +232,7 @@ tinygo-test tinygo-test-fast: TEST_OPTIONS_regexp = $(HOST_TEST_STACK_SKIP_FLAG)
 tinygo-test tinygo-test-fast: TEST_OPTIONS_path/filepath = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=4MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/parser = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=256MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/xml = $(TEST_SKIP_FLAG) -short -stack-size=16MB
-tinygo-test: TEST_OPTIONS_archive/zip = $(TEST_SKIP_FLAG) -short
+tinygo-test tinygo-test-fast: TEST_OPTIONS_archive/zip = $(TEST_SKIP_FLAG) -parallel=1
 tinygo-test: TEST_OPTIONS_index/suffixarray = $(TEST_SKIP_FLAG) -short
 tinygo-test: TEST_OPTIONS_net/netip := -skip='^TestAddrStringAllocs$$|^TestNoAllocs$$/^(Addr.IsGlobalUnicast|Addr.IsInterfaceLocalMulticast|Addr.IsLinkLocalMulticast|Addr.IsLinkLocalUnicast|Addr.IsPrivate)$$'
 tinygo-test: TEST_OPTIONS_io/fs := -stack-size=6MB
