@@ -206,6 +206,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 		BuildMode:       config.BuildMode(),
 		CodeModel:       config.CodeModel(),
 		RelocationModel: config.RelocationModel(),
+		SpeedLevel:      speedLevel,
 		SizeLevel:       sizeLevel,
 		TinyGoVersion:   goenv.Version(),
 

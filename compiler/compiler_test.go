@@ -6,6 +6,7 @@ import (
 	"go/types"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -352,6 +353,108 @@ func TestValidateWasmFunctionParameters(t *testing.T) {
 	}
 }
 
+func TestAutomaticInlining(t *testing.T) {
+	alwaysInlineKind := llvm.AttributeKindID("alwaysinline")
+	noInlineKind := llvm.AttributeKindID("noinline")
+	for _, opt := range []struct {
+		level        string
+		automatic    bool
+		fastPathOnly bool
+	}{
+		{level: "0"},
+		{level: "1"},
+		{level: "2", automatic: true},
+		{level: "s", fastPathOnly: true},
+		{level: "z", fastPathOnly: true},
+	} {
+		t.Run(opt.level, func(t *testing.T) {
+			options := &compileopts.Options{
+				Target: "wasm",
+				Opt:    opt.level,
+			}
+			mod, errs := testCompilePackage(t, options, "inline-heuristic.go")
+			if len(errs) != 0 {
+				for _, err := range errs {
+					t.Error(err)
+				}
+				return
+			}
+			defer mod.Dispose()
+
+			for _, test := range []struct {
+				name     string
+				noInline bool
+			}{
+				{name: "main.inlineFastPath"},
+				{name: "main.inlineSingleCall"},
+				{name: "main.inlineComplexSlowPath"},
+				{name: "main.inlineExpensiveSlowPath"},
+				{name: "main.inlineTooExpensive"},
+				{name: "main.inlineRecursive"},
+				{name: "main.inlineMutualA"},
+				{name: "main.inlineMutualB"},
+				{name: "main.inlineWithDefer"},
+				{name: "main.inlineWithGo"},
+				{name: "main.inlineWithRecover", noInline: true},
+				{name: "main.inlineDisabled", noInline: true},
+			} {
+				fn := mod.NamedFunction(test.name)
+				if fn.IsNil() {
+					t.Fatalf("missing function %s", test.name)
+				}
+				if got := !fn.GetEnumFunctionAttribute(alwaysInlineKind).IsNil(); got {
+					t.Errorf("%s has function-wide alwaysinline", test.name)
+				}
+				if got := !fn.GetEnumFunctionAttribute(noInlineKind).IsNil(); got != test.noInline {
+					t.Errorf("%s noinline: got %v, want %v", test.name, got, test.noInline)
+				}
+			}
+
+			mainFn := mod.NamedFunction("main.main")
+			if mainFn.IsNil() {
+				t.Fatal("missing function main.main")
+			}
+			callSites := make(map[string][]bool)
+			for _, block := range mainFn.BasicBlocks() {
+				for instruction := block.FirstInstruction(); !instruction.IsNil(); instruction = llvm.NextInstruction(instruction) {
+					if instruction.IsACallInst().IsNil() {
+						continue
+					}
+					callee := instruction.CalledValue()
+					if callee.IsAFunction().IsNil() {
+						continue
+					}
+					name := callee.Name()
+					callSites[name] = append(callSites[name],
+						!instruction.GetCallSiteEnumAttribute(-1, alwaysInlineKind).IsNil())
+				}
+			}
+			for _, test := range []struct {
+				name string
+				want []bool
+			}{
+				{name: "main.inlineFastPath", want: []bool{
+					opt.automatic || opt.fastPathOnly,
+					opt.automatic || opt.fastPathOnly,
+				}},
+				{name: "main.inlineSingleCall", want: []bool{opt.automatic}},
+				{name: "main.inlineComplexSlowPath", want: []bool{opt.automatic}},
+				{name: "main.inlineTooExpensive", want: []bool{false}},
+				{name: "main.inlineRecursive", want: []bool{false}},
+				{name: "main.inlineMutualA", want: []bool{false}},
+				{name: "main.inlineWithDefer", want: []bool{false}},
+				{name: "main.inlineWithGo", want: []bool{false}},
+				{name: "main.inlineWithRecover", want: []bool{false}},
+				{name: "main.inlineDisabled", want: []bool{false}},
+			} {
+				if got := callSites[test.name]; !slices.Equal(got, test.want) {
+					t.Errorf("%s call-site attributes: got %v, want %v", test.name, got, test.want)
+				}
+			}
+		})
+	}
+}
+
 // normalizeIR canonicalizes LLVM-version-specific IR spellings for comparison
 // and when regenerating golden files.
 func normalizeIR(s string) string {
@@ -564,6 +667,10 @@ func testCompilePackageWithDebug(t *testing.T, options *compileopts.Options, fil
 		Options: options,
 		Target:  target,
 	}
+	var speedLevel, sizeLevel int
+	if options.Opt != "" {
+		_, speedLevel, sizeLevel = config.OptLevel()
+	}
 	compilerConfig := &Config{
 		Triple:             config.Triple(),
 		Features:           config.Features(),
@@ -572,6 +679,8 @@ func testCompilePackageWithDebug(t *testing.T, options *compileopts.Options, fil
 		GOARCH:             config.GOARCH(),
 		CodeModel:          config.CodeModel(),
 		RelocationModel:    config.RelocationModel(),
+		SpeedLevel:         speedLevel,
+		SizeLevel:          sizeLevel,
 		Scheduler:          config.Scheduler(),
 		AutomaticStackSize: config.AutomaticStackSize(),
 		DefaultStackSize:   config.StackSize(),

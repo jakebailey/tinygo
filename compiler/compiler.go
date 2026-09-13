@@ -48,6 +48,7 @@ type Config struct {
 	BuildMode       string
 	CodeModel       string
 	RelocationModel string
+	SpeedLevel      int
 	SizeLevel       int
 	TinyGoVersion   string // for llvm.ident
 
@@ -94,6 +95,8 @@ type compilerContext struct {
 	indirectCatchers map[llvm.Type]llvm.Value
 	asyncifyReplays  map[llvm.Type]llvm.Value
 	functionABIs     map[functionABIKey]functionABI
+	inlineCosts      map[*ssa.Function]inlineCost
+	inlineCycles     map[*ssa.Function]bool
 	astComments      map[string]*ast.CommentGroup
 	embedGlobals     map[string][]*loader.EmbedFile
 	pkg              *types.Package
@@ -120,6 +123,8 @@ func newCompilerContext(moduleName string, machine llvm.TargetMachine, config *C
 		indirectCatchers: map[llvm.Type]llvm.Value{},
 		asyncifyReplays:  map[llvm.Type]llvm.Value{},
 		functionABIs:     map[functionABIKey]functionABI{},
+		inlineCosts:      map[*ssa.Function]inlineCost{},
+		inlineCycles:     map[*ssa.Function]bool{},
 		astComments:      map[string]*ast.CommentGroup{},
 	}
 
@@ -2372,7 +2377,10 @@ func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) 
 			result := b.createIndirectStorage(abi.resultType, "call.result")
 			params = append([]llvm.Value{result}, params...)
 			params = append(params, context)
-			b.createInvoke(calleeType, callee, params, "", instr)
+			call := b.createInvoke(calleeType, callee, params, "", instr)
+			if fn := instr.StaticCallee(); fn != nil {
+				b.addInlineCallSiteAttribute(call, fn)
+			}
 			return result, nil
 		}
 		// This function takes a context parameter.
@@ -2380,7 +2388,11 @@ func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) 
 		params = append(params, context)
 	}
 
-	return b.createInvoke(calleeType, callee, params, "", instr), nil
+	call := b.createInvoke(calleeType, callee, params, "", instr)
+	if fn := instr.StaticCallee(); fn != nil {
+		b.addInlineCallSiteAttribute(call, fn)
+	}
+	return call, nil
 }
 
 // getValue returns the LLVM value of a constant, function value, global, or
