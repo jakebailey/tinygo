@@ -402,9 +402,6 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 		r.short("crypto/rsa")
 		r.short("encoding/xml")
 	}
-	if hosted && !opts.bench {
-		r.short("index/suffixarray")
-	}
 
 	if linux {
 		r.stackSizeMB("encoding/asn1", 20)
