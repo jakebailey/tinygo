@@ -59,6 +59,12 @@ func (c *Config) BuildMode() string {
 	return "default"
 }
 
+// TrimPath reports whether local file system paths must be removed from the
+// output.
+func (c *Config) TrimPath() bool {
+	return c.Options.TrimPath
+}
+
 // Features returns a list of features this CPU supports. For example, for a
 // RISC-V processor, that could be "+a,+c,+m". For many targets, an empty list
 // will be returned.
@@ -336,6 +342,9 @@ func (c *Config) LibraryPath(name string) string {
 	if c.LibcNeedsMalloc() {
 		options += "+malloc"
 	}
+	if c.TrimPath() {
+		options += "+trimpath-v1"
+	}
 
 	// No precompiled library found. Determine the path name that will be used
 	// in the build cache.
@@ -383,6 +392,13 @@ func (c *Config) CFlags(libclang bool) []string {
 		)
 	}
 	cflags = append(cflags, c.LibcCFlags()...)
+	if c.TrimPath() {
+		cflags = append(cflags,
+			"-ffile-prefix-map="+goenv.Get("TINYGOROOT")+"=github.com/tinygo-org/tinygo",
+			"-ffile-prefix-map="+goenv.Get("GOCACHE")+"=tinygo-cache",
+			"-fdebug-compilation-dir=.",
+		)
+	}
 	// Always emit debug information. It is optionally stripped at link time.
 	cflags = append(cflags, "-gdwarf-4")
 	// Use the same optimization level as TinyGo.
