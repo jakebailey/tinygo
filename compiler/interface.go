@@ -25,6 +25,20 @@ import (
 // src/internal/reflectlite/type.go.
 const numMethodHasMethodSet = 0x8000
 
+func reflectTypeName(typ *types.Named) string {
+	name := typ.Obj().Name()
+	if typ.TypeArgs().Len() == 0 {
+		return name
+	}
+	qualified := types.TypeString(typ, func(pkg *types.Package) string {
+		return pkg.Name()
+	})
+	if pkg := typ.Obj().Pkg(); pkg != nil {
+		return strings.TrimPrefix(qualified, pkg.Name()+".")
+	}
+	return qualified
+}
+
 // Type kinds for basic types.
 // They must match the constants for the Kind type in src/reflect/type.go.
 var basicTypes = [...]uint8{
@@ -179,15 +193,21 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 	// Short-circuit all the global pointer logic here for pointers to pointers.
 	if typ, ok := typ.(*types.Pointer); ok {
 		if _, ok := typ.Elem().(*types.Pointer); ok {
-			// For a pointer to a pointer, we just increase the pointer by 1
-			ptr := c.getTypeCode(typ.Elem())
-			// if the type is already *****T or higher, we can't make it.
-			if typstr := typ.String(); strings.HasPrefix(typstr, "*****") {
-				c.addError(token.NoPos, fmt.Sprintf("too many levels of pointers for typecode: %s", typstr))
+			depth := 1
+			for elem := typ.Elem(); ; depth++ {
+				pointer, ok := types.Unalias(elem).(*types.Pointer)
+				if !ok {
+					break
+				}
+				elem = pointer.Elem()
 			}
-			return llvm.ConstGEP(c.ctx.Int8Type(), ptr, []llvm.Value{
-				llvm.ConstInt(c.ctx.Int32Type(), 1, false),
-			})
+			if depth < 5 {
+				// For shallow pointers to pointers, increase the pointer by 1.
+				ptr := c.getTypeCode(typ.Elem())
+				return llvm.ConstGEP(c.ctx.Int8Type(), ptr, []llvm.Value{
+					llvm.ConstInt(c.ctx.Int32Type(), 1, false),
+				})
+			}
 		}
 	}
 
@@ -227,16 +247,18 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 		}
 		methodSetType := types.NewStruct([]*types.Var{
 			types.NewVar(token.NoPos, nil, "length", types.Typ[types.Uintptr]),
-			types.NewVar(token.NoPos, nil, "methods", types.NewArray(types.Typ[types.UnsafePointer], int64(len(methods)))),
+			types.NewVar(token.NoPos, nil, "signatures", types.NewArray(types.Typ[types.UnsafePointer], int64(len(methods)))),
+			types.NewVar(token.NoPos, nil, "names", types.NewArray(types.Typ[types.UnsafePointer], int64(len(methods)))),
+			types.NewVar(token.NoPos, nil, "types", types.NewArray(types.Typ[types.UnsafePointer], int64(len(methods)))),
 		}, nil)
-		methodSetValue := c.getMethodSetValue(methods)
+		var methodSetValue llvm.Value
 		switch typ := typ.(type) {
 		case *types.Basic:
 			typeFieldTypes = append(typeFieldTypes,
 				types.NewVar(token.NoPos, nil, "ptrTo", types.Typ[types.UnsafePointer]),
 			)
 		case *types.Named:
-			name := typ.Obj().Name()
+			name := reflectTypeName(typ)
 			var pkgname string
 			if pkg := typ.Obj().Pkg(); pkg != nil {
 				pkgname = pkg.Name()
@@ -340,6 +362,7 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 		if isLocal {
 			c.interfaceTypes.Set(typ, global)
 		}
+		methodSetValue = c.getMethodSetValue(typ, methods)
 		metabyte := getTypeKind(typ)
 
 		// Precompute these so we don't have to calculate them at runtime.
@@ -355,7 +378,7 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 		case *types.Basic:
 			typeFields = []llvm.Value{c.getTypeCode(types.NewPointer(typ))}
 		case *types.Named:
-			name := typ.Obj().Name()
+			name := reflectTypeName(typ)
 			var pkgpath string
 			var pkgname string
 			if pkg := typ.Obj().Pkg(); pkg != nil {
@@ -756,15 +779,20 @@ func (c *compilerContext) getTypeCodeName(t types.Type) (name string, isLocal bo
 		elems := make([]string, t.NumFields())
 		isLocal := false
 		for i := 0; i < t.NumFields(); i++ {
+			field := t.Field(i)
 			embedded := ""
-			if t.Field(i).Embedded() {
+			if field.Embedded() {
 				embedded = "#"
 			}
-			s, local := c.getTypeCodeName(t.Field(i).Type())
+			s, local := c.getTypeCodeName(field.Type())
 			if local {
 				isLocal = true
 			}
-			elems[i] = embedded + t.Field(i).Name() + ":" + s
+			name := field.Name()
+			if !field.Exported() && field.Pkg() != nil {
+				name = field.Pkg().Path() + "." + name
+			}
+			elems[i] = embedded + name + ":" + s
 			if t.Tag(i) != "" {
 				elems[i] += "`" + t.Tag(i) + "`"
 			}
@@ -1218,21 +1246,33 @@ func (c *compilerContext) getMethodsString(itf *types.Interface) string {
 }
 
 // getMethodSetValue creates the method set struct value for a list of methods.
-// The struct contains a length and a sorted array of method signature pointers.
-func (c *compilerContext) getMethodSetValue(methods []*types.Func) llvm.Value {
-	// Create a sorted list of method signature global names.
+func (c *compilerContext) getMethodSetValue(owner types.Type, methods []*types.Func) llvm.Value {
+	// Create a sorted list of methods.
 	type methodRef struct {
-		name  string
-		value llvm.Value
+		signatureName string
+		metadataName  string
+		name          string
+		pkgPath       string
+		pkgName       string
+		signature     llvm.Value
+		methodType    llvm.Value
 	}
 	var refs []methodRef
+	_, ownerIsInterface := owner.Underlying().(*types.Interface)
 	for _, method := range methods {
 		name := method.Name()
+		var pkgPath, pkgName string
 		if !token.IsExported(name) {
-			name = method.Pkg().Path() + "." + name
+			pkgPath = method.Pkg().Path()
+			pkgName = method.Pkg().Name()
 		}
 		s, _ := c.getTypeCodeName(method.Type())
-		globalName := "reflect/types.signature:" + name + ":" + s
+		signatureName := name
+		if pkgPath != "" {
+			signatureName = pkgPath + "." + name
+		}
+		metadataName := signatureName + ":" + s
+		globalName := "reflect/types.signature:" + metadataName
 		value := c.mod.NamedGlobal(globalName)
 		if value.IsNil() {
 			value = llvm.AddGlobal(c.mod, c.ctx.Int8Type(), globalName)
@@ -1254,21 +1294,68 @@ func (c *compilerContext) getMethodSetValue(methods []*types.Func) llvm.Value {
 				value.AddMetadata(0, diglobal)
 			}
 		}
-		refs = append(refs, methodRef{globalName, value})
+		reflectedType := method.Type()
+		if !ownerIsInterface {
+			signature := method.Type().(*types.Signature)
+			params := make([]*types.Var, 0, signature.Params().Len()+1)
+			params = append(params, types.NewVar(token.NoPos, nil, "", owner))
+			for param := range signature.Params().Variables() {
+				params = append(params, param)
+			}
+			reflectedType = types.NewSignatureType(
+				nil,
+				nil,
+				nil,
+				types.NewTuple(params...),
+				signature.Results(),
+				signature.Variadic(),
+			)
+		}
+		refs = append(refs, methodRef{
+			signatureName: signatureName,
+			metadataName:  metadataName,
+			name:          name,
+			pkgPath:       pkgPath,
+			pkgName:       pkgName,
+			signature:     value,
+			methodType:    c.getTypeCode(reflectedType),
+		})
 	}
 	sort.Slice(refs, func(i, j int) bool {
-		return refs[i].name < refs[j].name
+		return refs[i].signatureName < refs[j].signatureName
 	})
 
-	var values []llvm.Value
+	var signatures []llvm.Value
+	var names []llvm.Value
+	var types []llvm.Value
 	for _, ref := range refs {
-		values = append(values, ref.value)
+		signatures = append(signatures, ref.signature)
+		names = append(names, c.getMethodNameGlobal(ref.metadataName, ref.pkgPath, ref.pkgName, ref.name))
+		types = append(types, ref.methodType)
 	}
 
 	return c.ctx.ConstStruct([]llvm.Value{
-		llvm.ConstInt(c.uintptrType, uint64(len(values)), false),
-		llvm.ConstArray(c.dataPtrType, values),
+		llvm.ConstInt(c.uintptrType, uint64(len(refs)), false),
+		llvm.ConstArray(c.dataPtrType, signatures),
+		llvm.ConstArray(c.dataPtrType, names),
+		llvm.ConstArray(c.dataPtrType, types),
 	}, false)
+}
+
+func (c *compilerContext) getMethodNameGlobal(identity, pkgPath, pkgName, name string) llvm.Value {
+	globalName := "reflect/types.methodname:" + identity
+	global := c.mod.NamedGlobal(globalName)
+	if !global.IsNil() {
+		return global
+	}
+	value := c.ctx.ConstString(pkgPath+"\x00"+pkgName+"\x00"+name+"\x00", false)
+	global = llvm.AddGlobal(c.mod, value.Type(), globalName)
+	global.SetInitializer(value)
+	global.SetGlobalConstant(true)
+	global.SetLinkage(llvm.LinkOnceODRLinkage)
+	global.SetAlignment(1)
+	global.SetUnnamedAddr(true)
+	return global
 }
 
 // getInvokeFunction returns the thunk to call the given interface method. The

@@ -1584,7 +1584,6 @@ func TestIsZero(t *testing.T) {
 		}
 	}
 
-	/* // TODO(tinygo): panic/recover support
 	func() {
 		defer func() {
 			if r := recover(); r == nil {
@@ -1593,7 +1592,6 @@ func TestIsZero(t *testing.T) {
 		}()
 		(Value{}).IsZero()
 	}()
-	*/
 }
 
 // extra comment for gofmt
@@ -1706,8 +1704,6 @@ func TestNilMap(t *testing.T) {
 	mv.SetMapIndex(ValueOf("hi"), Value{})
 }
 
-/* // TODO(tinygo): missing chan reflect support
-
 func TestChan(t *testing.T) {
 	for loop := 0; loop < 2; loop++ {
 		var c chan int
@@ -1805,6 +1801,8 @@ func TestChan(t *testing.T) {
 		t.Errorf("Len/Cap = %d/%d want %d/%d", l, m, len(c), cap(c))
 	}
 }
+
+/*
 
 // caseInfo describes a single case in a select test.
 type caseInfo struct {
@@ -3145,8 +3143,6 @@ func TestFieldByIndex(t *testing.T) {
 	}
 }
 
-/*
-
 func TestFieldByName(t *testing.T) {
 	for _, test := range fieldTests {
 		s := TypeOf(test.s)
@@ -3186,8 +3182,6 @@ func TestFieldByName(t *testing.T) {
 		}
 	}
 }
-
-*/
 
 func TestImportPath(t *testing.T) {
 	tests := []struct {
@@ -3437,7 +3431,6 @@ func TestNumMethodOnDDD(t *testing.T) {
 	}
 }
 
-/*
 func TestPtrTo(t *testing.T) {
 	// This block of code means that the ptrToThis field of the
 	// reflect data for *unsafe.Pointer is non zero, see
@@ -3450,7 +3443,17 @@ func TestPtrTo(t *testing.T) {
 
 	typ := TypeOf(z)
 	for i = 0; i < 100; i++ {
-		typ = PointerTo(typ)
+		next := PointerTo(typ)
+		if got := PointerTo(typ); got != next {
+			t.Fatalf("PointerTo returned distinct types %v and %v", next, got)
+		}
+		typ = next
+		if i == 2 {
+			var deep *****unsafe.Pointer
+			if typ != TypeOf(deep) {
+				t.Fatalf("PointerTo returned %v, want static type %v", typ, TypeOf(deep))
+			}
+		}
 	}
 	for i = 0; i < 100; i++ {
 		typ = typ.Elem()
@@ -3483,8 +3486,6 @@ func TestPtrToGC(t *testing.T) {
 		}
 	}
 }
-
-*/
 
 func TestAddr(t *testing.T) {
 	var p struct {
@@ -3614,8 +3615,6 @@ func TestIndex(t *testing.T) {
 	}
 }
 
-/*
-
 func TestSlice(t *testing.T) {
 	xs := []int{1, 2, 3, 4, 5, 6, 7, 8}
 	v := ValueOf(xs).Slice(3, 5).Interface().([]int)
@@ -3731,6 +3730,8 @@ func TestSetLenCap(t *testing.T) {
 	shouldPanic("SetLen", func() { va.SetLen(8) })
 	shouldPanic("SetCap", func() { va.SetCap(8) })
 }
+
+/*
 
 func TestVariadic(t *testing.T) {
 	var b strings.Builder
@@ -3923,6 +3924,8 @@ func TestUnexported(t *testing.T) {
 	shouldPanic("Method", func() { v.Type().Method(0) })
 }
 
+*/
+
 func TestSetPanic(t *testing.T) {
 	ok := func(f func()) { f() }
 	bad := func(f func()) { shouldPanic("Set", f) }
@@ -4008,8 +4011,6 @@ func TestSetPanic(t *testing.T) {
 	bad(func() { clear(v.Field(6).Field(1)) })          // .namedT2.namedT0
 	bad(func() { clear(v.Field(6).Field(1).Field(0)) }) // .namedT2.namedT0.W
 }
-
-*/
 
 type timp int
 
@@ -4140,7 +4141,6 @@ func TestValuePanic(t *testing.T) {
 */
 
 func shouldPanic(expect string, f func()) {
-	return
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -4179,8 +4179,6 @@ func isValid(v Value) {
 	}
 }
 
-/*
-
 func TestAlias(t *testing.T) {
 	x := string("hello")
 	v := ValueOf(&x).Elem()
@@ -4192,8 +4190,6 @@ func TestAlias(t *testing.T) {
 		t.Errorf("aliasing: old=%q new=%q, want hello, world", oldvalue, newvalue)
 	}
 }
-
-*/
 
 var V = ValueOf
 
@@ -4801,8 +4797,6 @@ func TestConvert(t *testing.T) {
 	}
 }
 
-/*
-
 func TestConvertPanic(t *testing.T) {
 	s := make([]byte, 4)
 	p := new([8]byte)
@@ -4846,8 +4840,6 @@ func TestConvertSlice2Array(t *testing.T) {
 		}
 	}
 }
-
-*/
 
 var gFloat32 float32
 
@@ -4987,8 +4979,6 @@ func TestTypeOverflow(t *testing.T) {
 	}
 }
 
-/*
-
 func checkSameType(t *testing.T, x Type, y any) {
 	if x != TypeOf(y) || TypeOf(Zero(x).Interface()) != TypeOf(y) {
 		t.Errorf("did not find preexisting type for %s (vs %s)", TypeOf(x), TypeOf(y))
@@ -5122,6 +5112,8 @@ func TestArrayOf(t *testing.T) {
 	checkSameType(t, ArrayOf(5, TypeOf(T(1))), [5]T{})
 }
 
+/*
+
 func TestArrayOfGC(t *testing.T) {
 	type T *uintptr
 	tt := TypeOf(T(nil))
@@ -5234,6 +5226,8 @@ func TestArrayOfDirectIface(t *testing.T) {
 	}
 }
 
+*/
+
 // Ensure passing in negative lengths panics.
 // See https://golang.org/issue/43603
 func TestArrayOfPanicOnNegativeLength(t *testing.T) {
@@ -5265,6 +5259,8 @@ func TestSliceOf(t *testing.T) {
 	type T1 int
 	checkSameType(t, SliceOf(TypeOf(T1(1))), []T1{})
 }
+
+/*
 
 func TestSliceOverflow(t *testing.T) {
 	// check that MakeSlice panics when size of slice overflows uint
@@ -5312,6 +5308,8 @@ func TestSliceOfGC(t *testing.T) {
 		}
 	}
 }
+
+*/
 
 func TestStructOfFieldName(t *testing.T) {
 	// invalid field name "1nvalid"
@@ -5645,6 +5643,8 @@ func TestStructOfExportRules(t *testing.T) {
 		})
 	}
 }
+
+/*
 
 func TestStructOfGC(t *testing.T) {
 	type T *uintptr
@@ -6232,6 +6232,8 @@ func TestChanOf(t *testing.T) {
 	}
 }
 
+*/
+
 func TestChanOfDir(t *testing.T) {
 	// check construction and use of type not in binary
 	type T string
@@ -6251,6 +6253,8 @@ func TestChanOfDir(t *testing.T) {
 		t.Errorf("chan dir: have %q, want %q", cst.ChanDir().String(), "chan<-")
 	}
 }
+
+/*
 
 func TestChanOfGC(t *testing.T) {
 	done := make(chan bool, 1)
@@ -6300,6 +6304,8 @@ func TestChanOfGC(t *testing.T) {
 	}
 }
 
+*/
+
 func TestMapOf(t *testing.T) {
 	// check construction and use of type not in binary
 	type K string
@@ -6322,6 +6328,8 @@ func TestMapOf(t *testing.T) {
 	// check that invalid key type panics
 	shouldPanic("invalid key type", func() { MapOf(TypeOf((func())(nil)), TypeOf(false)) })
 }
+
+/*
 
 func TestMapOfGCKeys(t *testing.T) {
 	type T *uintptr
@@ -6543,8 +6551,6 @@ func TestEmbed(t *testing.T) {
 	}
 }
 
-/*
-
 func TestAllocsInterfaceBig(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping malloc count in short mode")
@@ -6660,6 +6666,8 @@ func GCFunc(args []Value) []Value {
 	return []Value{}
 }
 
+/*
+
 func TestReflectFuncTraceback(t *testing.T) {
 	f := MakeFunc(TypeOf(func() {}), GCFunc)
 	f.Call([]Value{})
@@ -6673,6 +6681,8 @@ func TestReflectMethodTraceback(t *testing.T) {
 		t.Errorf("Call returned %d; want 8", i)
 	}
 }
+
+*/
 
 func TestSmallZero(t *testing.T) {
 	type T [10]byte
@@ -6736,6 +6746,8 @@ func TestFieldByIndexNil(t *testing.T) {
 
 	t.Fatalf("did not panic")
 }
+
+/*
 
 // Given
 //	type Outer struct {
@@ -7773,8 +7785,6 @@ func TestMapIterNilMap(t *testing.T) {
 	}
 }
 
-/*
-
 func TestMapIterReset(t *testing.T) {
 	iter := new(MapIter)
 
@@ -7895,8 +7905,6 @@ func TestMapIterSafety(t *testing.T) {
 	}()
 }
 
-*/
-
 func TestMapIterNext(t *testing.T) {
 	// The first call to Next should reflect any
 	// insertions to the map since the iterator was created.
@@ -7948,8 +7956,6 @@ func iterateToString(it *MapIter) string {
 	return "[" + strings.Join(got, ", ") + "]"
 }
 
-/*
-
 func TestConvertibleTo(t *testing.T) {
 	t1 := ValueOf(example1.MyStruct{}).Type()
 	t2 := ValueOf(example2.MyStruct{}).Type()
@@ -7966,8 +7972,6 @@ func TestConvertibleTo(t *testing.T) {
 		t.Fatalf("(%s).ConvertibleTo(%s) = true, want false", t3, t4)
 	}
 }
-
-*/
 
 func TestSetIter(t *testing.T) {
 	data := map[string]int{
@@ -8071,6 +8075,8 @@ func TestMethodCallValueCodePtr(t *testing.T) {
 	}
 }
 
+*/
+
 type A struct{}
 type B[T any] struct{}
 
@@ -8085,8 +8091,6 @@ func TestIssue50208(t *testing.T) {
 	}
 }
 
-*/
-
 func TestNegativeKindString(t *testing.T) {
 	x := -1
 	s := Kind(x).String()
@@ -8100,8 +8104,6 @@ type (
 	namedBool  bool
 	namedBytes []byte
 )
-
-/*
 
 func TestValue_Cap(t *testing.T) {
 	a := &[3]int{1, 2, 3}
@@ -8168,8 +8170,6 @@ func TestValue_Len(t *testing.T) {
 		t.Errorf("error is %q, want %q", e, wantStr)
 	}
 }
-
-*/
 
 func TestValue_Comparable(t *testing.T) {
 	var a int
@@ -8351,8 +8351,6 @@ func TestValue_Comparable(t *testing.T) {
 		}
 	}
 }
-
-/*
 
 type ValueEqualTest struct {
 	v, u           any
@@ -8555,6 +8553,8 @@ func TestValue_EqualNonComparable(t *testing.T) {
 		}
 	}
 }
+
+/*
 
 func TestInitFuncTypes(t *testing.T) {
 	n := 100

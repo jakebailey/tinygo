@@ -4,6 +4,7 @@ import (
 	"internal/gclayout"
 	"internal/itoa"
 	"sync/atomic"
+	"unicode"
 	"unsafe"
 )
 
@@ -128,6 +129,18 @@ const (
 	BothDir = RecvDir | SendDir             // chan
 )
 
+func (d ChanDir) String() string {
+	switch d {
+	case SendDir:
+		return "chan<-"
+	case RecvDir:
+		return "<-chan"
+	case BothDir:
+		return "chan"
+	}
+	return "ChanDir" + itoa.Itoa(int(d))
+}
+
 // Type represents the minimal interface for a Go type.
 type Type interface {
 	// These should match the reflectlite.Type implementation in Go.
@@ -239,6 +252,21 @@ type ptrType struct {
 	methods   methodSet // only present when numMethod & numMethodHasMethodSet != 0
 }
 
+type pointerCacheEntry struct {
+	elem       *RawType
+	typ        *RawType
+	allocation unsafe.Pointer
+	next       *pointerCacheEntry
+}
+
+var pointerTypeCache atomic.Pointer[pointerCacheEntry]
+
+//go:extern internal/reflectlite.pointerTypeLinks
+var pointerTypeLinks **RawType
+
+//go:extern internal/reflectlite.pointerTypeLinksLen
+var pointerTypeLinksLen uintptr
+
 type interfaceType struct {
 	RawType
 	ptrTo   *RawType
@@ -268,6 +296,12 @@ type mapType struct {
 	elem      *RawType
 	key       *RawType
 	typeInfo  unsafe.Pointer
+}
+
+type hashmapTypeInfo struct {
+	keyLayout    unsafe.Pointer
+	valueLayout  unsafe.Pointer
+	bucketLayout unsafe.Pointer
 }
 
 //go:extern internal/reflectlite.mapTypeLinks
@@ -314,6 +348,21 @@ type structType struct {
 	// methods methodSet follows after fields, only when numMethod & numMethodHasMethodSet != 0
 }
 
+type dynamicStructType struct {
+	structType
+	dynamicFields []structField
+	fieldData     []string
+	pkgpathData   string
+	layoutData    []byte
+}
+
+type structCacheEntry struct {
+	typ  *RawType
+	next *structCacheEntry
+}
+
+var structLookupCache atomic.Pointer[structCacheEntry]
+
 //go:extern internal/reflectlite.structTypeLinks
 var structTypeLinks **RawType
 
@@ -354,10 +403,15 @@ var funcTypeLinks **RawType
 //go:extern internal/reflectlite.funcTypeLinksLen
 var funcTypeLinksLen uintptr
 
+type methodEntry struct {
+	name *byte
+	typ  *RawType
+}
+
 // Method set, as emitted by the compiler.
 type methodSet struct {
-	length  uintptr
-	methods [0]unsafe.Pointer // variable number of method signature pointers
+	length     uintptr
+	signatures [0]unsafe.Pointer
 }
 
 // Equivalent to (go/types.Type).Underlying(): if this is a named type return
@@ -380,6 +434,14 @@ func (t *RawType) isNamed() bool {
 	return t.meta&flagNamed != 0
 }
 
+func (t *RawType) isNamedForAssign() bool {
+	if t.isNamed() {
+		return true
+	}
+	kind := t.Kind()
+	return kind >= Bool && kind <= String || kind == UnsafePointer
+}
+
 func TypeOf(i interface{}) Type {
 	if i == nil {
 		return nil
@@ -400,7 +462,95 @@ var sliceTypeLinks **RawType
 //go:extern internal/reflectlite.sliceTypeLinksLen
 var sliceTypeLinksLen uintptr
 
+func SliceOf(t Type) Type {
+	elem := t.(*RawType)
+	key := cacheKey{kind: Slice, t1: elem}
+	if typ := loadCachedType(key); typ != nil {
+		return typ
+	}
+
+	for _, typ := range unsafe.Slice(sliceTypeLinks, sliceTypeLinksLen) {
+		if (*elemType)(unsafe.Pointer(typ)).elem == elem {
+			return loadOrStoreCachedType(key, typ)
+		}
+	}
+
+	typ := &elemType{
+		RawType: RawType{meta: uint8(Slice)},
+		elem:    elem,
+	}
+	typ.ptrTo = (*RawType)(unsafe.Add(unsafe.Pointer(&typ.RawType), 1))
+	return loadOrStoreCachedType(key, &typ.RawType)
+}
+
+func loadPointerType(elem *RawType) *RawType {
+	for entry := pointerTypeCache.Load(); entry != nil; entry = entry.next {
+		if entry.elem == elem {
+			return entry.typ
+		}
+	}
+	return nil
+}
+
+func loadLinkedPointerType(elem *RawType) *RawType {
+	for _, typ := range unsafe.Slice(pointerTypeLinks, pointerTypeLinksLen) {
+		if (*ptrType)(unsafe.Pointer(typ)).elem == elem {
+			return typ
+		}
+	}
+	return nil
+}
+
+func isLinkedPointerType(typ *RawType) bool {
+	for _, linked := range unsafe.Slice(pointerTypeLinks, pointerTypeLinksLen) {
+		if linked == typ {
+			return true
+		}
+	}
+	return false
+}
+
+func loadOrStorePointerType(elem, typ *RawType, allocation unsafe.Pointer) *RawType {
+	entry := &pointerCacheEntry{elem: elem, typ: typ, allocation: allocation}
+	for {
+		head := pointerTypeCache.Load()
+		for existing := head; existing != nil; existing = existing.next {
+			if existing.elem == elem {
+				return existing.typ
+			}
+		}
+		entry.next = head
+		if pointerTypeCache.CompareAndSwap(head, entry) {
+			return typ
+		}
+	}
+}
+
+func makePointerType(elem *RawType) (*RawType, unsafe.Pointer) {
+	allocation := new([unsafe.Sizeof(ptrType{}) + 3]byte)
+	address := (uintptr(unsafe.Pointer(allocation)) + 3) &^ 3
+	typ := (*ptrType)(unsafe.Pointer(address))
+	*typ = ptrType{
+		RawType: RawType{meta: uint8(Pointer) | flagComparable | flagIsBinary},
+		elem:    elem,
+	}
+	return &typ.RawType, unsafe.Pointer(allocation)
+}
+
+func isDynamicPointerType(typ *RawType) bool {
+	for entry := pointerTypeCache.Load(); entry != nil; entry = entry.next {
+		if entry.typ == typ {
+			return true
+		}
+	}
+	return false
+}
+
 func pointerTo(t *RawType) *RawType {
+	if typ := loadPointerType(t); typ != nil {
+		return typ
+	}
+
 	if t.isNamed() {
 		return (*elemType)(unsafe.Pointer(t)).ptrTo
 	}
@@ -409,13 +559,17 @@ func pointerTo(t *RawType) *RawType {
 	case Bool, Int, Int8, Int16, Int32, Int64, Uint, Uint8, Uint16, Uint32, Uint64, Uintptr, Complex64, Complex128, Float32, Float64, String, UnsafePointer:
 		return (*basicType)(unsafe.Pointer(t)).ptrTo
 	case Pointer:
-		if tag := t.ptrtag(); tag < 3 {
+		if typ := loadLinkedPointerType(t); typ != nil {
+			return loadOrStorePointerType(t, typ, nil)
+		}
+
+		if tag := t.ptrtag(); tag < 3 &&
+			(tag != 0 || (!isDynamicPointerType(t) && !isLinkedPointerType(t))) {
 			return (*RawType)(unsafe.Add(unsafe.Pointer(t), 1))
 		}
 
-		// TODO(dgryski): This is blocking https://github.com/tinygo-org/tinygo/issues/3131
-		// We need to be able to create types that match existing types to prevent typecode equality.
-		panic("reflect: cannot make *****T type")
+		typ, allocation := makePointerType(t)
+		return loadOrStorePointerType(t, typ, allocation)
 	case Interface:
 		return (*interfaceType)(unsafe.Pointer(t)).ptrTo
 	case Func:
@@ -470,7 +624,11 @@ func (t *RawType) String() string {
 		s := "struct {"
 		for i := 0; i < numField; i++ {
 			f := t.rawField(i)
-			s += " " + f.Name + " " + f.Type.String()
+			s += " "
+			if !f.Anonymous {
+				s += f.Name + " "
+			}
+			s += f.Type.String()
 			if f.Tag != "" {
 				s += " " + quote(string(f.Tag))
 			}
@@ -482,8 +640,23 @@ func (t *RawType) String() string {
 		s += " }"
 		return s
 	case Interface:
-		// TODO(dgryski): Needs actual method set info
-		return "interface {}"
+		methods := &(*interfaceType)(unsafe.Pointer(t)).methods
+		if methods.length == 0 {
+			return "interface {}"
+		}
+		s := "interface { "
+		for i := 0; i < int(methods.length); i++ {
+			if i != 0 {
+				s += "; "
+			}
+			entry := methodSetEntry(methods, i)
+			name, _, pkgName := methodName(entry)
+			if pkgName != "" {
+				s += pkgName + "."
+			}
+			s += name + entry.typ.String()[4:]
+		}
+		return s + " }"
 	case Func:
 		ft := t.funcDescriptor()
 		numIn := int(ft.numIn)
@@ -641,7 +814,7 @@ func (t *RawType) rawField(n int) rawStructField {
 	// This offset could have been stored directly in the array (to make the
 	// lookup faster), but by calculating it on-the-fly a bit of storage can be
 	// saved.
-	field := (*structField)(unsafe.Add(unsafe.Pointer(&descriptor.fields[0]), uintptr(n)*unsafe.Sizeof(structField{})))
+	field := structFieldAt(descriptor, n)
 	data := field.data
 
 	// Read some flags of this field, like whether the field is an embedded
@@ -655,6 +828,13 @@ func (t *RawType) rawField(n int) rawStructField {
 	data = unsafe.Add(data, len(name))
 
 	return rawStructFieldFromPointer(descriptor, field.fieldType, data, flagsByte, name, offset)
+}
+
+func structFieldAt(descriptor *structType, n int) *structField {
+	if descriptor.ptrTo == (*RawType)(unsafe.Add(unsafe.Pointer(&descriptor.RawType), 1)) {
+		return &(*dynamicStructType)(unsafe.Pointer(descriptor)).dynamicFields[n]
+	}
+	return (*structField)(unsafe.Add(unsafe.Pointer(&descriptor.fields[0]), uintptr(n)*unsafe.Sizeof(structField{})))
 }
 
 // rawFieldByNameFunc returns nearly the same value as FieldByNameFunc but without converting the
@@ -671,27 +851,28 @@ func (t *RawType) rawFieldByNameFunc(match func(string) bool) (rawStructField, [
 		index []int
 	}
 
-	queue := make([]fieldWalker, 0, 4)
-	queue = append(queue, fieldWalker{t, nil})
+	current := make([]fieldWalker, 0, 4)
+	next := []fieldWalker{{t: t}}
+	var nextCount map[*RawType]int
+	visited := make(map[*RawType]bool)
 
-	for len(queue) > 0 {
-		type result struct {
-			r     rawStructField
-			index []int
-		}
+	for len(next) > 0 {
+		current, next = next, current[:0]
+		count := nextCount
+		nextCount = nil
+		var result rawStructField
+		var resultIndex []int
+		found := false
 
-		var found []result
-		var nextlevel []fieldWalker
-
-		// For all the structs at this level..
-		for _, ll := range queue {
-			// Iterate over all the fields looking for the matching name
-			// Also calculate field offset.
-
-			descriptor := (*structType)(unsafe.Pointer(ll.t.underlying()))
-			field := &descriptor.fields[0]
+		for _, scan := range current {
+			if visited[scan.t] {
+				continue
+			}
+			visited[scan.t] = true
+			descriptor := (*structType)(unsafe.Pointer(scan.t.underlying()))
 
 			for i := uint16(0); i < descriptor.numField; i++ {
+				field := structFieldAt(descriptor, int(i))
 				data := field.data
 
 				// Read some flags of this field, like whether the field is an embedded
@@ -705,46 +886,44 @@ func (t *RawType) rawFieldByNameFunc(match func(string) bool) (rawStructField, [
 				name := readStringZ(data)
 				data = unsafe.Add(data, len(name))
 				if match(name) {
-					found = append(found, result{
-						rawStructFieldFromPointer(descriptor, field.fieldType, data, flagsByte, name, offset),
-						append(ll.index[:len(ll.index):len(ll.index)], int(i)),
-					})
+					if count[scan.t] > 1 || found {
+						return rawStructField{}, nil, false
+					}
+					result = rawStructFieldFromPointer(descriptor, field.fieldType, data, flagsByte, name, offset)
+					resultIndex = append(scan.index[:len(scan.index):len(scan.index)], int(i))
+					found = true
+					continue
 				}
 
 				structOrPtrToStruct := field.fieldType.Kind() == Struct || (field.fieldType.Kind() == Pointer && field.fieldType.elem().Kind() == Struct)
-				if flagsByte&structFieldFlagIsEmbedded == structFieldFlagIsEmbedded && structOrPtrToStruct {
-					embedded := field.fieldType
-					if embedded.Kind() == Pointer {
-						embedded = embedded.elem()
-					}
-
-					nextlevel = append(nextlevel, fieldWalker{
-						t:     embedded,
-						index: append(ll.index[:len(ll.index):len(ll.index)], int(i)),
-					})
+				if found || flagsByte&structFieldFlagIsEmbedded == 0 || !structOrPtrToStruct {
+					continue
 				}
-
-				// update offset/field pointer if there *is* a next field
-				if i < descriptor.numField-1 {
-					// Increment pointer to the next field.
-					field = (*structField)(unsafe.Add(unsafe.Pointer(field), unsafe.Sizeof(structField{})))
+				embedded := field.fieldType
+				if embedded.Kind() == Pointer {
+					embedded = embedded.elem()
 				}
+				if nextCount[embedded] > 0 {
+					nextCount[embedded] = 2
+					continue
+				}
+				if nextCount == nil {
+					nextCount = make(map[*RawType]int)
+				}
+				nextCount[embedded] = 1
+				if count[scan.t] > 1 {
+					nextCount[embedded] = 2
+				}
+				next = append(next, fieldWalker{
+					t:     embedded,
+					index: append(scan.index[:len(scan.index):len(scan.index)], int(i)),
+				})
 			}
 		}
 
-		// found multiple hits at this level
-		if len(found) > 1 {
-			return rawStructField{}, nil, false
+		if found {
+			return result, resultIndex, true
 		}
-
-		// found the field we were looking for
-		if len(found) == 1 {
-			r := found[0]
-			return r.r, r.index, true
-		}
-
-		// else len(found) == 0, move on to the next level
-		queue = append(queue[:0], nextlevel...)
 	}
 
 	// didn't find it
@@ -989,22 +1168,82 @@ func (r *RawType) ConvertibleTo(u *RawType) bool {
 		if !r.isNamed() && u.Kind() == Pointer && !u.isNamed() && r.elem().underlying() == u.elem().underlying() {
 			return true
 		}
+
+	case Chan:
+		if u.Kind() == Chan && r.underlying().ChanDir() == BothDir &&
+			(!r.isNamed() || !u.isNamed()) && r.elem() == u.elem() {
+			return true
+		}
 	}
 
-	if r.underlying() == u.underlying() {
+	if haveIdenticalUnderlyingType(r, u, false) {
 		return true
 	}
 
-	if u.Kind() == Interface && u.NumMethod() == 0 {
+	if u.Kind() == Interface && r.Implements(u) {
 		return true
 	}
-
-	// TODO(dgryski): Unimplemented
-	// struct types
-	// channels
 
 	return false
 
+}
+
+func haveIdenticalType(t, u *RawType, compareTags bool) bool {
+	if t == u {
+		return true
+	}
+	if t.Kind() != u.Kind() || t.Name() != u.Name() || t.PkgPath() != u.PkgPath() {
+		return false
+	}
+	return haveIdenticalUnderlyingType(t, u, compareTags)
+}
+
+func haveIdenticalUnderlyingType(t, u *RawType, compareTags bool) bool {
+	t = t.underlying()
+	u = u.underlying()
+	if t == u {
+		return true
+	}
+	if t.Kind() != u.Kind() {
+		return false
+	}
+
+	switch t.Kind() {
+	case Bool, Int, Int8, Int16, Int32, Int64,
+		Uint, Uint8, Uint16, Uint32, Uint64, Uintptr,
+		Float32, Float64, Complex64, Complex128, String, UnsafePointer:
+		return true
+	case Array:
+		return t.Len() == u.Len() && haveIdenticalType(t.elem(), u.elem(), compareTags)
+	case Chan:
+		return t.ChanDir() == u.ChanDir() && haveIdenticalType(t.elem(), u.elem(), compareTags)
+	case Interface:
+		return t.NumMethod() == 0 && u.NumMethod() == 0
+	case Map:
+		return haveIdenticalType(t.key(), u.key(), compareTags) &&
+			haveIdenticalType(t.elem(), u.elem(), compareTags)
+	case Pointer, Slice:
+		return haveIdenticalType(t.elem(), u.elem(), compareTags)
+	case Struct:
+		if t.NumField() != u.NumField() || t.PkgPath() != u.PkgPath() {
+			return false
+		}
+		for i := 0; i < t.NumField(); i++ {
+			tf := t.rawField(i)
+			uf := u.rawField(i)
+			if tf.Name != uf.Name ||
+				tf.PkgPath != uf.PkgPath ||
+				!haveIdenticalType(tf.Type, uf.Type, compareTags) ||
+				compareTags && tf.Tag != uf.Tag ||
+				tf.Offset != uf.Offset ||
+				tf.Anonymous != uf.Anonymous {
+				return false
+			}
+		}
+		return true
+	}
+
+	return false
 }
 
 // AssignableTo returns whether a value of type t can be assigned to a variable
@@ -1021,8 +1260,8 @@ func (t *RawType) AssignableTo(u Type) bool {
 		return typeImplementsMethodSet(unsafe.Pointer(t), unsafe.Pointer(&u_itf.methods))
 	}
 
-	t_named := t.isNamed()
-	u_named := u_raw.isNamed()
+	t_named := t.isNamedForAssign()
+	u_named := u_raw.isNamedForAssign()
 	if t_named && u_named {
 		return false
 	}
@@ -1054,9 +1293,8 @@ func (t *RawType) Implements(u Type) bool {
 }
 
 // typeImplementsMethodSet checks whether the concrete type (identified by its
-// typecode pointer) implements the given method set. Both the concrete type's
-// method set and the asserted method set are sorted arrays of method signature
-// pointers, so comparison is O(n+m).
+// typecode pointer) implements the given method set. Both method sets are
+// sorted by signature, so comparison is O(n+m).
 //
 //go:linkname typeImplementsMethodSet runtime.typeImplementsMethodSet
 func typeImplementsMethodSet(concreteType, assertedMethodSet unsafe.Pointer) bool {
@@ -1064,7 +1302,6 @@ func typeImplementsMethodSet(concreteType, assertedMethodSet unsafe.Pointer) boo
 		return false
 	}
 
-	const ptrSize = unsafe.Sizeof((*byte)(nil))
 	itfNumMethod := *(*uintptr)(assertedMethodSet)
 	if itfNumMethod == 0 {
 		return true
@@ -1102,14 +1339,14 @@ func typeImplementsMethodSet(concreteType, assertedMethodSet unsafe.Pointer) boo
 		return false
 	}
 
-	concreteTypePtr := unsafe.Pointer(&methods.methods)
-	concreteTypeEnd := unsafe.Add(concreteTypePtr, uintptr(methods.length)*ptrSize)
+	concreteTypePtr := unsafe.Pointer(&methods.signatures)
+	concreteTypeEnd := unsafe.Add(concreteTypePtr, uintptr(methods.length)*unsafe.Sizeof(unsafe.Pointer(nil)))
 
 	// Iterate over each method in the interface method set, and check whether
 	// the method exists in the method set of the concrete type.
 	// Both method sets are sorted, so we can use a linear scan.
-	assertedTypePtr := unsafe.Add(assertedMethodSet, ptrSize)
-	assertedTypeEnd := unsafe.Add(assertedTypePtr, itfNumMethod*ptrSize)
+	assertedTypePtr := unsafe.Add(assertedMethodSet, unsafe.Sizeof(uintptr(0)))
+	assertedTypeEnd := unsafe.Add(assertedTypePtr, itfNumMethod*unsafe.Sizeof(unsafe.Pointer(nil)))
 	for assertedTypePtr != assertedTypeEnd {
 		assertedMethod := *(*unsafe.Pointer)(assertedTypePtr)
 
@@ -1118,13 +1355,13 @@ func typeImplementsMethodSet(concreteType, assertedMethodSet unsafe.Pointer) boo
 				return false
 			}
 			concreteMethod := *(*unsafe.Pointer)(concreteTypePtr)
-			concreteTypePtr = unsafe.Add(concreteTypePtr, ptrSize)
+			concreteTypePtr = unsafe.Add(concreteTypePtr, unsafe.Sizeof(unsafe.Pointer(nil)))
 			if concreteMethod == assertedMethod {
 				break
 			}
 		}
 
-		assertedTypePtr = unsafe.Add(assertedTypePtr, ptrSize)
+		assertedTypePtr = unsafe.Add(assertedTypePtr, unsafe.Sizeof(unsafe.Pointer(nil)))
 	}
 
 	return true
@@ -1145,7 +1382,7 @@ func (t *RawType) ChanDir() ChanDir {
 		panic(errTypeChanDir)
 	}
 
-	dir := int((*elemType)(unsafe.Pointer(t)).numMethod)
+	dir := int((*elemType)(unsafe.Pointer(t.underlying())).numMethod)
 
 	// nummethod is overloaded for channel to store channel direction
 	return ChanDir(dir)
@@ -1204,9 +1441,11 @@ func (t *RawType) Out(i int) Type {
 }
 
 func (t *RawType) NumMethod() int {
-
 	if t.isNamed() {
 		return int((*namedType)(unsafe.Pointer(t)).numMethod & ^uint16(numMethodHasMethodSet))
+	}
+	if t.ptrtag() != 0 {
+		return 0
 	}
 
 	switch t.Kind() {
@@ -1215,12 +1454,135 @@ func (t *RawType) NumMethod() int {
 	case Struct:
 		return int((*structType)(unsafe.Pointer(t)).numMethod & ^uint16(numMethodHasMethodSet))
 	case Interface:
-		//FIXME: Use len(methods)
-		return (*interfaceType)(unsafe.Pointer(t)).ptrTo.NumMethod()
+		return int((*interfaceType)(unsafe.Pointer(t.underlying())).methods.length)
 	}
 
 	// Other types have no methods attached.  Note we don't panic here.
 	return 0
+}
+
+func (t *RawType) getMethodSet() *methodSet {
+	if t.isNamed() {
+		typ := (*namedType)(unsafe.Pointer(t))
+		if typ.numMethod&numMethodHasMethodSet == 0 {
+			return nil
+		}
+		return (*methodSet)(unsafe.Add(unsafe.Pointer(typ), unsafe.Sizeof(*typ)))
+	}
+	switch t.Kind() {
+	case Interface:
+		return &(*interfaceType)(unsafe.Pointer(t.underlying())).methods
+	case Pointer:
+		typ := (*ptrType)(unsafe.Pointer(t))
+		if typ.numMethod&numMethodHasMethodSet == 0 {
+			return nil
+		}
+		return &typ.methods
+	case Struct:
+		typ := (*structType)(unsafe.Pointer(t))
+		if typ.numMethod&numMethodHasMethodSet == 0 {
+			return nil
+		}
+		fieldSize := unsafe.Sizeof(structField{})
+		return (*methodSet)(unsafe.Add(unsafe.Pointer(&typ.fields[0]), uintptr(typ.numField)*fieldSize))
+	default:
+		return nil
+	}
+}
+
+func methodSetEntry(methods *methodSet, i int) methodEntry {
+	ptrSize := unsafe.Sizeof(unsafe.Pointer(nil))
+	signatures := unsafe.Pointer(&methods.signatures)
+	count := uintptr(methods.length)
+	return methodEntry{
+		name: *(**byte)(unsafe.Add(signatures, (count+uintptr(i))*ptrSize)),
+		typ:  *(**RawType)(unsafe.Add(signatures, (2*count+uintptr(i))*ptrSize)),
+	}
+}
+
+func methodName(entry methodEntry) (name, pkgPath, pkgName string) {
+	if entry.name == nil {
+		return "", "", ""
+	}
+	ptr := unsafe.Pointer(entry.name)
+	pkgPath = readStringZ(ptr)
+	ptr = unsafe.Add(ptr, uintptr(len(pkgPath)+1))
+	pkgName = readStringZ(ptr)
+	ptr = unsafe.Add(ptr, uintptr(len(pkgName)+1))
+	return readStringZ(ptr), pkgPath, pkgName
+}
+
+func isExportedMethod(entry methodEntry) bool {
+	name, pkgPath, _ := methodName(entry)
+	return name != "" && pkgPath == ""
+}
+
+func (t *RawType) Method(i int) MethodInfo {
+	if i < 0 || i >= t.NumMethod() {
+		if t.Kind() == Interface {
+			return MethodInfo{}
+		}
+		panic("reflect: Method index out of range")
+	}
+	methods := t.getMethodSet()
+	if methods == nil {
+		panic("reflect: method metadata is unavailable")
+	}
+	isInterface := t.Kind() == Interface
+	index := 0
+	for j := 0; j < int(methods.length); j++ {
+		entry := methodSetEntry(methods, j)
+		if !isInterface && !isExportedMethod(entry) {
+			continue
+		}
+		if index == i {
+			name, pkgPath, _ := methodName(entry)
+			return MethodInfo{
+				Name:    name,
+				PkgPath: pkgPath,
+				Type:    entry.typ,
+				Index:   i,
+			}
+		}
+		index++
+	}
+	return MethodInfo{Index: i}
+}
+
+func (t *RawType) MethodByName(name string) (MethodInfo, bool) {
+	methods := t.getMethodSet()
+	if methods == nil {
+		if t.NumMethod() != 0 {
+			panic("reflect: method metadata is unavailable")
+		}
+		return MethodInfo{}, false
+	}
+	isInterface := t.Kind() == Interface
+	index := 0
+	for j := 0; j < int(methods.length); j++ {
+		entry := methodSetEntry(methods, j)
+		if !isInterface && !isExportedMethod(entry) {
+			continue
+		}
+		entryName, pkgPath, _ := methodName(entry)
+		if entryName == name {
+			return MethodInfo{
+				Name:    entryName,
+				PkgPath: pkgPath,
+				Type:    entry.typ,
+				Index:   index,
+			}, true
+		}
+		index++
+	}
+	return MethodInfo{}, false
+}
+
+type MethodInfo struct {
+	Name    string
+	PkgPath string
+	Type    *RawType
+	Index   int
 }
 
 // Read and return a null terminated string starting from data.
@@ -1241,8 +1603,8 @@ func (t *RawType) name() string {
 	ptr := unsafe.Add(unsafe.Pointer(ntype), unsafe.Sizeof(*ntype))
 	if ntype.numMethod&numMethodHasMethodSet != 0 {
 		ms := (*methodSet)(ptr)
-		// Skip past the length field and the method pointer entries.
-		ptr = unsafe.Add(ptr, unsafe.Sizeof(uintptr(0))+uintptr(ms.length)*unsafe.Sizeof(unsafe.Pointer(nil)))
+		// Skip past the length field and method entries.
+		ptr = unsafe.Add(ptr, unsafe.Sizeof(uintptr(0))+3*uintptr(ms.length)*unsafe.Sizeof(unsafe.Pointer(nil)))
 	}
 	return readStringZ(ptr)
 }
@@ -1515,20 +1877,390 @@ func align(offset uintptr, alignment uintptr) uintptr {
 	return (offset + alignment - 1) &^ (alignment - 1)
 }
 
-func SliceOf(t Type) Type {
-	panic("unimplemented: reflect.SliceOf()")
+func ChanOf(dir ChanDir, t Type) Type {
+	elem := t.(*RawType)
+	lookupKey := cacheKey{kind: Chan, t1: elem, extra: uintptr(dir)}
+	if typ := loadCachedType(lookupKey); typ != nil {
+		return typ
+	}
+
+	if uint64(elem.Size()) >= 1<<16 {
+		panic("reflect.ChanOf: element size too large")
+	}
+	switch dir {
+	case RecvDir, SendDir, BothDir:
+	default:
+		panic("reflect.ChanOf: invalid dir")
+	}
+
+	for _, typ := range unsafe.Slice(chanTypeLinks, chanTypeLinksLen) {
+		candidate := (*elemType)(unsafe.Pointer(typ))
+		if candidate.elem == elem && ChanDir(candidate.numMethod) == dir {
+			return loadOrStoreCachedType(lookupKey, typ)
+		}
+	}
+
+	typ := &elemType{
+		RawType:   RawType{meta: uint8(Chan) | flagComparable},
+		numMethod: uint16(dir),
+		elem:      elem,
+	}
+	typ.ptrTo = (*RawType)(unsafe.Add(unsafe.Pointer(&typ.RawType), 1))
+	return loadOrStoreCachedType(lookupKey, &typ.RawType)
 }
 
 func ArrayOf(n int, t Type) Type {
-	panic("unimplemented: reflect.ArrayOf()")
+	if n < 0 {
+		panic("reflect: negative length passed to ArrayOf")
+	}
+
+	elemType := t.(*RawType)
+	elemSize := elemType.Size()
+	if elemSize != 0 && uintptr(n) > ^uintptr(0)/elemSize {
+		panic("reflect.ArrayOf: array size would exceed virtual address space")
+	}
+
+	lookupKey := cacheKey{kind: Array, t1: elemType, extra: uintptr(n)}
+	if typ := loadCachedType(lookupKey); typ != nil {
+		return typ
+	}
+
+	for _, typ := range unsafe.Slice(arrayTypeLinks, arrayTypeLinksLen) {
+		candidate := (*arrayType)(unsafe.Pointer(typ))
+		if candidate.elem == elemType && candidate.arrayLen == uintptr(n) {
+			return loadOrStoreCachedType(lookupKey, typ)
+		}
+	}
+
+	meta := uint8(Array)
+	if elemType.Comparable() {
+		meta |= flagComparable
+	}
+	if elemType.isBinary() {
+		meta |= flagIsBinary
+	}
+	typ := &arrayType{
+		RawType:  RawType{meta: meta},
+		elem:     elemType,
+		arrayLen: uintptr(n),
+		slicePtr: SliceOf(elemType).(*RawType),
+		layout:   elemType.gcLayout(),
+	}
+	typ.ptrTo = (*RawType)(unsafe.Add(unsafe.Pointer(&typ.RawType), 1))
+	return loadOrStoreCachedType(lookupKey, &typ.RawType)
 }
 
-func StructOf([]StructField) Type {
-	panic("unimplemented: reflect.StructOf()")
+func StructOf(fields []StructField) Type {
+	if uint(len(fields)) > uint(^uint16(0)) {
+		panic("reflect.StructOf: too many fields")
+	}
+
+	rawFields := make([]rawStructField, len(fields))
+	fieldNames := make(map[string]struct{}, len(fields))
+	var size uintptr
+	var alignment uintptr = 1
+	var pkgpath string
+	pkgpathSet := false
+	hasUnexported := false
+	comparable := true
+	for i, field := range fields {
+		if field.Name == "" {
+			panic("reflect.StructOf: field " + itoa.Itoa(i) + " has no name")
+		}
+		if !isValidFieldName(field.Name) {
+			panic("reflect.StructOf: field " + itoa.Itoa(i) + " has invalid name")
+		}
+		if field.Type == nil {
+			panic("reflect.StructOf: field " + itoa.Itoa(i) + " has no type")
+		}
+		if field.Anonymous && field.PkgPath != "" {
+			panic("reflect.StructOf: field \"" + field.Name + "\" is anonymous but has PkgPath set")
+		}
+		if field.PkgPath == "" && (field.Name[0] == '_' || 'a' <= field.Name[0] && field.Name[0] <= 'z') {
+			panic("reflect.StructOf: field \"" + field.Name + "\" is unexported but missing PkgPath")
+		}
+		if len(field.Tag) > 255 {
+			panic("reflect.StructOf: field " + itoa.Itoa(i) + " has tag longer than 255 bytes")
+		}
+		if _, ok := fieldNames[field.Name]; ok && field.Name != "_" {
+			panic("reflect.StructOf: duplicate field " + field.Name)
+		}
+		fieldNames[field.Name] = struct{}{}
+
+		fieldType := field.Type.(*RawType)
+		if field.Anonymous {
+			if fieldType.Kind() == Pointer {
+				elemKind := fieldType.elem().Kind()
+				if elemKind == Pointer || elemKind == Interface {
+					panic("reflect.StructOf: illegal embedded field type " + fieldType.String())
+				}
+			}
+		}
+
+		if field.PkgPath != "" || !isExportedFieldName(field.Name) {
+			hasUnexported = true
+			if !pkgpathSet {
+				pkgpath = field.PkgPath
+				pkgpathSet = true
+			} else if pkgpath != field.PkgPath {
+				panic("reflect.StructOf: fields with different PkgPath " + pkgpath + " and " + field.PkgPath)
+			}
+		}
+
+		fieldAlignment := uintptr(fieldType.Align())
+		offset := align(size, fieldAlignment)
+		if offset < size {
+			panic("reflect.StructOf: struct size would exceed virtual address space")
+		}
+		size = offset + fieldType.Size()
+		if size < offset || uint64(size) > uint64(^uint32(0)) {
+			panic("reflect.StructOf: struct size would exceed virtual address space")
+		}
+		if fieldAlignment > alignment {
+			alignment = fieldAlignment
+		}
+		comparable = comparable && fieldType.Comparable()
+		rawFields[i] = rawStructField{
+			Name:      field.Name,
+			PkgPath:   field.PkgPath,
+			Type:      fieldType,
+			Tag:       field.Tag,
+			Offset:    offset,
+			Anonymous: field.Anonymous,
+		}
+	}
+
+	alignedSize := align(size, alignment)
+	if alignedSize < size || uint64(alignedSize) > uint64(^uint32(0)) {
+		panic("reflect.StructOf: struct size would exceed virtual address space")
+	}
+	size = alignedSize
+
+	if typ := loadCachedStructType(rawFields); typ != nil {
+		return typ
+	}
+	for _, typ := range unsafe.Slice(structTypeLinks, structTypeLinksLen) {
+		if structTypeMatches(typ, rawFields) {
+			return loadOrStoreCachedStructType(rawFields, typ)
+		}
+	}
+
+	for _, field := range rawFields {
+		if field.Anonymous && embeddedTypeHasMethods(field.Type) {
+			panic("reflect.StructOf: embedded type with methods not implemented")
+		}
+	}
+
+	dynamic := &dynamicStructType{
+		structType: structType{
+			RawType:  RawType{meta: uint8(Struct)},
+			size:     uint32(size),
+			numField: uint16(len(rawFields)),
+		},
+		dynamicFields: make([]structField, len(rawFields)),
+		fieldData:     make([]string, len(rawFields)),
+	}
+	if comparable {
+		dynamic.meta |= flagComparable
+	}
+	if hasUnexported {
+		dynamic.pkgpathData = pkgpath + "\x00"
+		dynamic.pkgpath = unsafe.StringData(dynamic.pkgpathData)
+	}
+	for i, field := range rawFields {
+		var flags byte
+		if field.Anonymous {
+			flags |= structFieldFlagAnonymous | structFieldFlagIsEmbedded
+		}
+		if field.Tag != "" {
+			flags |= structFieldFlagHasTag
+		}
+		if field.PkgPath == "" {
+			flags |= structFieldFlagIsExported
+		}
+		data := []byte{flags}
+		data = appendUvarint32(data, uint32(field.Offset))
+		data = append(data, field.Name...)
+		data = append(data, 0)
+		if field.Tag != "" {
+			data = append(data, byte(len(field.Tag)))
+			data = append(data, field.Tag...)
+		}
+		dynamic.fieldData[i] = string(data)
+		dynamic.dynamicFields[i] = structField{
+			fieldType: field.Type,
+			data:      unsafe.Pointer(unsafe.StringData(dynamic.fieldData[i])),
+		}
+	}
+	dynamic.layout, dynamic.layoutData = makeStructGCLayout(rawFields, size)
+	dynamic.ptrTo = (*RawType)(unsafe.Add(unsafe.Pointer(&dynamic.RawType), 1))
+	return loadOrStoreCachedStructType(rawFields, &dynamic.RawType)
+}
+
+func isExportedFieldName(name string) bool {
+	for _, r := range name {
+		return unicode.IsUpper(r)
+	}
+	return false
+}
+
+func isValidFieldName(name string) bool {
+	for i, r := range name {
+		if i == 0 && !(r == '_' || unicode.IsLetter(r)) {
+			return false
+		}
+		if !(r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)) {
+			return false
+		}
+	}
+	return name != ""
+}
+
+func appendUvarint32(buf []byte, value uint32) []byte {
+	for value >= 0x80 {
+		buf = append(buf, byte(value)|0x80)
+		value >>= 7
+	}
+	return append(buf, byte(value))
+}
+
+func embeddedTypeHasMethods(typ *RawType) bool {
+	if typ.NumMethod() != 0 {
+		return true
+	}
+	return typ.Kind() == Pointer && typ.elem().NumMethod() != 0
+}
+
+func structTypeMatches(typ *RawType, fields []rawStructField) bool {
+	if typ.Kind() != Struct || typ.NumField() != len(fields) {
+		return false
+	}
+	for i, field := range fields {
+		candidate := typ.rawField(i)
+		if candidate.Name != field.Name ||
+			candidate.PkgPath != field.PkgPath ||
+			candidate.Type != field.Type ||
+			candidate.Tag != field.Tag ||
+			candidate.Anonymous != field.Anonymous {
+			return false
+		}
+	}
+	return true
+}
+
+func loadCachedStructType(fields []rawStructField) *RawType {
+	for entry := structLookupCache.Load(); entry != nil; entry = entry.next {
+		if structTypeMatches(entry.typ, fields) {
+			return entry.typ
+		}
+	}
+	return nil
+}
+
+func loadOrStoreCachedStructType(fields []rawStructField, typ *RawType) *RawType {
+	entry := &structCacheEntry{typ: typ}
+	for {
+		head := structLookupCache.Load()
+		for existing := head; existing != nil; existing = existing.next {
+			if structTypeMatches(existing.typ, fields) {
+				return existing.typ
+			}
+		}
+		entry.next = head
+		if structLookupCache.CompareAndSwap(head, entry) {
+			return typ
+		}
+	}
+}
+
+func makeStructGCLayout(fields []rawStructField, size uintptr) (unsafe.Pointer, []byte) {
+	pointerAlign := unsafe.Alignof(uintptr(0))
+	bitmapLen := size / pointerAlign
+	bitmap := make([]byte, (bitmapLen+7)/8)
+	for _, field := range fields {
+		addTypeToGCBitmap(bitmap, field.Offset, field.Type)
+	}
+
+	hasPointers := false
+	for _, bits := range bitmap {
+		hasPointers = hasPointers || bits != 0
+	}
+	if !hasPointers {
+		return gclayout.NoPtrs.AsPtr(), nil
+	}
+
+	layoutAlign := pointerAlign
+	if layoutAlign < 2 {
+		layoutAlign = 2
+	}
+	headerSize := unsafe.Sizeof(uintptr(0))
+	storage := make([]byte, layoutAlign-1+headerSize+uintptr(len(bitmap)))
+	base := uintptr(unsafe.Pointer(unsafe.SliceData(storage)))
+	layoutAddr := align(base, layoutAlign)
+	layout := unsafe.Pointer(layoutAddr)
+	*(*uintptr)(layout) = bitmapLen
+	copy(unsafe.Slice((*byte)(unsafe.Add(layout, headerSize)), len(bitmap)), bitmap)
+	return layout, storage
+}
+
+func addTypeToGCBitmap(bitmap []byte, offset uintptr, typ *RawType) {
+	typ = typ.underlying()
+	switch typ.Kind() {
+	case String, UnsafePointer, Chan, Pointer, Map, Slice:
+		setGCBitmapBit(bitmap, offset)
+	case Interface, Func:
+		setGCBitmapBit(bitmap, offset)
+		setGCBitmapBit(bitmap, offset+unsafe.Sizeof(uintptr(0)))
+	case Array:
+		elem := typ.elem()
+		elemSize := elem.Size()
+		for i := 0; i < typ.Len(); i++ {
+			addTypeToGCBitmap(bitmap, offset+uintptr(i)*elemSize, elem)
+		}
+	case Struct:
+		for i := 0; i < typ.NumField(); i++ {
+			field := typ.rawField(i)
+			addTypeToGCBitmap(bitmap, offset+field.Offset, field.Type)
+		}
+	}
+}
+
+func setGCBitmapBit(bitmap []byte, offset uintptr) {
+	bit := offset / unsafe.Alignof(uintptr(0))
+	bitmap[bit/8] |= 1 << (bit % 8)
 }
 
 func MapOf(key, value Type) Type {
-	panic("unimplemented: reflect.MapOf()")
+	keyType := key.(*RawType)
+	if !keyType.Comparable() {
+		panic("reflect.MapOf: invalid key type " + keyType.String())
+	}
+	valueType := value.(*RawType)
+	lookupKey := cacheKey{kind: Map, t1: keyType, t2: valueType}
+	if typ := loadCachedType(lookupKey); typ != nil {
+		return typ
+	}
+
+	for _, typ := range unsafe.Slice(mapTypeLinks, mapTypeLinksLen) {
+		candidate := (*mapType)(unsafe.Pointer(typ))
+		if candidate.key == keyType && candidate.elem == valueType {
+			return loadOrStoreCachedType(lookupKey, typ)
+		}
+	}
+
+	typ := &mapType{
+		RawType: RawType{meta: uint8(Map)},
+		elem:    valueType,
+		key:     keyType,
+	}
+	typeInfo := &hashmapTypeInfo{
+		keyLayout:    keyType.gcLayout(),
+		valueLayout:  valueType.gcLayout(),
+		bucketLayout: gclayout.Conservative.AsPtr(),
+	}
+	typ.ptrTo = (*RawType)(unsafe.Add(unsafe.Pointer(&typ.RawType), 1))
+	typ.typeInfo = unsafe.Pointer(typeInfo)
+	return loadOrStoreCachedType(lookupKey, &typ.RawType)
 }
 
 func FuncOf(in, out []Type, variadic bool) Type {
