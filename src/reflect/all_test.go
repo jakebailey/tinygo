@@ -1584,7 +1584,6 @@ func TestIsZero(t *testing.T) {
 		}
 	}
 
-	/* // TODO(tinygo): panic/recover support
 	func() {
 		defer func() {
 			if r := recover(); r == nil {
@@ -1593,7 +1592,6 @@ func TestIsZero(t *testing.T) {
 		}()
 		(Value{}).IsZero()
 	}()
-	*/
 }
 
 // extra comment for gofmt
@@ -1706,8 +1704,6 @@ func TestNilMap(t *testing.T) {
 	mv.SetMapIndex(ValueOf("hi"), Value{})
 }
 
-/* // TODO(tinygo): missing chan reflect support
-
 func TestChan(t *testing.T) {
 	for loop := 0; loop < 2; loop++ {
 		var c chan int
@@ -1805,6 +1801,8 @@ func TestChan(t *testing.T) {
 		t.Errorf("Len/Cap = %d/%d want %d/%d", l, m, len(c), cap(c))
 	}
 }
+
+/*
 
 // caseInfo describes a single case in a select test.
 type caseInfo struct {
@@ -3145,8 +3143,6 @@ func TestFieldByIndex(t *testing.T) {
 	}
 }
 
-/*
-
 func TestFieldByName(t *testing.T) {
 	for _, test := range fieldTests {
 		s := TypeOf(test.s)
@@ -3186,8 +3182,6 @@ func TestFieldByName(t *testing.T) {
 		}
 	}
 }
-
-*/
 
 func TestImportPath(t *testing.T) {
 	tests := []struct {
@@ -3437,7 +3431,6 @@ func TestNumMethodOnDDD(t *testing.T) {
 	}
 }
 
-/*
 func TestPtrTo(t *testing.T) {
 	// This block of code means that the ptrToThis field of the
 	// reflect data for *unsafe.Pointer is non zero, see
@@ -3450,7 +3443,17 @@ func TestPtrTo(t *testing.T) {
 
 	typ := TypeOf(z)
 	for i = 0; i < 100; i++ {
-		typ = PointerTo(typ)
+		next := PointerTo(typ)
+		if got := PointerTo(typ); got != next {
+			t.Fatalf("PointerTo returned distinct types %v and %v", next, got)
+		}
+		typ = next
+		if i == 2 {
+			var deep *****unsafe.Pointer
+			if typ != TypeOf(deep) {
+				t.Fatalf("PointerTo returned %v, want static type %v", typ, TypeOf(deep))
+			}
+		}
 	}
 	for i = 0; i < 100; i++ {
 		typ = typ.Elem()
@@ -3483,8 +3486,6 @@ func TestPtrToGC(t *testing.T) {
 		}
 	}
 }
-
-*/
 
 func TestAddr(t *testing.T) {
 	var p struct {
@@ -3614,8 +3615,6 @@ func TestIndex(t *testing.T) {
 	}
 }
 
-/*
-
 func TestSlice(t *testing.T) {
 	xs := []int{1, 2, 3, 4, 5, 6, 7, 8}
 	v := ValueOf(xs).Slice(3, 5).Interface().([]int)
@@ -3731,6 +3730,8 @@ func TestSetLenCap(t *testing.T) {
 	shouldPanic("SetLen", func() { va.SetLen(8) })
 	shouldPanic("SetCap", func() { va.SetCap(8) })
 }
+
+/*
 
 func TestVariadic(t *testing.T) {
 	var b strings.Builder
@@ -7755,8 +7756,6 @@ func TestIssue22073(t *testing.T) {
 	m.Call(nil)
 }
 
-*/
-
 func TestMapIterNonEmptyMap(t *testing.T) {
 	m := map[string]int{"one": 1, "two": 2, "three": 3}
 	iter := ValueOf(m).MapRange()
@@ -7772,8 +7771,6 @@ func TestMapIterNilMap(t *testing.T) {
 		t.Errorf("non-empty result iteratoring nil map: %s", got)
 	}
 }
-
-/*
 
 func TestMapIterReset(t *testing.T) {
 	iter := new(MapIter)
@@ -7894,8 +7891,6 @@ func TestMapIterSafety(t *testing.T) {
 		t.Fatal("Next did not panic")
 	}()
 }
-
-*/
 
 func TestMapIterNext(t *testing.T) {
 	// The first call to Next should reflect any

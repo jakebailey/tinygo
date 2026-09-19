@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 func TestTinyIndirectPointers(t *testing.T) {
@@ -42,6 +43,29 @@ func TestTinyIndirectPointers(t *testing.T) {
 func TestTinyInvalidValueString(t *testing.T) {
 	if got := (Value{}).String(); got != "<invalid Value>" {
 		t.Errorf("Value{}.String() = %q, want %q", got, "<invalid Value>")
+	}
+}
+
+func TestNewAt(t *testing.T) {
+	value := 42
+	v := NewAt(TypeOf(value), unsafe.Pointer(&value))
+	if got, want := v.Type(), TypeOf((*int)(nil)); got != want {
+		t.Fatalf("NewAt type = %v, want %v", got, want)
+	}
+	if got := v.Interface().(*int); got != &value {
+		t.Fatalf("NewAt pointer = %p, want %p", got, &value)
+	}
+	v.Elem().SetInt(23)
+	if value != 23 {
+		t.Fatalf("NewAt value = %d, want 23", value)
+	}
+
+	nilValue := NewAt(TypeOf(value), nil)
+	if !nilValue.IsNil() {
+		t.Fatal("NewAt with nil pointer is not nil")
+	}
+	if nilValue.Elem().IsValid() {
+		t.Fatal("Elem of NewAt with nil pointer is valid")
 	}
 }
 
@@ -366,6 +390,124 @@ func TestTinySlice(t *testing.T) {
 	}
 }
 
+func TestSliceAt(t *testing.T) {
+	array := [3]int{1, 2, 3}
+	value := SliceAt(TypeOf(0), unsafe.Pointer(&array[0]), len(array))
+	if got, want := value.Type(), TypeOf([]int{}); got != want {
+		t.Fatalf("SliceAt type = %v, want %v", got, want)
+	}
+	if got, want := value.Len(), len(array); got != want {
+		t.Fatalf("SliceAt len = %d, want %d", got, want)
+	}
+	if got, want := value.Cap(), len(array); got != want {
+		t.Fatalf("SliceAt cap = %d, want %d", got, want)
+	}
+	value.Index(1).SetInt(4)
+	if array[1] != 4 {
+		t.Fatalf("SliceAt update = %d, want 4", array[1])
+	}
+
+	empty := SliceAt(TypeOf(0), nil, 0)
+	if !empty.IsNil() || empty.Len() != 0 || empty.Cap() != 0 {
+		t.Fatalf("empty SliceAt = %v with len %d and cap %d", empty, empty.Len(), empty.Cap())
+	}
+
+	checkPanic := func(name string, fn func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Errorf("%s did not panic", name)
+			}
+		}()
+		fn()
+	}
+	checkPanic("negative length", func() {
+		SliceAt(TypeOf(0), unsafe.Pointer(&array[0]), -1)
+	})
+	checkPanic("nil pointer", func() {
+		SliceAt(TypeOf(0), nil, 1)
+	})
+}
+
+func TestSlice3AndSetCap(t *testing.T) {
+	slice := make([]int, 3, 6)
+	for i := range cap(slice) {
+		slice[:cap(slice)][i] = i
+	}
+
+	value := ValueOf(slice)
+	sliced := value.Slice3(4, 5, 6).Interface().([]int)
+	if len(sliced) != 1 || cap(sliced) != 2 || sliced[0] != 4 {
+		t.Fatalf("Slice3(4, 5, 6) = %v with cap %d, want [4] with cap 2", sliced, cap(sliced))
+	}
+
+	first := value.Slice3(2, 4, 6)
+	empty := first.Slice3(4, 4, 4)
+	if got, want := empty.UnsafePointer(), first.UnsafePointer(); got != want {
+		t.Fatalf("empty Slice3 pointer = %p, want %p", got, want)
+	}
+
+	array := [4]int{1, 2, 3, 4}
+	arraySlice := ValueOf(&array).Elem().Slice3(1, 2, 3).Interface().([]int)
+	if len(arraySlice) != 1 || cap(arraySlice) != 2 || arraySlice[0] != 2 {
+		t.Fatalf("array Slice3(1, 2, 3) = %v with cap %d, want [2] with cap 2", arraySlice, cap(arraySlice))
+	}
+
+	settable := ValueOf(&slice).Elem()
+	settable.SetCap(5)
+	if len(slice) != 3 || cap(slice) != 5 {
+		t.Fatalf("after SetCap(5), len, cap = %d, %d, want 3, 5", len(slice), cap(slice))
+	}
+	settable.SetLen(5)
+	settable.SetCap(5)
+
+	checkPanic := func(name string, fn func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Errorf("%s did not panic", name)
+			}
+		}()
+		fn()
+	}
+	checkPanic("Slice3 with reversed indexes", func() {
+		value.Slice3(2, 1, 3)
+	})
+	checkPanic("Slice3 with negative index", func() {
+		value.Slice3(-1, 1, 2)
+	})
+	checkPanic("Slice3 beyond capacity", func() {
+		value.Slice3(0, 3, 7)
+	})
+	checkPanic("Slice3 on unaddressable array", func() {
+		ValueOf(array).Slice3(0, 1, 2)
+	})
+	checkPanic("Slice3 on unsupported kind", func() {
+		ValueOf("abc").Slice3(0, 1, 2)
+	})
+	checkPanic("SetCap below length", func() {
+		settable.SetCap(4)
+	})
+	checkPanic("SetCap above capacity", func() {
+		settable.SetCap(6)
+	})
+	checkPanic("SetCap with negative capacity", func() {
+		settable.SetCap(-1)
+	})
+	checkPanic("SetCap on non-slice", func() {
+		ValueOf(new(string)).Elem().SetCap(0)
+	})
+	checkPanic("SetCap on unaddressable slice", func() {
+		ValueOf(slice).SetCap(5)
+	})
+	checkPanic("SetCap on read-only slice", func() {
+		value := ValueOf(&struct {
+			slice []int
+		}{slice}).Elem().Field(0)
+		value.SetCap(5)
+	})
+}
+
 func TestTinyBytes(t *testing.T) {
 	s := []byte("abcde")
 	refs := ValueOf(s)
@@ -608,6 +750,14 @@ func TestTinyNumMethods(t *testing.T) {
 	if got, want := reft.NumMethod(), 1; got != want {
 		t.Errorf("Value Methods=%v, want %v", got, want)
 	}
+
+	doublePointerType := TypeOf((**methodStruct)(nil))
+	if got := doublePointerType.NumMethod(); got != 0 {
+		t.Errorf("Pointer-to-pointer Methods=%v, want 0", got)
+	}
+	if method, ok := doublePointerType.MethodByName("ValueMethod1"); ok {
+		t.Errorf("Pointer-to-pointer MethodByName=%v, want no method", method)
+	}
 }
 
 func TestAssignableTo(t *testing.T) {
@@ -754,6 +904,71 @@ func TestConvertToEmptyInterface(t *testing.T) {
 		t.Error("Convert(map -> interface{})")
 	}
 	_ = v.Interface().(interface{}).(map[string]string)
+}
+
+type conversionInt int
+
+type conversionStructA struct {
+	Value int `json:"a"`
+}
+
+type conversionStructB struct {
+	Value int `json:"b"`
+}
+
+type conversionChan chan int
+
+type conversionInterface interface {
+	Value() int
+}
+
+type conversionExtendedInterface interface {
+	conversionInterface
+	Extra()
+}
+
+type conversionMethods int
+
+func (v conversionMethods) Value() int {
+	return int(v)
+}
+
+func (conversionMethods) Extra() {
+}
+
+func TestConvertCompositeTypes(t *testing.T) {
+	n := 42
+	pointer := ValueOf(&n).Convert(TypeOf((*conversionInt)(nil))).Interface().(*conversionInt)
+	if got := int(*pointer); got != n {
+		t.Fatalf("converted pointer value = %d, want %d", got, n)
+	}
+
+	structValue := conversionStructA{Value: 23}
+	convertedStruct := ValueOf(structValue).Convert(TypeOf(conversionStructB{})).Interface().(conversionStructB)
+	if convertedStruct.Value != structValue.Value {
+		t.Fatalf("converted struct value = %d, want %d", convertedStruct.Value, structValue.Value)
+	}
+
+	channel := make(conversionChan)
+	recv := ValueOf(channel).Convert(TypeOf((<-chan int)(nil))).Interface().(<-chan int)
+	send := ValueOf(channel).Convert(TypeOf((chan<- int)(nil))).Interface().(chan<- int)
+	go func() {
+		send <- 7
+	}()
+	if got := <-recv; got != 7 {
+		t.Fatalf("converted channel received %d, want 7", got)
+	}
+
+	concrete := ValueOf(conversionMethods(9)).Convert(TypeFor[conversionInterface]())
+	if got := concrete.Interface().(conversionInterface).Value(); got != 9 {
+		t.Fatalf("converted concrete interface value = %d, want 9", got)
+	}
+
+	var extended conversionExtendedInterface = conversionMethods(11)
+	convertedInterface := ValueOf(&extended).Elem().Convert(TypeFor[conversionInterface]())
+	if got := convertedInterface.Interface().(conversionInterface).Value(); got != 11 {
+		t.Fatalf("converted interface value = %d, want 11", got)
+	}
 }
 
 func TestClearSlice(t *testing.T) {
@@ -1012,6 +1227,8 @@ type tinyMakeChanElement struct {
 	text string
 }
 
+type namedReflectChan chan int
+
 var tinyMakeChanChurn []*int
 
 //go:noinline
@@ -1021,10 +1238,143 @@ func fillTinyMakeChan(ch chan tinyMakeChanElement) {
 	ch <- tinyMakeChanElement{ptr: value, text: "hello"}
 }
 
+func TestChannelOperations(t *testing.T) {
+	channel := make(chan int, 1)
+	value := ValueOf(channel)
+
+	value.Send(ValueOf(1))
+	if got := <-channel; got != 1 {
+		t.Fatalf("Send value = %d, want 1", got)
+	}
+
+	channel <- 2
+	got, ok := value.Recv()
+	if !ok || got.Int() != 2 {
+		t.Fatalf("Recv = %v, %t, want 2, true", got, ok)
+	}
+
+	if got, ok := value.TryRecv(); got.IsValid() || ok {
+		t.Fatalf("TryRecv on empty channel = %v, %t, want invalid, false", got, ok)
+	}
+	channel <- 3
+	if got, ok := value.TryRecv(); !ok || got.Int() != 3 {
+		t.Fatalf("TryRecv = %v, %t, want 3, true", got, ok)
+	}
+
+	channel <- 4
+	if value.TrySend(ValueOf(5)) {
+		t.Fatal("TrySend on full channel succeeded")
+	}
+	<-channel
+	if !value.TrySend(ValueOf(6)) {
+		t.Fatal("TrySend on empty channel failed")
+	}
+	if got := <-channel; got != 6 {
+		t.Fatalf("TrySend value = %d, want 6", got)
+	}
+
+	channel <- 7
+	value.Close()
+	if got, ok := value.Recv(); !ok || got.Int() != 7 {
+		t.Fatalf("Recv after Close = %v, %t, want 7, true", got, ok)
+	}
+	if got, ok := value.Recv(); ok || got.Int() != 0 {
+		t.Fatalf("Recv from closed channel = %v, %t, want 0, false", got, ok)
+	}
+	if got, ok := value.TryRecv(); ok || got.Int() != 0 {
+		t.Fatalf("TryRecv from closed channel = %v, %t, want 0, false", got, ok)
+	}
+
+	interfaceChannel := make(chan any, 1)
+	ValueOf(interfaceChannel).Send(ValueOf("value"))
+	if got := <-interfaceChannel; got != "value" {
+		t.Fatalf("interface channel value = %v, want value", got)
+	}
+
+	named := make(namedReflectChan, 1)
+	namedValue := ValueOf(named)
+	namedValue.Send(ValueOf(8))
+	if got, ok := namedValue.Recv(); !ok || got.Int() != 8 {
+		t.Fatalf("named channel Recv = %v, %t, want 8, true", got, ok)
+	}
+}
+
+func TestChannelSelect(t *testing.T) {
+	first := make(chan *int)
+	second := make(chan [2]*int, 1)
+	a, b := 1, 2
+	second <- [2]*int{&a, &b}
+
+	chosen, recv, ok := Select([]SelectCase{
+		{Dir: SelectRecv, Chan: ValueOf(first)},
+		{Dir: SelectRecv, Chan: ValueOf(second)},
+	})
+	if chosen != 1 || !ok {
+		t.Fatalf("Select receive chose %d, %t, want 1, true", chosen, ok)
+	}
+	got := recv.Interface().([2]*int)
+	if got[0] != &a || got[1] != &b {
+		t.Fatalf("Select receive = %v, want [%p %p]", got, &a, &b)
+	}
+
+	sendChannel := make(chan string, 1)
+	chosen, recv, ok = Select([]SelectCase{
+		{Dir: SelectSend, Chan: ValueOf(sendChannel), Send: ValueOf("sent")},
+	})
+	if chosen != 0 || recv.IsValid() || ok {
+		t.Fatalf("Select send = %d, %v, %t, want 0, invalid, false", chosen, recv, ok)
+	}
+	if got := <-sendChannel; got != "sent" {
+		t.Fatalf("Select sent %q, want sent", got)
+	}
+
+	chosen, recv, ok = Select([]SelectCase{
+		{Dir: SelectRecv, Chan: ValueOf(first)},
+		{Dir: SelectDefault},
+	})
+	if chosen != 1 || recv.IsValid() || ok {
+		t.Fatalf("Select default = %d, %v, %t, want 1, invalid, false", chosen, recv, ok)
+	}
+
+	blocking := make(chan int)
+	go func() {
+		blocking <- 9
+	}()
+	chosen, recv, ok = Select([]SelectCase{
+		{Dir: SelectRecv, Chan: ValueOf(blocking)},
+	})
+	if chosen != 0 || !ok || recv.Int() != 9 {
+		t.Fatalf("blocking Select = %d, %v, %t, want 0, 9, true", chosen, recv, ok)
+	}
+
+	blockingSend := make(chan int)
+	done := make(chan int)
+	go func() {
+		done <- <-blockingSend
+	}()
+	chosen, recv, ok = Select([]SelectCase{
+		{Dir: SelectSend, Chan: ValueOf(blockingSend), Send: ValueOf(10)},
+	})
+	if chosen != 0 || recv.IsValid() || ok {
+		t.Fatalf("blocking send Select = %d, %v, %t, want 0, invalid, false", chosen, recv, ok)
+	}
+	if got := <-done; got != 10 {
+		t.Fatalf("blocking Select sent %d, want 10", got)
+	}
+
+	interfaceChannel := make(chan any, 1)
+	chosen, _, _ = Select([]SelectCase{
+		{Dir: SelectSend, Chan: ValueOf(interfaceChannel), Send: ValueOf("interface")},
+	})
+	if chosen != 0 {
+		t.Fatalf("interface send Select chose %d, want 0", chosen)
+	}
+	if got := <-interfaceChannel; got != "interface" {
+		t.Fatalf("interface send Select value = %v, want interface", got)
+	}
+}
+
 func TestTinyMakeChan(t *testing.T) {
-	// Value.Send and Value.Recv are not implemented yet, so the channel is
-	// exercised through Interface(): that proves MakeChan returns a working
-	// channel rather than merely a value of the right kind.
 	t.Run("buffered", func(t *testing.T) {
 		v := MakeChan(TypeOf(make(chan int)), 2)
 		if got, want := v.Kind(), Chan; got != want {
