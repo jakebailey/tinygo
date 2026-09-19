@@ -16,12 +16,8 @@ package runtime
 //
 // State is kept in various ways:
 //
-// - The sender value is stored in the sender 'channelOp', which is really a
-//   queue entry. This works for both senders and select operations: a select
-//   operation has a separate value to send for each case.
-// - The receiver value is stored inside Task.Ptr. This works for receivers, and
-//   importantly also works for select which has a single buffer for every
-//   receive operation.
+// - The value storage is kept in the 'channelOp', which is a queue entry.
+// - The receiver value is stored in the channel operation.
 // - The `Task.Data` value stores how the channel operation proceeded. For
 //   normal send/receive operations, it starts at chanOperationWaiting and then
 //   is changed to chanOperationOk or chanOperationClosed depending on whether
@@ -129,13 +125,14 @@ func (q *chanQueue) remove(remove *channelOp) {
 type channelOp struct {
 	next  *channelOp
 	task  *task.Task
-	index uint32         // select index, 0 for non-select operation
-	value unsafe.Pointer // if this is a sender, this is the value to send
+	index uint32 // select index, 0 for non-select operation
+	value unsafe.Pointer
 }
 
 type chanSelectState struct {
-	ch    *channel
-	value unsafe.Pointer
+	ch      *channel
+	value   unsafe.Pointer
+	recvbuf unsafe.Pointer
 }
 
 func chanMake(elementSize uintptr, bufSize uintptr, elementLayout unsafe.Pointer) *channel {
@@ -216,24 +213,21 @@ func (ch *channel) bufferPop(value unsafe.Pointer) {
 // Try to proceed with this send operation without blocking, and return whether
 // the send succeeded. Schedule a returned task only after releasing all locks.
 // Interrupts must be disabled and the channel lock must be held.
-func (ch *channel) trySend(value unsafe.Pointer) (sent bool, wake *task.Task) {
+func (ch *channel) trySend(value unsafe.Pointer) (sent, closed bool, wake *task.Task) {
 	// To make sure we send values in the correct order, we can only send
 	// directly to a receiver when there are no values in the buffer.
 
 	// Do not allow sending on a closed channel.
 	if ch.closed {
-		// Note: we cannot currently recover from this panic.
-		// There's some state in the select statement especially that would be
-		// corrupted if we allowed recovering from this panic.
-		runtimePanic(errSendOnClosedChannel)
+		return false, true, nil
 	}
 
 	// There is no value in the buffer and we have a receiver available. Copy
 	// the value directly into the receiver.
 	if ch.bufLen == 0 {
 		if receiver := ch.receivers.pop(chanOperationOk); receiver != nil {
-			memcpy(receiver.task.Ptr, value, ch.elementSize)
-			return true, receiver.task
+			memcpy(receiver.value, value, ch.elementSize)
+			return true, false, receiver.task
 		}
 	}
 
@@ -241,9 +235,9 @@ func (ch *channel) trySend(value unsafe.Pointer) (sent bool, wake *task.Task) {
 	// store the value in the buffer and continue.
 	if ch.bufLen < ch.bufCap {
 		ch.bufferPush(value)
-		return true, nil
+		return true, false, nil
 	}
-	return false, nil
+	return false, false, nil
 }
 
 func chanSend(ch *channel, value unsafe.Pointer, op *channelOp) {
@@ -257,12 +251,15 @@ func chanSend(ch *channel, value unsafe.Pointer, op *channelOp) {
 	ch.lock.Lock()
 
 	// See whether we can proceed immediately, and if so, return early.
-	if sent, wake := ch.trySend(value); sent {
+	if sent, closed, wake := ch.trySend(value); sent || closed {
 		ch.lock.Unlock()
 		if wake != nil {
 			scheduleTask(wake)
 		}
 		interrupt.Restore(mask)
+		if closed {
+			runtimePanic(errSendOnClosedChannel)
+		}
 		return
 	}
 
@@ -352,10 +349,10 @@ func chanRecv(ch *channel, value unsafe.Pointer, op *channelOp) bool {
 	// We can't proceed, so we add ourselves to the list of receivers and wait
 	// until we're awoken.
 	t := task.Current()
-	t.Ptr = value
 	t.SetDataUint32(chanOperationWaiting)
 	op.task = t
 	op.index = 0
+	op.value = value
 	ch.receivers.push(op)
 	if synctestIsEnabled() && ch.synctest != nil {
 		synctestTaskBlock(t)
@@ -381,7 +378,7 @@ func chanTrySend(ch *channel, value unsafe.Pointer) bool {
 	mask := interrupt.Disable()
 	ch.lock.Lock()
 
-	sent, wake := ch.trySend(value)
+	sent, closed, wake := ch.trySend(value)
 
 	ch.lock.Unlock()
 	if wake != nil {
@@ -389,6 +386,9 @@ func chanTrySend(ch *channel, value unsafe.Pointer) bool {
 	}
 	interrupt.Restore(mask)
 
+	if closed {
+		runtimePanic(errSendOnClosedChannel)
+	}
 	return sent
 }
 
@@ -450,7 +450,7 @@ func chanClose(ch *channel) {
 		}
 
 		// Zero the value that the receiver is getting.
-		memzero(receiver.task.Ptr, ch.elementSize)
+		memzero(receiver.value, ch.elementSize)
 
 		receiver.next = nil
 		if wakeTail == nil {
@@ -545,6 +545,7 @@ func chanSelect(recvbuf unsafe.Pointer, states []chanSelectState, ops []channelO
 	const selectNoIndex = ^uint32(0)
 	selectIndex := selectNoIndex
 	selectOk := true
+	selectClosed := false
 	var wake *task.Task
 
 	// Iterate over each state, and see if it can proceed.
@@ -568,15 +569,20 @@ func chanSelect(recvbuf unsafe.Pointer, states []chanSelectState, ops []channelO
 		}
 
 		if state.value == nil { // chan receive
-			if received, ok, sender := state.ch.tryRecv(recvbuf); received {
+			stateRecvbuf := state.recvbuf
+			if stateRecvbuf == nil {
+				stateRecvbuf = recvbuf
+			}
+			if received, ok, sender := state.ch.tryRecv(stateRecvbuf); received {
 				selectIndex = uint32(i)
 				selectOk = ok
 				wake = sender
 				break
 			}
 		} else { // chan send
-			if sent, receiver := state.ch.trySend(state.value); sent {
+			if sent, closed, receiver := state.ch.trySend(state.value); sent || closed {
 				selectIndex = uint32(i)
+				selectClosed = closed
 				wake = receiver
 				break
 			}
@@ -593,6 +599,9 @@ func chanSelect(recvbuf unsafe.Pointer, states []chanSelectState, ops []channelO
 			scheduleTask(wake)
 		}
 		interrupt.Restore(mask)
+		if selectClosed {
+			runtimePanic(errSendOnClosedChannel)
+		}
 		return selectIndex, selectOk
 	}
 
@@ -603,7 +612,6 @@ func chanSelect(recvbuf unsafe.Pointer, states []chanSelectState, ops []channelO
 	// senders and receivers use a compare-and-exchange atomic operation on
 	// t.Data so that only one will be able to "take" this select operation.
 	t := task.Current()
-	t.Ptr = recvbuf
 	t.SetDataUint32(chanOperationWaiting)
 	for i, state := range states {
 		if state.ch == nil {
@@ -613,6 +621,10 @@ func chanSelect(recvbuf unsafe.Pointer, states []chanSelectState, ops []channelO
 		op.task = t
 		op.index = uint32(i)
 		if state.value == nil { // chan receive
+			op.value = state.recvbuf
+			if op.value == nil {
+				op.value = recvbuf
+			}
 			state.ch.receivers.push(op)
 		} else { // chan send
 			op.value = state.value
@@ -655,5 +667,8 @@ func chanSelect(recvbuf unsafe.Pointer, states []chanSelectState, ops []channelO
 	selectIndex = t.DataUint32() >> 2
 	selectOk = t.DataUint32()&chanOperationMask != chanOperationClosed
 
+	if !selectOk && states[selectIndex].value != nil {
+		runtimePanic(errSendOnClosedChannel)
+	}
 	return selectIndex, selectOk
 }

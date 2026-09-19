@@ -48,6 +48,7 @@ type Config struct {
 	BuildMode       string
 	CodeModel       string
 	RelocationModel string
+	SpeedLevel      int
 	SizeLevel       int
 	TinyGoVersion   string // for llvm.ident
 	TrimPath        bool
@@ -97,6 +98,8 @@ type compilerContext struct {
 	indirectCatchers map[llvm.Type]llvm.Value
 	asyncifyReplays  map[llvm.Type]llvm.Value
 	functionABIs     map[functionABIKey]functionABI
+	inlineCosts      map[*ssa.Function]inlineCost
+	inlineCycles     map[*ssa.Function]bool
 	astComments      map[string]*ast.CommentGroup
 	cgoImportDynamic map[string]string // //go:cgo_import_dynamic local name -> remote symbol
 	embedGlobals     map[string][]*loader.EmbedFile
@@ -126,6 +129,8 @@ func newCompilerContext(moduleName string, machine llvm.TargetMachine, config *C
 		indirectCatchers: map[llvm.Type]llvm.Value{},
 		asyncifyReplays:  map[llvm.Type]llvm.Value{},
 		functionABIs:     map[functionABIKey]functionABI{},
+		inlineCosts:      map[*ssa.Function]inlineCost{},
+		inlineCycles:     map[*ssa.Function]bool{},
 		astComments:      map[string]*ast.CommentGroup{},
 		cgoImportDynamic: map[string]string{},
 	}
@@ -1582,6 +1587,15 @@ func (b *builder) createInstruction(instr ssa.Instruction) {
 	}
 
 	switch instr := instr.(type) {
+	case *ssa.Call:
+		b.markReflectMethodUse(&instr.Call)
+	case *ssa.Defer:
+		b.markReflectMethodUse(&instr.Call)
+	case *ssa.Go:
+		b.markReflectMethodUse(&instr.Call)
+	}
+
+	switch instr := instr.(type) {
 	case ssa.Value:
 		if value, err := b.createExpr(instr); err != nil {
 			// This expression could not be parsed. Add the error to the list
@@ -1649,6 +1663,36 @@ func (b *builder) createInstruction(instr ssa.Instruction) {
 		b.storeValue(llvmAddr, instr.Val)
 	default:
 		b.addError(instr.Pos(), "unknown instruction: "+instr.String())
+	}
+}
+
+func (b *builder) markReflectMethodUse(call *ssa.CallCommon) {
+	pkg := b.fn.Pkg
+	if pkg == nil && b.fn.Origin() != nil {
+		pkg = b.fn.Origin().Pkg
+	}
+	if pkg != nil {
+		switch pkg.Pkg.Path() {
+		case "reflect", "internal/reflectlite":
+			return
+		}
+	}
+
+	var method *types.Func
+	if call.IsInvoke() {
+		method = call.Method
+	} else if callee := call.StaticCallee(); callee != nil {
+		if object := callee.Object(); object != nil {
+			method, _ = object.(*types.Func)
+		}
+	}
+	if method == nil || method.Pkg() == nil || method.Pkg().Path() != "reflect" {
+		return
+	}
+	switch method.Name() {
+	case "Method", "MethodByName", "Methods":
+		attr := b.ctx.CreateStringAttribute("tinygo-reflect-method", "")
+		b.llvmFn.AddFunctionAttr(attr)
 	}
 }
 
@@ -2355,6 +2399,8 @@ func (b *builder) createBuiltin(argTypes []types.Type, argValues []llvm.Value, c
 //
 // This is also where compiler intrinsics are implemented.
 func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) {
+	b.markRuntimeFeatureUse(instr)
+
 	// See if this is an intrinsic function that is handled specially.
 	if fn := instr.StaticCallee(); fn != nil {
 		// Direct function call, either to a named or anonymous (directly
@@ -2483,7 +2529,10 @@ func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) 
 			result := b.createIndirectStorage(abi.resultType, "call.result")
 			params = append([]llvm.Value{result}, params...)
 			params = append(params, context)
-			b.createInvoke(calleeType, callee, params, "", instr)
+			call := b.createInvoke(calleeType, callee, params, "", instr)
+			if fn := instr.StaticCallee(); fn != nil {
+				b.addInlineCallSiteAttribute(call, fn)
+			}
 			return result, nil
 		}
 		// This function takes a context parameter.
@@ -2491,7 +2540,11 @@ func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) 
 		params = append(params, context)
 	}
 
-	return b.createInvoke(calleeType, callee, params, "", instr), nil
+	call := b.createInvoke(calleeType, callee, params, "", instr)
+	if fn := instr.StaticCallee(); fn != nil {
+		b.addInlineCallSiteAttribute(call, fn)
+	}
+	return call, nil
 }
 
 // getValue returns the LLVM value of a constant, function value, global, or

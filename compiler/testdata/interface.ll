@@ -10,14 +10,20 @@ target triple = "wasm32-unknown-wasi"
 @"reflect/types.type:basic:int" = linkonce_odr constant { i8, ptr } { i8 -62, ptr @"reflect/types.type:pointer:basic:int" }, align 4
 @"reflect/types.type:pointer:basic:int" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:basic:int" }, align 4
 @"reflect/types.type:pointer:named:error" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:named:error" }, align 4
+@"reflect/types.type:named:error" = linkonce_odr constant { i8, i16, ptr, ptr, ptr, { i32, [1 x ptr], [1 x ptr], [1 x ptr] }, [7 x i8] } { i8 116, i16 -32767, ptr @"reflect/types.type:pointer:named:error", ptr @"reflect/types.type:interface:{Error:func:{}{basic:string}}", ptr @"reflect/types.type.pkgpath.empty", { i32, [1 x ptr], [1 x ptr], [1 x ptr] } { i32 1, [1 x ptr] [ptr @"reflect/types.signature:Error:func:{}{basic:string}"], [1 x ptr] [ptr @"reflect/types.methodname:Error:func:{}{basic:string}"], [1 x ptr] [ptr @"reflect/types.type:func:{}{basic:string}"] }, [7 x i8] c".error\00" }, align 4
 @"reflect/types.signature:Error:func:{}{basic:string}" = linkonce_odr constant i8 0, align 1
-@"reflect/types.type:named:error" = linkonce_odr constant { i8, i16, ptr, ptr, ptr, { i32, [1 x ptr] }, [7 x i8] } { i8 116, i16 -32767, ptr @"reflect/types.type:pointer:named:error", ptr @"reflect/types.type:interface:{Error:func:{}{basic:string}}", ptr @"reflect/types.type.pkgpath.empty", { i32, [1 x ptr] } { i32 1, [1 x ptr] [ptr @"reflect/types.signature:Error:func:{}{basic:string}"] }, [7 x i8] c".error\00" }, align 4
+@"reflect/types.type:func:{}{basic:string}" = linkonce_odr constant { i8, i8, i16, ptr, [1 x ptr] } { i8 24, i8 0, i16 1, ptr @"reflect/types.type:pointer:func:{}{basic:string}", [1 x ptr] [ptr @"reflect/types.type:basic:string"] }, align 4
+@"reflect/types.type:basic:string" = linkonce_odr constant { i8, ptr } { i8 81, ptr @"reflect/types.type:pointer:basic:string" }, align 4
+@"reflect/types.type:pointer:basic:string" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:basic:string" }, align 4
+@"reflect/types.type:pointer:func:{}{basic:string}" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:func:{}{basic:string}" }, align 4
+@"reflect/types.methodname:Error:func:{}{basic:string}" = linkonce_odr unnamed_addr constant [8 x i8] c"\00\00Error\00", align 1
 @"reflect/types.type.pkgpath.empty" = linkonce_odr unnamed_addr constant [1 x i8] zeroinitializer, align 1
-@"reflect/types.type:interface:{Error:func:{}{basic:string}}" = linkonce_odr constant { i8, ptr, { i32, [1 x ptr] } } { i8 84, ptr @"reflect/types.type:pointer:interface:{Error:func:{}{basic:string}}", { i32, [1 x ptr] } { i32 1, [1 x ptr] [ptr @"reflect/types.signature:Error:func:{}{basic:string}"] } }, align 4
+@"reflect/types.type:interface:{Error:func:{}{basic:string}}" = linkonce_odr constant { i8, ptr, { i32, [1 x ptr], [1 x ptr], [1 x ptr] } } { i8 84, ptr @"reflect/types.type:pointer:interface:{Error:func:{}{basic:string}}", { i32, [1 x ptr], [1 x ptr], [1 x ptr] } { i32 1, [1 x ptr] [ptr @"reflect/types.signature:Error:func:{}{basic:string}"], [1 x ptr] [ptr @"reflect/types.methodname:Error:func:{}{basic:string}"], [1 x ptr] [ptr @"reflect/types.type:func:{}{basic:string}"] } }, align 4
 @"reflect/types.type:pointer:interface:{Error:func:{}{basic:string}}" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:interface:{Error:func:{}{basic:string}}" }, align 4
 @"reflect/types.type:pointer:interface:{String:func:{}{basic:string}}" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:interface:{String:func:{}{basic:string}}" }, align 4
+@"reflect/types.type:interface:{String:func:{}{basic:string}}" = linkonce_odr constant { i8, ptr, { i32, [1 x ptr], [1 x ptr], [1 x ptr] } } { i8 84, ptr @"reflect/types.type:pointer:interface:{String:func:{}{basic:string}}", { i32, [1 x ptr], [1 x ptr], [1 x ptr] } { i32 1, [1 x ptr] [ptr @"reflect/types.signature:String:func:{}{basic:string}"], [1 x ptr] [ptr @"reflect/types.methodname:String:func:{}{basic:string}"], [1 x ptr] [ptr @"reflect/types.type:func:{}{basic:string}"] } }, align 4
 @"reflect/types.signature:String:func:{}{basic:string}" = linkonce_odr constant i8 0, align 1
-@"reflect/types.type:interface:{String:func:{}{basic:string}}" = linkonce_odr constant { i8, ptr, { i32, [1 x ptr] } } { i8 84, ptr @"reflect/types.type:pointer:interface:{String:func:{}{basic:string}}", { i32, [1 x ptr] } { i32 1, [1 x ptr] [ptr @"reflect/types.signature:String:func:{}{basic:string}"] } }, align 4
+@"reflect/types.methodname:String:func:{}{basic:string}" = linkonce_odr unnamed_addr constant [9 x i8] c"\00\00String\00", align 1
 @"reflect/types.typeid:basic:int" = external constant i8
 @"reflect/types.type:slice:named:main.assertionElem" = linkonce_odr constant { i8, i16, ptr, ptr } { i8 22, i16 0, ptr @"reflect/types.type:pointer:slice:named:main.assertionElem", ptr @"reflect/types.type:named:main.assertionElem" }, align 4
 @"reflect/types.type:pointer:slice:named:main.assertionElem" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:slice:named:main.assertionElem" }, align 4
@@ -165,10 +171,10 @@ typeswitch.next5:                                 ; preds = %typeassert.next33
   ret i1 false
 }
 
-; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+; Function Attrs: nocallback nofree nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.lifetime.start.p0(ptr nocapture) #2
 
-; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+; Function Attrs: nocallback nofree nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.lifetime.end.p0(ptr nocapture) #2
 
 ; Function Attrs: nounwind
@@ -224,7 +230,7 @@ declare %runtime._string @"interface:{Error:func:{}{basic:string}}.Error$invoke"
 
 attributes #0 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #1 = { nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
-attributes #2 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
+attributes #2 = { nocallback nofree nounwind willreturn memory(argmem: readwrite) }
 attributes #3 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" "tinygo-methods"="reflect/methods.Error:func:{}{basic:string}" }
 attributes #4 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" "tinygo-methods"="reflect/methods.String:func:{}{basic:string}" }
 attributes #5 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" "tinygo-invoke"="main.$methods.foo:func:{basic:int}{basic:uint8}" "tinygo-methods"="reflect/methods.String:func:{}{basic:string}; main.$methods.foo:func:{basic:int}{basic:uint8}" }
