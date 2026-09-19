@@ -4149,7 +4149,6 @@ func TestValuePanic(t *testing.T) {
 */
 
 func shouldPanic(expect string, f func()) {
-	return
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -4996,13 +4995,13 @@ func TestTypeOverflow(t *testing.T) {
 	}
 }
 
-/*
-
 func checkSameType(t *testing.T, x Type, y any) {
 	if x != TypeOf(y) || TypeOf(Zero(x).Interface()) != TypeOf(y) {
 		t.Errorf("did not find preexisting type for %s (vs %s)", TypeOf(x), TypeOf(y))
 	}
 }
+
+/*
 
 func TestArrayOf(t *testing.T) {
 	// check construction and use of type not in binary
@@ -5251,6 +5250,8 @@ func TestArrayOfPanicOnNegativeLength(t *testing.T) {
 	})
 }
 
+*/
+
 func TestSliceOf(t *testing.T) {
 	// check construction and use of type not in binary
 	type T int
@@ -5274,6 +5275,8 @@ func TestSliceOf(t *testing.T) {
 	type T1 int
 	checkSameType(t, SliceOf(TypeOf(T1(1))), []T1{})
 }
+
+/*
 
 func TestSliceOverflow(t *testing.T) {
 	// check that MakeSlice panics when size of slice overflows uint
