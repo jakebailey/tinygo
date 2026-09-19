@@ -6312,6 +6312,8 @@ func TestChanOfGC(t *testing.T) {
 	}
 }
 
+*/
+
 func TestMapOf(t *testing.T) {
 	// check construction and use of type not in binary
 	type K string
@@ -6334,6 +6336,8 @@ func TestMapOf(t *testing.T) {
 	// check that invalid key type panics
 	shouldPanic("invalid key type", func() { MapOf(TypeOf((func())(nil)), TypeOf(false)) })
 }
+
+/*
 
 func TestMapOfGCKeys(t *testing.T) {
 	type T *uintptr
