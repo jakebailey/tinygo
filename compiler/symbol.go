@@ -232,6 +232,8 @@ func (c *compilerContext) getFunction(fn *ssa.Function) (llvm.Type, llvm.Value) 
 		llvmFn.AddAttributeAtIndex(3, c.ctx.CreateEnumAttribute(llvm.AttributeKindID(llvmutil.NoCaptureAttrName()), 0))
 	case "runtime.hashmapGenericDelete":
 		llvmFn.AddAttributeAtIndex(2, c.ctx.CreateEnumAttribute(llvm.AttributeKindID(llvmutil.NoCaptureAttrName()), 0))
+	case "runtime.chanTrySend", "runtime.chanTryRecv":
+		llvmFn.AddAttributeAtIndex(2, c.ctx.CreateEnumAttribute(llvm.AttributeKindID(llvmutil.NoCaptureAttrName()), 0))
 	case "runtime.trackPointer":
 		// This function is necessary for tracking pointers on the stack in a
 		// portable way (see gc_stack_portable.go). Indicate to the optimizer
