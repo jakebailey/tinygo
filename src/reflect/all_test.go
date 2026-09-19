@@ -6312,6 +6312,8 @@ func TestChanOfGC(t *testing.T) {
 	}
 }
 
+*/
+
 func TestMapOf(t *testing.T) {
 	// check construction and use of type not in binary
 	type K string
@@ -6406,6 +6408,8 @@ func TestMapOfGCValues(t *testing.T) {
 		}
 	}
 }
+
+/*
 
 func TestTypelinksSorted(t *testing.T) {
 	var last string
