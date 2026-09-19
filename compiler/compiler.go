@@ -48,6 +48,7 @@ type Config struct {
 	BuildMode       string
 	CodeModel       string
 	RelocationModel string
+	SpeedLevel      int
 	SizeLevel       int
 	TinyGoVersion   string // for llvm.ident
 	TrimPath        bool
@@ -103,6 +104,8 @@ type context struct {
 	indirectCatchers            map[llvm.Type]llvm.Value
 	asyncifyReplays             map[llvm.Type]llvm.Value
 	functionABIs                map[functionABIKey]functionABI
+	inlineCosts                 map[*ssa.Function]inlineCost
+	inlineCycles                map[*ssa.Function]bool
 	astComments                 map[string]*ast.CommentGroup
 	cgoImportDynamic            map[string]string // //go:cgo_import_dynamic local name -> remote symbol
 	embedGlobals                map[string][]*loader.EmbedFile
@@ -132,6 +135,8 @@ func newContext(moduleName string, machine llvm.TargetMachine, config *Config, d
 		indirectCatchers: map[llvm.Type]llvm.Value{},
 		asyncifyReplays:  map[llvm.Type]llvm.Value{},
 		functionABIs:     map[functionABIKey]functionABI{},
+		inlineCosts:      map[*ssa.Function]inlineCost{},
+		inlineCycles:     map[*ssa.Function]bool{},
 		astComments:      map[string]*ast.CommentGroup{},
 		cgoImportDynamic: map[string]string{},
 	}
@@ -1600,6 +1605,9 @@ func (b *builder) createInstruction(instr ssa.Instruction) {
 
 	switch instr := instr.(type) {
 	case ssa.Value:
+		if call, ok := instr.(*ssa.Call); ok {
+			b.markReflectMethodUse(&call.Call)
+		}
 		if value, err := b.createExpr(instr); err != nil {
 			// This expression could not be parsed. Add the error to the list
 			// of diagnostics and continue with an undef value.
@@ -1615,8 +1623,10 @@ func (b *builder) createInstruction(instr ssa.Instruction) {
 	case *ssa.DebugRef:
 		// ignore
 	case *ssa.Defer:
+		b.markReflectMethodUse(&instr.Call)
 		b.createDefer(instr)
 	case *ssa.Go:
+		b.markReflectMethodUse(&instr.Call)
 		// Start a new goroutine.
 		b.createGo(instr)
 	case *ssa.If:
@@ -1666,6 +1676,48 @@ func (b *builder) createInstruction(instr ssa.Instruction) {
 		b.storeValue(llvmAddr, instr.Val)
 	default:
 		b.addError(instr.Pos(), "unknown instruction: "+instr.String())
+	}
+}
+
+func (b *builder) markReflectMethodUse(call *ssa.CallCommon) {
+	pkg := b.fn.Pkg
+	if pkg == nil && b.fn.Origin() != nil {
+		pkg = b.fn.Origin().Pkg
+	}
+	var callerPkg *types.Package
+	if pkg != nil {
+		callerPkg = pkg.Pkg
+	} else if recv := b.fn.Signature.Recv(); recv != nil {
+		receiver := types.Unalias(recv.Type())
+		if pointer, ok := receiver.(*types.Pointer); ok {
+			receiver = types.Unalias(pointer.Elem())
+		}
+		if named, ok := receiver.(*types.Named); ok {
+			callerPkg = named.Obj().Pkg()
+		}
+	}
+	if callerPkg != nil {
+		switch callerPkg.Path() {
+		case "reflect", "internal/reflectlite":
+			return
+		}
+	}
+
+	var method *types.Func
+	if call.IsInvoke() {
+		method = call.Method
+	} else if callee := call.StaticCallee(); callee != nil {
+		if object := callee.Object(); object != nil {
+			method, _ = object.(*types.Func)
+		}
+	}
+	if method == nil || method.Pkg() == nil || method.Pkg().Path() != "reflect" {
+		return
+	}
+	switch method.Name() {
+	case "Method", "MethodByName", "Methods":
+		attr := b.ctx.CreateStringAttribute("tinygo-reflect-method", "")
+		b.llvmFn.AddFunctionAttr(attr)
 	}
 }
 
@@ -2500,7 +2552,10 @@ func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) 
 			result := b.createIndirectStorage(abi.resultType, "call.result")
 			params = append([]llvm.Value{result}, params...)
 			params = append(params, context)
-			b.createInvoke(calleeType, callee, params, "", instr)
+			call := b.createInvoke(calleeType, callee, params, "", instr)
+			if fn := instr.StaticCallee(); fn != nil {
+				b.addInlineCallSiteAttribute(call, fn)
+			}
 			return result, nil
 		}
 		// This function takes a context parameter.
@@ -2508,7 +2563,11 @@ func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) 
 		params = append(params, context)
 	}
 
-	return b.createInvoke(calleeType, callee, params, "", instr), nil
+	call := b.createInvoke(calleeType, callee, params, "", instr)
+	if fn := instr.StaticCallee(); fn != nil {
+		b.addInlineCallSiteAttribute(call, fn)
+	}
+	return call, nil
 }
 
 // getValue returns the LLVM value of a constant, function value, global, or

@@ -127,6 +127,7 @@ TEST_PACKAGES_LINUX := \
 	strings \
 	testing/cryptotest \
 	testing/fstest \
+	testing/quick \
 	$(nil)
 
 TEST_PACKAGES_DARWIN := $(TEST_PACKAGES_LINUX)
@@ -232,7 +233,7 @@ TEST_OPTIONS_unicode/utf8 := -skip='^(TestAllocationsDecode)$$'
 TEST_OPTIONS_context := -skip='^TestAllocs$$'
 TEST_OPTIONS_mime := -skip='^TestLookupMallocs$$'
 TEST_OPTIONS_net/textproto := -skip='^TestCommonHeaders$$'
-TEST_OPTIONS_reflect := -skip='^TestMapIterSet$$'
+TEST_OPTIONS_reflect :=
 TEST_OPTIONS_bytes := -skip='^(TestNewBufferShallow|TestReplace)$$'
 TEST_OPTIONS_slices := -skip='^(TestGrow|TestInsert|TestConcat)$$'
 TEST_OPTIONS_strings := -skip='^(TestBuilderAllocs|TestBuilderGrow|TestBuilderGrowSizeclasses|TestIndexRune|TestReplace)$$'
@@ -241,13 +242,13 @@ TEST_OPTIONS_encoding/gob := -skip='^(TestIgnoreDepthLimit|TestCountEncodeMalloc
 
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/printer := -stack-size=1MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/gob := -stack-size=1MB -skip='^(TestCountDecodeMallocs|TestCountEncodeMallocs)$$'
+tinygo-test tinygo-test-fast: TEST_OPTIONS_testing/quick := -stack-size=1MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/build/constraint = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=1MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_regexp = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=1MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_path/filepath = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=4MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/parser = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=256MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/xml = $(TEST_SKIP_FLAG) -short -stack-size=16MB
 tinygo-test: TEST_OPTIONS_archive/zip = $(TEST_SKIP_FLAG) -short
-tinygo-test: TEST_OPTIONS_index/suffixarray = $(TEST_SKIP_FLAG) -short
 tinygo-test: TEST_OPTIONS_net/netip := -skip='^TestAddrStringAllocs$$|^TestNoAllocs$$/^(Addr.IsGlobalUnicast|Addr.IsInterfaceLocalMulticast|Addr.IsLinkLocalMulticast|Addr.IsLinkLocalUnicast|Addr.IsPrivate)$$'
 tinygo-test: TEST_OPTIONS_io/fs := -stack-size=6MB
 ifeq ($(OS),Windows_NT)
@@ -261,7 +262,7 @@ tinygo-test-fast: HOST_TEST_STACK_SKIP_FLAG = $(TEST_SKIP_FLAG)
 tinygo-test-baremetal: TEST_OPTIONS_strconv := -skip='TestCountMallocs|TestAllocationsFromBytes'
 tinygo-test-baremetal: TEST_OPTIONS_unicode/utf16 := -skip='TestAllocationsDecode'
 tinygo-test-baremetal: TEST_OPTIONS_unicode/utf8 := -skip='TestAllocationsDecode'
-tinygo-test-baremetal: TEST_OPTIONS_reflect := -skip='TestMapIterSet'
+tinygo-test-baremetal: TEST_OPTIONS_reflect :=
 
 # Explicit options replace default flags, even when empty.
 # https://www.gnu.org/software/make/manual/html_node/Origin-Function.html

@@ -208,7 +208,6 @@ var typeTests = []pair{
 	}{},
 		"struct { f func(...int) }",
 	},
-	/* // TODO(tinygo): Interface method strings are not supported.
 	{struct {
 		x (interface {
 			a(func(func(int) int) func(func(int)) int)
@@ -217,7 +216,6 @@ var typeTests = []pair{
 	}{},
 		"interface { reflect_test.a(func(func(int) int) func(func(int)) int); reflect_test.b() }",
 	},
-	*/
 	{struct {
 		x struct {
 			int32
@@ -2222,9 +2220,6 @@ func fmtSelect(info []caseInfo) string {
 	return buf.String()
 }
 
-/*
-// TODO(tinygo): missing func/method/call support
-
 type two [2]uintptr
 
 // Difficult test for function call because of
@@ -2314,6 +2309,8 @@ func TestCallWithStruct(t *testing.T) {
 		t.Errorf("takesNonEmpty returned %#v", r)
 	}
 }
+
+/*
 
 func TestCallReturnsEmpty(t *testing.T) {
 	// Issue 21717: past-the-end pointer write in Call with
@@ -3324,7 +3321,6 @@ func TestFieldPkgPath(t *testing.T) {
 	})
 }
 
-/* // TODO(tinygo): Method lookup is not supported.
 func TestMethodPkgPath(t *testing.T) {
 	type I interface {
 		x()
@@ -3357,7 +3353,6 @@ func TestMethodPkgPath(t *testing.T) {
 		}
 	}
 }
-*/
 
 func TestVariadicType(t *testing.T) {
 	// Test example from Type documentation.
@@ -3383,6 +3378,7 @@ func TestVariadicType(t *testing.T) {
 }
 
 /*
+
 type inner struct {
 	x int
 }
@@ -3481,7 +3477,6 @@ func TestNumMethodOnDDD(t *testing.T) {
 	}
 }
 
-/*
 func TestPtrTo(t *testing.T) {
 	// This block of code means that the ptrToThis field of the
 	// reflect data for *unsafe.Pointer is non zero, see
@@ -3494,7 +3489,17 @@ func TestPtrTo(t *testing.T) {
 
 	typ := TypeOf(z)
 	for i = 0; i < 100; i++ {
-		typ = PointerTo(typ)
+		next := PointerTo(typ)
+		if got := PointerTo(typ); got != next {
+			t.Fatalf("PointerTo returned distinct types %v and %v", next, got)
+		}
+		typ = next
+		if i == 2 {
+			var deep *****unsafe.Pointer
+			if typ != TypeOf(deep) {
+				t.Fatalf("PointerTo returned %v, want static type %v", typ, TypeOf(deep))
+			}
+		}
 	}
 	for i = 0; i < 100; i++ {
 		typ = typ.Elem()
@@ -3527,8 +3532,6 @@ func TestPtrToGC(t *testing.T) {
 		}
 	}
 }
-
-*/
 
 func TestAddr(t *testing.T) {
 	var p struct {
@@ -3821,8 +3824,6 @@ func TestStructArg(t *testing.T) {
 		t.Errorf("function called with (%v, %v), want (%v, %v)", gotA, gotB, wantA, wantB)
 	}
 }
-
-*/
 
 var tagGetTests = []struct {
 	Tag   StructTag
@@ -6766,6 +6767,7 @@ func TestFieldByIndexNil(t *testing.T) {
 }
 
 /*
+
 // Given
 //	type Outer struct {
 //		*Inner
@@ -7958,6 +7960,99 @@ func TestMapIterDelete1(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Errorf("iterator returned wrong number of elements: got %d, want 1", len(got))
+	}
+}
+
+func TestTinyMapIterSnapshots(t *testing.T) {
+	m := map[string][3]int{"one": {1, 2, 3}, "two": {4, 5, 6}, "three": {7, 8, 9}}
+	type entry struct {
+		key, value Value
+		want       [3]int
+	}
+	var entries []entry
+	iter := ValueOf(m).MapRange()
+	for iter.Next() {
+		key, value := iter.Key(), iter.Value()
+		if key.CanAddr() || value.CanAddr() {
+			t.Fatal("iterator snapshots are addressable")
+		}
+		entries = append(entries, entry{key, value, m[key.String()]})
+	}
+	for key := range m {
+		m[key] = [3]int{-1, -1, -1}
+		delete(m, key)
+	}
+	iter.Reset(Value{})
+	runtime.GC()
+	for _, entry := range entries {
+		if got := entry.value.Interface().([3]int); got != entry.want {
+			t.Errorf("retained value for %q = %v, want %v", entry.key.String(), got, entry.want)
+		}
+	}
+}
+
+func TestTinyMapIterGrow(t *testing.T) {
+	m := make(map[int]int)
+	for i := 0; i < 32; i++ {
+		m[i] = i
+	}
+	iter := ValueOf(m).MapRange()
+	if !iter.Next() {
+		t.Fatal("empty iterator")
+	}
+	first := int(iter.Key().Int())
+	for i := 32; i < 512; i++ {
+		m[i] = i
+	}
+	for i := 0; i < 512; i++ {
+		m[i] = -i
+	}
+	deleted := (first + 1) % 32
+	delete(m, deleted)
+	seen := map[int]bool{first: true}
+	for iter.Next() {
+		key, value := int(iter.Key().Int()), int(iter.Value().Int())
+		if seen[key] {
+			t.Fatalf("duplicate key %d after growth", key)
+		}
+		if want, ok := m[key]; !ok || value != want {
+			t.Fatalf("entry (%d, %d) after growth, want (%d, %d), present %v", key, value, key, want, ok)
+		}
+		seen[key] = true
+	}
+	for i := 0; i < 32; i++ {
+		if i != deleted && !seen[i] {
+			t.Errorf("missed original key %d after growth", i)
+		}
+	}
+}
+
+func TestTinyMapIterIndirectEntries(t *testing.T) {
+	var key, value [256]byte
+	key[0], key[255] = 1, 2
+	value[0], value[255] = 3, 4
+	m := map[[256]byte][256]byte{key: value}
+	iter := ValueOf(m).MapRange()
+	var gotKey, gotValue [256]byte
+	k, v := ValueOf(&gotKey).Elem(), ValueOf(&gotValue).Elem()
+	if !iter.Next() {
+		t.Fatal("empty iterator")
+	}
+	k.SetIterKey(iter)
+	v.SetIterValue(iter)
+	if gotKey != key || gotValue != value {
+		t.Fatal("incorrect indirect entry")
+	}
+	snapshotKey, snapshotValue := iter.Key(), iter.Value()
+	delete(m, key)
+	iter.Reset(Value{})
+	runtime.GC()
+	if snapshotKey.Interface().([256]byte) != key || snapshotValue.Interface().([256]byte) != value {
+		t.Fatal("indirect snapshots changed")
+	}
+	empty := ValueOf(map[struct{}]struct{}{{}: {}}).MapRange()
+	if !empty.Next() || empty.Key().Interface() != (struct{}{}) || empty.Value().Interface() != (struct{}{}) || empty.Next() {
+		t.Fatal("incorrect zero-sized entry")
 	}
 }
 

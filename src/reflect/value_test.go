@@ -474,6 +474,24 @@ func TestTinySlice(t *testing.T) {
 	}
 }
 
+func TestSliceAtSet(t *testing.T) {
+	array := [3]int{1, 2, 3}
+	value := SliceAt(TypeOf(0), unsafe.Pointer(&array[0]), len(array))
+	if got, want := value.Type(), TypeOf([]int{}); got != want {
+		t.Fatalf("SliceAt type = %v, want %v", got, want)
+	}
+	if got, want := value.Len(), len(array); got != want {
+		t.Fatalf("SliceAt len = %d, want %d", got, want)
+	}
+	if got, want := value.Cap(), len(array); got != want {
+		t.Fatalf("SliceAt cap = %d, want %d", got, want)
+	}
+	value.Index(1).SetInt(4)
+	if array[1] != 4 {
+		t.Fatalf("SliceAt update = %d, want 4", array[1])
+	}
+}
+
 func TestTinySlice3(t *testing.T) {
 	slice := make([]int, 3, 6)
 	for i := range cap(slice) {
@@ -583,24 +601,6 @@ func TestTinySetLen(t *testing.T) {
 	shouldPanic("", func() { ValueOf(&fields).Elem().Field(0).SetLen(1) })
 	if len(fields.slice) != 3 {
 		t.Fatal("SetLen changed an unexported field")
-	}
-}
-
-func TestSliceAtSet(t *testing.T) {
-	array := [3]int{1, 2, 3}
-	value := SliceAt(TypeOf(0), unsafe.Pointer(&array[0]), len(array))
-	if got, want := value.Type(), TypeOf([]int{}); got != want {
-		t.Fatalf("SliceAt type = %v, want %v", got, want)
-	}
-	if got, want := value.Len(), len(array); got != want {
-		t.Fatalf("SliceAt len = %d, want %d", got, want)
-	}
-	if got, want := value.Cap(), len(array); got != want {
-		t.Fatalf("SliceAt cap = %d, want %d", got, want)
-	}
-	value.Index(1).SetInt(4)
-	if array[1] != 4 {
-		t.Fatalf("SliceAt update = %d, want 4", array[1])
 	}
 }
 
@@ -845,6 +845,19 @@ func TestTinyNumMethods(t *testing.T) {
 	reft := refptrt.Elem()
 	if got, want := reft.NumMethod(), 1; got != want {
 		t.Errorf("Value Methods=%v, want %v", got, want)
+	}
+
+	for _, typ := range []Type{
+		TypeOf((**methodStruct)(nil)),
+		TypeOf((***methodStruct)(nil)),
+		TypeOf((****methodStruct)(nil)),
+	} {
+		if got := typ.NumMethod(); got != 0 {
+			t.Errorf("%v Methods=%v, want 0", typ, got)
+		}
+		if method, ok := typ.MethodByName("ValueMethod1"); ok {
+			t.Errorf("%v MethodByName=%v, want no method", typ, method)
+		}
 	}
 }
 
