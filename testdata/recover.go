@@ -9,11 +9,19 @@ import (
 var wg sync.WaitGroup
 var panicMap = map[interface{}]int{}
 var recoveredInitValue = recoveredInit()
+var repeatedPanicFunc = repeatedPanic
 
 func main() {
 	println("recovered init:", recoveredInitValue)
 	println("# simple recover")
 	recoverSimple()
+
+	println("\n# repeated recover")
+	for i := 0; i < 2048; i++ {
+		recoverRepeatedDirect()
+		recoverRepeatedIndirect()
+	}
+	println("repeated recovery: ok")
 
 	println("\n# recover with result")
 	result := recoverWithResult()
@@ -73,6 +81,27 @@ func recoverSimple() {
 	}()
 	println("running panic...")
 	panic("panic")
+}
+
+//go:noinline
+func repeatedPanic() {
+	panic("repeated")
+}
+
+func checkRepeatedRecovery() {
+	if recover() != "repeated" {
+		panic("unexpected repeated panic")
+	}
+}
+
+func recoverRepeatedDirect() {
+	defer checkRepeatedRecovery()
+	repeatedPanic()
+}
+
+func recoverRepeatedIndirect() {
+	defer checkRepeatedRecovery()
+	repeatedPanicFunc()
 }
 
 func recoverWithResult() (result int) {
