@@ -99,6 +99,7 @@ TEST_PACKAGES_LINUX := \
 	debug/dwarf \
 	debug/gosym \
 	debug/plan9obj \
+	encoding/gob \
 	encoding/xml \
 	go/printer \
 	io/ioutil \
@@ -231,7 +232,7 @@ TEST_ALLOC_MIME_SKIP_FLAG := -skip='^TestLookupMallocs$$'
 TEST_PACKAGES_ALLOC_TEXTPROTO := net/textproto
 TEST_ALLOC_TEXTPROTO_SKIP_FLAG := -skip='^TestCommonHeaders$$'
 TEST_PACKAGES_ALLOC_REFLECT := reflect
-TEST_ALLOC_REFLECT_SKIP_FLAG := -skip='^TestDeepEqualAllocs$$'
+TEST_ALLOC_REFLECT_SKIP_FLAG :=
 TEST_PACKAGES_ALLOC_BYTES := bytes
 TEST_ALLOC_BYTES_SKIP_FLAG := -skip='^(TestNewBufferShallow|TestEqual|TestIndex|TestLastIndex|TestReplace)$$'
 TEST_PACKAGES_ALLOC_SLICES := slices
@@ -270,6 +271,7 @@ TEST_PACKAGES_NETIP_HOST := $(filter net/netip,$(TEST_PACKAGES_HOST))
 ifeq ($(uname),Darwin)
 TEST_SYNCTEST_THREAD_LIMIT_SKIP := |TestWaitGroupManyBubbles
 endif
+TEST_PACKAGES_GOB_HOST := $(filter encoding/gob,$(TEST_PACKAGES_HOST))
 
 # Test known-working standard library packages.
 # TODO: parallelize, and only show failing tests (no implied -v flag).
@@ -278,7 +280,7 @@ tinygo-test:
 	@# TestExtraMethods: used by many crypto packages and uses reflect.Type.Method which is not implemented.
 	@# TestUnmarshalNestingLimit{Slice,Struct}: encoding/asn1 nesting limit added in
 	@# https://github.com/golang/go/commit/6a6d115f9a7422b2fa081ba6f567eefb4a099462
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_NETIP_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/gob encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_NETIP_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
 ifneq ($(TEST_PACKAGES_SHORT_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short $(TEST_PACKAGES_SHORT_HOST)
 endif
@@ -288,6 +290,9 @@ endif
 	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW),$(TEST_ADDITIONAL_FLAGS))
 ifneq ($(TEST_PACKAGES_NETIP_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^TestAddrStringAllocs$$|^TestNoAllocs$$/^(Addr.IsGlobalUnicast|Addr.IsInterfaceLocalMulticast|Addr.IsLinkLocalMulticast|Addr.IsLinkLocalUnicast|Addr.IsPrivate)$$' $(TEST_PACKAGES_NETIP_HOST)
+endif
+ifneq ($(TEST_PACKAGES_GOB_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=1MB -skip='^(TestCountDecodeMallocs|TestCountMallocs)$$' $(TEST_PACKAGES_GOB_HOST)
 endif
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestReflectFuncOf|TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount$(TEST_SYNCTEST_THREAD_LIMIT_SKIP))$$' internal/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$$' testing/synctest
@@ -363,7 +368,7 @@ tinygo-test-baremetal:
 	$(TINYGO) test -target riscv-qemu $(TEST_SKIP_FLAG) $(filter-out $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_BAREMETAL))
 	$(if $(filter $(TEST_PACKAGES_ALLOC_STRCONV),$(TEST_PACKAGES_BAREMETAL)),$(TINYGO) test -target riscv-qemu -skip='TestCountMallocs|TestAllocationsFromBytes' $(filter $(TEST_PACKAGES_ALLOC_STRCONV),$(TEST_PACKAGES_BAREMETAL)))
 	$(if $(filter $(TEST_PACKAGES_ALLOC_UNICODE),$(TEST_PACKAGES_BAREMETAL)),$(TINYGO) test -target riscv-qemu -skip='TestAllocationsDecode|TestRuneCountNonASCIIAllocation' $(filter $(TEST_PACKAGES_ALLOC_UNICODE),$(TEST_PACKAGES_BAREMETAL)))
-	$(if $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_BAREMETAL)),$(TINYGO) test -target riscv-qemu -skip='TestDeepEqualAllocs' $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_BAREMETAL)))
+	$(if $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_BAREMETAL)),$(TINYGO) test -target riscv-qemu $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_BAREMETAL)))
 
 # Test external packages in a large corpus.
 test-corpus:

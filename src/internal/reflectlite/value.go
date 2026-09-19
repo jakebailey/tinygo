@@ -3,6 +3,7 @@ package reflectlite
 import (
 	"internal/gclayout"
 	"internal/hashmap"
+	"internal/itoa"
 	"math"
 	"unsafe"
 )
@@ -99,7 +100,7 @@ func ValueOf(i interface{}) Value {
 
 func (v Value) Interface() interface{} {
 	if !v.isExported() {
-		panic("(reflect.Value).Interface: unexported")
+		panic("reflect.Value.Interface: cannot return value obtained from unexported field or method")
 	}
 	return valueInterfaceUnsafe(v)
 }
@@ -190,6 +191,11 @@ func valueInterfaceUnsafe(v Value) interface{} {
 		// Value was indirect but must be put back directly in the interface
 		// value.
 		v.value = loadSmallValue(v.value, v.typecode.Size())
+	} else if v.isIndirect() {
+		size := v.typecode.Size()
+		value := alloc(size, v.typecode.gcLayout())
+		memcpy(value, v.value, size)
+		v.value = value
 	}
 	return composeInterface(unsafe.Pointer(v.typecode), v.value)
 }
@@ -677,12 +683,14 @@ func (v Value) Bytes() []byte {
 	switch v.Kind() {
 	case Slice:
 		if v.typecode.elem().Kind() != Uint8 {
-			panic(&ValueError{Method: "Bytes", Kind: v.Kind()})
+			panic("reflect.Value.Bytes of non-byte slice")
 		}
 		return *(*[]byte)(v.value)
 
 	case Array:
-		v.checkAddressable()
+		if !v.isIndirect() {
+			panic("reflect.Value.Bytes of unaddressable byte array")
+		}
 
 		if v.typecode.elem().Kind() != Uint8 {
 			panic(&ValueError{Method: "Bytes", Kind: v.Kind()})
@@ -704,14 +712,16 @@ func (v Value) Slice(i, j int) Value {
 		i, j := uintptr(i), uintptr(j)
 
 		if j < i || hdr.cap < j {
-			slicePanic()
+			panic("reflect.Value.Slice: slice index out of bounds")
 		}
 
 		elemSize := v.typecode.underlying().elem().Size()
 
 		hdr.len = j - i
 		hdr.cap = hdr.cap - i
-		hdr.data = unsafe.Add(hdr.data, i*elemSize)
+		if hdr.cap > 0 {
+			hdr.data = unsafe.Add(hdr.data, i*elemSize)
+		}
 
 		return Value{
 			typecode: v.typecode,
@@ -724,7 +734,7 @@ func (v Value) Slice(i, j int) Value {
 		buf, length := buflen(v)
 		i, j := uintptr(i), uintptr(j)
 		if j < i || length < j {
-			slicePanic()
+			panic("reflect.Value.Slice: slice index out of bounds")
 		}
 
 		elemSize := v.typecode.underlying().elem().Size()
@@ -732,7 +742,10 @@ func (v Value) Slice(i, j int) Value {
 		var hdr sliceHeader
 		hdr.len = j - i
 		hdr.cap = length - i
-		hdr.data = unsafe.Add(buf, i*elemSize)
+		hdr.data = buf
+		if hdr.cap > 0 {
+			hdr.data = unsafe.Add(buf, i*elemSize)
+		}
 
 		sliceType := (*arrayType)(unsafe.Pointer(v.typecode.underlying())).slicePtr
 		return Value{
@@ -742,8 +755,10 @@ func (v Value) Slice(i, j int) Value {
 		}
 
 	case String:
-		i, j := uintptr(i), uintptr(j)
 		str := *(*string)(v.value)
+		if i < 0 || j < i || j > len(str) {
+			panic("reflect.Value.Slice: string slice index out of bounds")
+		}
 		sliced := str[i:j]
 
 		return Value{
@@ -761,16 +776,17 @@ func (v Value) Slice3(i, j, k int) Value {
 	case Slice:
 		hdr := *(*sliceHeader)(v.value)
 		i, j, k := uintptr(i), uintptr(j), uintptr(k)
-
-		if j < i || k < j || hdr.len < k {
-			slicePanic()
+		if j < i || k < j || hdr.cap < k {
+			panic("reflect.Value.Slice3: slice index out of bounds")
 		}
 
 		elemSize := v.typecode.underlying().elem().Size()
 
 		hdr.len = j - i
 		hdr.cap = k - i
-		hdr.data = unsafe.Add(hdr.data, i*elemSize)
+		if k > i {
+			hdr.data = unsafe.Add(hdr.data, i*elemSize)
+		}
 
 		return Value{
 			typecode: v.typecode,
@@ -783,7 +799,7 @@ func (v Value) Slice3(i, j, k int) Value {
 		buf, length := buflen(v)
 		i, j, k := uintptr(i), uintptr(j), uintptr(k)
 		if j < i || k < j || length < k {
-			slicePanic()
+			panic("reflect.Value.Slice3: slice index out of bounds")
 		}
 
 		elemSize := v.typecode.underlying().elem().Size()
@@ -791,7 +807,10 @@ func (v Value) Slice3(i, j, k int) Value {
 		var hdr sliceHeader
 		hdr.len = j - i
 		hdr.cap = k - i
-		hdr.data = unsafe.Add(buf, i*elemSize)
+		hdr.data = buf
+		if k > i {
+			hdr.data = unsafe.Add(buf, i*elemSize)
+		}
 
 		sliceType := (*arrayType)(unsafe.Pointer(v.typecode.underlying())).slicePtr
 		return Value{
@@ -801,7 +820,7 @@ func (v Value) Slice3(i, j, k int) Value {
 		}
 	}
 
-	panic("unimplemented: (reflect.Value).Slice3()")
+	panic(&ValueError{Method: "reflect.Value.Slice3", Kind: v.Kind()})
 }
 
 //go:linkname maplen runtime.hashmapLen
@@ -816,6 +835,11 @@ func (v Value) Len() int {
 	switch v.typecode.Kind() {
 	case Array:
 		return v.typecode.Len()
+	case Ptr:
+		if v.typecode.elem().Kind() == Array {
+			return v.typecode.elem().Len()
+		}
+		panic("reflect: call of reflect.Value.Len on ptr to non-array Value")
 	case Chan:
 		return chanlen(v.pointer())
 	case Map:
@@ -838,6 +862,11 @@ func (v Value) Cap() int {
 	switch v.typecode.Kind() {
 	case Array:
 		return v.typecode.Len()
+	case Ptr:
+		if v.typecode.elem().Kind() == Array {
+			return v.typecode.elem().Len()
+		}
+		panic("reflect: call of reflect.Value.Cap on ptr to non-array Value")
 	case Chan:
 		return chancap(v.pointer())
 	case Slice:
@@ -869,6 +898,9 @@ func (v Value) Clear() {
 // NumField returns the number of fields of this struct. It panics for other
 // value types.
 func (v Value) NumField() int {
+	if v.Kind() != Struct {
+		panic(&ValueError{Method: "NumField", Kind: v.Kind()})
+	}
 	return v.typecode.NumField()
 }
 
@@ -1081,6 +1113,17 @@ func (v Value) OverflowFloat(x float64) bool {
 	panic(&ValueError{Method: "reflect.Value.OverflowFloat", Kind: v.Kind()})
 }
 
+// OverflowComplex reports whether the complex128 x cannot be represented by v's type.
+func (v Value) OverflowComplex(x complex128) bool {
+	switch v.Kind() {
+	case Complex64:
+		return overflowFloat32(real(x)) || overflowFloat32(imag(x))
+	case Complex128:
+		return false
+	}
+	panic(&ValueError{Method: "reflect.Value.OverflowComplex", Kind: v.Kind()})
+}
+
 func overflowFloat32(x float64) bool {
 	if x < 0 {
 		x = -x
@@ -1161,8 +1204,7 @@ func (v Value) MapIndex(key Value) Value {
 
 	// compare key type with actual key type of map
 	if !key.typecode.AssignableTo(vkey) {
-		// type error?
-		panic("reflect.Value.MapIndex: incompatible types for key")
+		panic("reflect.Value.MapIndex: value of type " + key.typecode.String() + " is not assignable to type " + vkey.String())
 	}
 
 	elemType := v.typecode.Elem()
@@ -1328,10 +1370,14 @@ func (iter *MapIter) Reset(v Value) {
 }
 
 func (v Value) Set(x Value) {
-	v.checkAddressable()
-	v.checkRO()
+	if !v.isIndirect() {
+		panic("reflect.Value.Set using unaddressable value")
+	}
+	if v.isRO() {
+		panic("reflect.Value.Set using value obtained using unexported field")
+	}
 	if !x.typecode.AssignableTo(v.typecode) {
-		panic("reflect.Value.Set: value of type " + x.typecode.String() + " cannot be assigned to type " + v.typecode.String())
+		panic("reflect.Value.Set: value of type " + x.typecode.String() + " is not assignable to type " + v.typecode.String())
 	}
 
 	if v.typecode.Kind() == Interface && x.typecode.Kind() != Interface {
@@ -1393,7 +1439,9 @@ func (v Value) SetInt(x int64) {
 }
 
 func (v Value) SetUint(x uint64) {
-	v.checkAddressable()
+	if !v.isIndirect() {
+		panic("reflect.Value.SetUint using unaddressable value")
+	}
 	v.checkRO()
 	switch v.Kind() {
 	case Uint:
@@ -1451,7 +1499,9 @@ func (v Value) SetString(x string) {
 }
 
 func (v Value) SetBytes(x []byte) {
-	v.checkAddressable()
+	if !v.isIndirect() {
+		panic("reflect.Value.SetBytes using unaddressable value")
+	}
 	v.checkRO()
 	if v.typecode.Kind() != Slice || v.typecode.elem().Kind() != Uint8 {
 		panic("reflect.Value.SetBytes called on not []byte")
@@ -1462,7 +1512,16 @@ func (v Value) SetBytes(x []byte) {
 }
 
 func (v Value) SetCap(n int) {
-	panic("unimplemented: (reflect.Value).SetCap()")
+	if v.typecode.Kind() != Slice {
+		panic(&ValueError{Method: "reflect.Value.SetCap", Kind: v.Kind()})
+	}
+	v.checkAddressable()
+	v.checkRO()
+	hdr := (*sliceHeader)(v.value)
+	if int(uintptr(n)) != n || uintptr(n) < hdr.len || uintptr(n) > hdr.cap {
+		panic("reflect.Value.SetCap: slice capacity out of range")
+	}
+	hdr.cap = uintptr(n)
 }
 
 func (v Value) SetLen(n int) {
@@ -1470,6 +1529,7 @@ func (v Value) SetLen(n int) {
 		panic(&ValueError{Method: "reflect.Value.SetLen", Kind: v.Kind()})
 	}
 	v.checkAddressable()
+	v.checkRO()
 	hdr := (*sliceHeader)(v.value)
 	if int(uintptr(n)) != n || uintptr(n) > hdr.cap {
 		panic("reflect.Value.SetLen: slice length out of range")
@@ -1509,14 +1569,41 @@ func (v Value) OverflowUint(x uint64) bool {
 }
 
 func (v Value) CanConvert(t Type) bool {
-	// TODO: Optimize this to not actually perform a conversion
-	_, ok := convertOp(v, t)
-	return ok
+	if v.typecode == nil {
+		panic(&ValueError{Method: "reflect.Value.Type", Kind: Invalid})
+	}
+	target := t.(*RawType)
+	if !v.typecode.ConvertibleTo(target) {
+		return false
+	}
+	if v.Kind() == Slice {
+		if target.Kind() == Array {
+			return target.Len() <= v.Len()
+		}
+		if target.Kind() == Pointer && target.elem().Kind() == Array {
+			return target.elem().Len() <= v.Len()
+		}
+	}
+	return true
 }
 
 func (v Value) Convert(t Type) Value {
 	if v, ok := convertOp(v, t); ok {
 		return v
+	}
+
+	target := t.(*RawType)
+	if v.Kind() == Slice {
+		array := target
+		targetName := "array"
+		if target.Kind() == Pointer {
+			array = target.elem()
+			targetName = "pointer to array"
+		}
+		if array.Kind() == Array && v.typecode.elem() == array.elem() && v.Len() < array.Len() {
+			panic("reflect: cannot convert slice with length " + itoa.Itoa(v.Len()) +
+				" to " + targetName + " with length " + itoa.Itoa(array.Len()))
+		}
 	}
 
 	panic("reflect.Value.Convert: value of type " + v.typecode.String() + " cannot be converted to type " + t.String())
@@ -1533,12 +1620,21 @@ func convertOp(src Value, typ Type) (Value, bool) {
 		}, true
 	}
 
-	if rtype := typ.(*RawType); rtype.Kind() == Interface && rtype.NumMethod() == 0 {
-		iface := composeInterface(unsafe.Pointer(src.typecode), src.value)
+	if rtype := typ.(*RawType); rtype.Kind() == Interface && src.typecode.Implements(rtype) {
+		var iface interface{}
+		if src.Kind() == Interface {
+			iface = *(*interface{})(src.value)
+		} else {
+			value := src.value
+			if src.isIndirect() && src.typecode.Size() <= unsafe.Sizeof(uintptr(0)) {
+				value = loadSmallValue(src.value, src.typecode.Size())
+			}
+			iface = composeInterface(unsafe.Pointer(src.typecode), value)
+		}
 		return Value{
 			typecode: rtype,
 			value:    unsafe.Pointer(&iface),
-			flags:    valueFlagExported,
+			flags:    src.flags & (valueFlagExported | valueFlagRO),
 		}, true
 	}
 
@@ -1583,10 +1679,18 @@ func convertOp(src Value, typ Type) (Value, bool) {
 		switch rtype := typ.(*RawType); rtype.Kind() {
 		case Array:
 			if src.typecode.elem() == rtype.elem() && rtype.Len() <= src.Len() {
+				size := rtype.Size()
+				var value unsafe.Pointer
+				if size <= unsafe.Sizeof(uintptr(0)) {
+					value = loadSmallValue((*sliceHeader)(src.value).data, size)
+				} else {
+					value = alloc(size, rtype.gcLayout())
+					memcpy(value, (*sliceHeader)(src.value).data, size)
+				}
 				return Value{
 					typecode: rtype,
-					value:    (*sliceHeader)(src.value).data,
-					flags:    src.flags | valueFlagIndirect,
+					value:    value,
+					flags:    src.flags & (valueFlagExported | valueFlagRO),
 				}, true
 			}
 		case Pointer:
@@ -1623,15 +1727,22 @@ func convertOp(src Value, typ Type) (Value, bool) {
 
 	case Pointer:
 		rtype := typ.(*RawType)
-		if rtype.Kind() == Pointer && !src.typecode.isNamed() && !rtype.isNamed() && src.typecode.elem().underlying() == rtype.elem().underlying() {
+		if rtype.Kind() == Pointer && !src.typecode.isNamed() && !rtype.isNamed() &&
+			haveIdenticalUnderlyingType(src.typecode.elem(), rtype.elem(), false) {
+			return cvtDirect(src, rtype), true
+		}
+
+	case Chan:
+		rtype := typ.(*RawType)
+		if rtype.Kind() == Chan && src.typecode.underlying().ChanDir() == BothDir &&
+			(!src.typecode.isNamed() || !rtype.isNamed()) && src.typecode.elem() == rtype.elem() {
 			return cvtDirect(src, rtype), true
 		}
 	}
 
-	// TODO(dgryski): Unimplemented:
-	// Chan
-	// Non-defined pointers types with same underlying base type
-	// Interface <-> Type conversions
+	if haveIdenticalUnderlyingType(src.typecode, typ.(*RawType), false) {
+		return cvtDirect(src, typ.(*RawType)), true
+	}
 
 	return Value{}, false
 }
@@ -1876,6 +1987,29 @@ func MakeSlice(typ Type, len, cap int) Value {
 	}
 }
 
+func SliceAt(typ Type, p unsafe.Pointer, n int) Value {
+	un := uint(n)
+	maxSize := (^uintptr(0)) / 2
+	elementSize := typ.Size()
+	if elementSize > 1 {
+		maxSize /= elementSize
+	}
+	if un > uint(maxSize) || p == nil && n != 0 {
+		slicePanic()
+	}
+
+	slice := sliceHeader{
+		data: p,
+		len:  uintptr(un),
+		cap:  uintptr(un),
+	}
+	return Value{
+		typecode: SliceOf(typ).(*RawType),
+		value:    unsafe.Pointer(&slice),
+		flags:    valueFlagExported,
+	}
+}
+
 var zerobuffer unsafe.Pointer
 
 const zerobufferLen = 32
@@ -1947,10 +2081,21 @@ type ValueError struct {
 }
 
 func (e *ValueError) Error() string {
-	if e.Kind == 0 {
-		return "reflect: call of " + e.Method + " on zero Value"
+	method := e.Method
+	qualified := false
+	for i := 0; i < len(method); i++ {
+		if method[i] == '.' {
+			qualified = true
+			break
+		}
 	}
-	return "reflect: call of " + e.Method + " on " + e.Kind.String() + " Value"
+	if !qualified {
+		method = "reflect.Value." + method
+	}
+	if e.Kind == 0 {
+		return "reflect: call of " + method + " on zero Value"
+	}
+	return "reflect: call of " + method + " on " + e.Kind.String() + " Value"
 }
 
 //go:linkname memcpy runtime.memcpy
@@ -2062,6 +2207,9 @@ func Append(v Value, x ...Value) Value {
 	if v.Kind() != Slice {
 		panic(&ValueError{Method: "Append", Kind: v.Kind()})
 	}
+	if v.isRO() {
+		panic("reflect.Append using value obtained using unexported field")
+	}
 	oldLen := v.Len()
 	newslice := extendSlice(v, len(x))
 	v.flags = valueFlagExported
@@ -2081,8 +2229,7 @@ func AppendSlice(s, t Value) Value {
 		panic("reflect.AppendSlice: invalid types")
 	}
 	if !s.isExported() || !t.isExported() {
-		// One of the sides was not exported, so can't access the data.
-		panic("reflect.AppendSlice: unexported")
+		panic("reflect.AppendSlice using value obtained using unexported field")
 	}
 	sSlice := (*sliceHeader)(s.value)
 	tSlice := (*sliceHeader)(t.value)
@@ -2109,12 +2256,15 @@ func AppendSlice(s, t Value) Value {
 // It panics if v's Kind is not a Slice or if n is negative or too large to
 // allocate the memory.
 func (v Value) Grow(n int) {
-	v.checkAddressable()
-	if n < 0 {
-		panic("reflect.Grow: negative length")
+	if !v.isIndirect() {
+		panic("reflect.Value.Grow using unaddressable value")
 	}
+	v.checkRO()
 	if v.Kind() != Slice {
 		panic(&ValueError{Method: "Grow", Kind: v.Kind()})
+	}
+	if n < 0 {
+		panic("reflect.Value.Grow: negative len")
 	}
 	slice := (*sliceHeader)(v.value)
 	newslice := extendSlice(v, n)
@@ -2151,14 +2301,14 @@ func (v Value) SetMapIndex(key, elem Value) {
 
 	// compare key type with actual key type of map
 	if !key.typecode.AssignableTo(vkey) {
-		panic("reflect.Value.SetMapIndex: incompatible types for key")
+		panic("reflect.Value.SetMapIndex: value of type " + key.typecode.String() + " is not assignable to type " + vkey.String())
 	}
 
 	// if elem is the zero Value, it means delete
 	del := elem == Value{}
 
 	if !del && !elem.typecode.AssignableTo(v.typecode.elem()) {
-		panic("reflect.Value.SetMapIndex: incompatible types for value")
+		panic("reflect.Value.SetMapIndex: value of type " + elem.typecode.String() + " is not assignable to type " + v.typecode.elem().String())
 	}
 
 	// make elem an interface if it needs to be converted
@@ -2304,6 +2454,37 @@ func hashmapMakeReflect(keySize, valueSize, sizeHint uintptr, typeInfo, keyType 
 //go:linkname chanMake runtime.chanMake
 func chanMake(elementSize uintptr, bufSize uintptr, elementLayout unsafe.Pointer) unsafe.Pointer
 
+type channelOp struct {
+	next  unsafe.Pointer
+	task  unsafe.Pointer
+	index uint32
+	value unsafe.Pointer
+}
+
+type chanSelectState struct {
+	ch      unsafe.Pointer
+	value   unsafe.Pointer
+	recvbuf unsafe.Pointer
+}
+
+//go:linkname chanSend runtime.chanSend
+func chanSend(ch, value unsafe.Pointer, op *channelOp)
+
+//go:linkname chanRecv runtime.chanRecv
+func chanRecv(ch, value unsafe.Pointer, op *channelOp) bool
+
+//go:linkname chanTrySend runtime.chanTrySend
+func chanTrySend(ch, value unsafe.Pointer) bool
+
+//go:linkname chanTryRecv runtime.chanTryRecv
+func chanTryRecv(ch, value unsafe.Pointer) (received, ok bool)
+
+//go:linkname chanClose runtime.chanClose
+func chanClose(ch unsafe.Pointer)
+
+//go:linkname chanSelect runtime.chanSelect
+func chanSelect(recvbuf unsafe.Pointer, states []chanSelectState, ops []channelOp) (uint32, bool)
+
 // MakeMapWithSize creates a new map with the specified type and initial space
 // for approximately n elements.
 func MakeMapWithSize(typ Type, n int) Value {
@@ -2387,8 +2568,210 @@ func (v Value) MethodByName(name string) Value {
 	panic("unimplemented: (reflect.Value).MethodByName()")
 }
 
+func (v Value) Send(x Value) {
+	v.send(x, false, "reflect.Value.Send")
+}
+
+func (v Value) TrySend(x Value) bool {
+	return v.send(x, true, "reflect.Value.TrySend")
+}
+
+func (v Value) send(x Value, nonBlocking bool, method string) bool {
+	v.sendCheck(x, method)
+	if chanTrySendValue(v.pointer(), x, v.typecode.elem()) {
+		return true
+	}
+	if nonBlocking {
+		return false
+	}
+	value := chanSendValue(x, v.typecode.elem())
+	var op channelOp
+	chanSend(v.pointer(), value, &op)
+	return true
+}
+
 func (v Value) Recv() (x Value, ok bool) {
-	panic("unimplemented: (reflect.Value).Recv()")
+	return v.recv(false, "reflect.Value.Recv")
+}
+
+func (v Value) TryRecv() (x Value, ok bool) {
+	return v.recv(true, "reflect.Value.TryRecv")
+}
+
+func (v Value) recv(nonBlocking bool, method string) (Value, bool) {
+	v.recvCheck(method)
+	value := New(v.typecode.elem()).Elem()
+	received, ok := chanTryRecv(v.pointer(), value.value)
+	if received {
+		return chanRecvValue(value), ok
+	}
+	if nonBlocking {
+		return Value{}, false
+	}
+	var op channelOp
+	ok = chanRecv(v.pointer(), value.value, &op)
+	return chanRecvValue(value), ok
+}
+
+func (v Value) Close() {
+	if v.Kind() != Chan {
+		panic(&ValueError{Method: "reflect.Value.Close", Kind: v.Kind()})
+	}
+	if !v.isExported() {
+		panic("reflect: cannot use value obtained using unexported field as channel")
+	}
+	if v.typecode.ChanDir()&SendDir == 0 {
+		panic("reflect: close of receive-only channel")
+	}
+	chanClose(v.pointer())
+}
+
+type SelectDir int
+
+const (
+	SelectSend SelectDir = iota + 1
+	SelectRecv
+	SelectDefault
+)
+
+type SelectCase struct {
+	Dir  SelectDir
+	Chan Value
+	Send Value
+}
+
+func Select(cases []SelectCase) (chosen int, recv Value, recvOK bool) {
+	if len(cases) > 65536 {
+		panic("reflect.Select: too many cases (max 65536)")
+	}
+
+	states := make([]chanSelectState, len(cases))
+	recvValues := make([]Value, len(cases))
+	defaultIndex := -1
+	for i, c := range cases {
+		switch c.Dir {
+		default:
+			panic("reflect.Select: invalid Dir")
+		case SelectDefault:
+			if defaultIndex >= 0 {
+				panic("reflect.Select: multiple default cases")
+			}
+			if c.Chan.IsValid() {
+				panic("reflect.Select: default case has Chan value")
+			}
+			if c.Send.IsValid() {
+				panic("reflect.Select: default case has Send value")
+			}
+			defaultIndex = i
+		case SelectSend:
+			if !c.Chan.IsValid() {
+				continue
+			}
+			if !c.Send.IsValid() {
+				panic("reflect.Select: SendDir case missing Send value")
+			}
+			c.Chan.sendCheck(c.Send, "reflect.Select")
+			states[i].ch = c.Chan.pointer()
+			states[i].value = chanSendValue(c.Send, c.Chan.typecode.elem())
+		case SelectRecv:
+			if c.Send.IsValid() {
+				panic("reflect.Select: RecvDir case has Send value")
+			}
+			if !c.Chan.IsValid() {
+				continue
+			}
+			c.Chan.recvCheck("reflect.Select")
+			recvValues[i] = New(c.Chan.typecode.elem()).Elem()
+			states[i].ch = c.Chan.pointer()
+			states[i].recvbuf = recvValues[i].value
+		}
+	}
+
+	if len(cases) == 0 {
+		var op channelOp
+		chanRecv(nil, nil, &op)
+	}
+
+	var ops []channelOp
+	if defaultIndex < 0 {
+		ops = make([]channelOp, len(cases))
+	}
+	index, ok := chanSelect(nil, states, ops)
+	if index == ^uint32(0) {
+		return defaultIndex, Value{}, false
+	}
+	chosen = int(index)
+	if cases[chosen].Dir == SelectRecv {
+		return chosen, chanRecvValue(recvValues[chosen]), ok
+	}
+	return chosen, Value{}, false
+}
+
+func (v Value) sendCheck(x Value, method string) {
+	if v.Kind() != Chan {
+		panic(&ValueError{Method: method, Kind: v.Kind()})
+	}
+	if !v.isExported() {
+		panic("reflect: cannot use value obtained using unexported field as channel")
+	}
+	if v.typecode.ChanDir()&SendDir == 0 {
+		if method == "reflect.Select" {
+			panic("reflect.Select: SendDir case using recv-only channel")
+		}
+		panic("reflect: send on recv-only channel")
+	}
+	if !x.IsValid() {
+		panic(&ValueError{Method: method, Kind: Invalid})
+	}
+	if !x.isExported() {
+		panic("reflect: cannot use value obtained using unexported field as value in Send")
+	}
+	if !x.typecode.AssignableTo(v.typecode.elem()) {
+		panic(method + ": value of type " + x.typecode.String() + " is not assignable to type " + v.typecode.elem().String())
+	}
+}
+
+func (v Value) recvCheck(method string) {
+	if v.Kind() != Chan {
+		panic(&ValueError{Method: method, Kind: v.Kind()})
+	}
+	if !v.isExported() {
+		panic("reflect: cannot use value obtained using unexported field as channel")
+	}
+	if v.typecode.ChanDir()&RecvDir == 0 {
+		panic("reflect: recv on send-only channel")
+	}
+}
+
+func chanRecvValue(value Value) Value {
+	value.flags = valueFlagExported
+	if value.typecode.Size() <= unsafe.Sizeof(uintptr(0)) {
+		value.value = loadSmallValue(value.value, value.typecode.Size())
+	}
+	return value
+}
+
+func chanSendValue(x Value, elem *RawType) unsafe.Pointer {
+	return chanSendValuePtr(&x, elem)
+}
+
+func chanTrySendValue(ch unsafe.Pointer, x Value, elem *RawType) bool {
+	return chanTrySend(ch, chanSendValuePtr(&x, elem))
+}
+
+func chanSendValuePtr(x *Value, elem *RawType) unsafe.Pointer {
+	if elem.Kind() == Interface && x.Kind() != Interface {
+		value := x.value
+		if x.isIndirect() && x.typecode.Size() <= unsafe.Sizeof(uintptr(0)) {
+			value = loadSmallValue(x.value, x.typecode.Size())
+		}
+		iface := composeInterface(unsafe.Pointer(x.typecode), value)
+		return unsafe.Pointer(&iface)
+	}
+	if x.isIndirect() || x.typecode.Size() > unsafe.Sizeof(uintptr(0)) {
+		return x.value
+	}
+	return unsafe.Pointer(&x.value)
 }
 
 func NewAt(typ Type, p unsafe.Pointer) Value {
