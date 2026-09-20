@@ -1872,6 +1872,21 @@ var funcCallAdapters *unsafe.Pointer
 //go:extern internal/reflectlite.funcCallLinksLen
 var funcCallLinksLen uintptr
 
+//go:extern internal/reflectlite.makeFuncTypes
+var makeFuncTypes **RawType
+
+//go:extern internal/reflectlite.makeFuncAdapters
+var makeFuncAdapters *unsafe.Pointer
+
+//go:extern internal/reflectlite.makeFuncLinksLen
+var makeFuncLinksLen uintptr
+
+type makeFuncContext struct {
+	typ             *RawType
+	callbackContext unsafe.Pointer
+	callbackCode    unsafe.Pointer
+}
+
 // Slice header that matches the underlying structure. Used for when we switch
 // to a precise GC, which needs to know exactly where pointers live.
 type sliceHeader struct {
@@ -2370,9 +2385,13 @@ func (v Value) call(in []Value, callSlice bool) []Value {
 		resultPointers[i] = storage.value
 	}
 
-	adapter := reflectCallAdapterFor(typ)
-	call := *(*reflectCallAdapter)(unsafe.Pointer(&funcHeader{Code: adapter}))
-	call(uintptr(fn.Code), fn.Context, unsafe.SliceData(argPointers), unsafe.SliceData(resultPointers))
+	if fn.Code == makeFuncStubCode() {
+		makeFuncCall(fn.Context, unsafe.SliceData(argPointers), unsafe.SliceData(resultPointers))
+	} else {
+		adapter := reflectCallAdapterFor(typ)
+		call := *(*reflectCallAdapter)(unsafe.Pointer(&funcHeader{Code: adapter}))
+		call(uintptr(fn.Code), fn.Context, unsafe.SliceData(argPointers), unsafe.SliceData(resultPointers))
+	}
 	runtimeKeepAlive(v)
 	runtimeKeepAlive(argStorage)
 
@@ -2408,6 +2427,99 @@ func reflectCallAdapterFor(typ *RawType) unsafe.Pointer {
 		}
 	}
 	panic("reflect: function type has no call adapter")
+}
+
+func MakeFunc(typ Type, callbackContext, callbackCode unsafe.Pointer) Value {
+	if typ.Kind() != Func {
+		panic("reflect: call of MakeFunc with non-Func type")
+	}
+	rawType := typ.(*RawType)
+	context := &makeFuncContext{
+		typ:             rawType,
+		callbackContext: callbackContext,
+		callbackCode:    callbackCode,
+	}
+	header := &funcHeader{
+		Context: unsafe.Pointer(context),
+		Code:    makeFuncAdapterFor(rawType),
+	}
+	return Value{
+		typecode: rawType,
+		value:    unsafe.Pointer(header),
+		flags:    valueFlagExported,
+	}
+}
+
+func makeFuncAdapterFor(typ *RawType) unsafe.Pointer {
+	typ = typ.underlying()
+	types := unsafe.Slice(makeFuncTypes, makeFuncLinksLen)
+	adapters := unsafe.Slice(makeFuncAdapters, makeFuncLinksLen)
+	for i, candidate := range types {
+		if candidate == typ {
+			return adapters[i]
+		}
+	}
+	return makeFuncStubCode()
+}
+
+func makeFuncStub() {
+	panic("reflect: internal error: called MakeFunc stub")
+}
+
+func makeFuncStubCode() unsafe.Pointer {
+	stub := makeFuncStub
+	return (*funcHeader)(unsafe.Pointer(&stub)).Code
+}
+
+func makeFuncCall(context unsafe.Pointer, argPointers, resultPointers *unsafe.Pointer) {
+	impl := (*makeFuncContext)(context)
+	numIn := impl.typ.NumIn()
+	rawArgs := unsafe.Slice(argPointers, numIn)
+	args := make([]Value, numIn)
+	for i, ptr := range rawArgs {
+		typ := impl.typ.In(i).(*RawType)
+		value := ptr
+		if typ.Size() <= unsafe.Sizeof(uintptr(0)) {
+			value = loadSmallValue(ptr, typ.Size())
+		}
+		args[i] = Value{
+			typecode: typ,
+			value:    value,
+			flags:    valueFlagExported,
+		}
+	}
+
+	callbackHeader := funcHeader{
+		Context: impl.callbackContext,
+		Code:    impl.callbackCode,
+	}
+	callback := *(*func([]Value) []Value)(unsafe.Pointer(&callbackHeader))
+	out := callback(args)
+	numOut := impl.typ.NumOut()
+	if len(out) != numOut {
+		panic("reflect: wrong return count from function created by MakeFunc")
+	}
+	rawResults := unsafe.Slice(resultPointers, numOut)
+	for i, result := range out {
+		typ := impl.typ.Out(i).(*RawType)
+		if !result.IsValid() {
+			panic("reflect: function created by MakeFunc returned zero Value")
+		}
+		if !result.isExported() || result.isRO() {
+			panic("reflect: function created by MakeFunc returned value obtained from unexported field")
+		}
+		if !result.typecode.AssignableTo(typ) {
+			panic("reflect.MakeFunc: value of type " + result.typecode.String() + " is not assignable to type " + typ.String())
+		}
+		storage := Value{
+			typecode: typ,
+			value:    rawResults[i],
+			flags:    valueFlagIndirect | valueFlagExported,
+		}
+		storage.Set(result)
+	}
+	runtimeKeepAlive(impl)
+	runtimeKeepAlive(out)
 }
 
 func (v Value) Method(i int) Value {
