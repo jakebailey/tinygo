@@ -2294,7 +2294,9 @@ func TestCallReturnsEmpty(t *testing.T) {
 	runtime.KeepAlive(v)
 }
 
-func TestMakeFunc(t *testing.T) {
+*/
+
+func TestMakeFuncUpstream(t *testing.T) {
 	f := dummy
 	fv := MakeFunc(TypeOf(f), func(in []Value) []Value { return in })
 	ValueOf(&f).Elem().Set(fv)
@@ -2330,7 +2332,7 @@ func TestMakeFuncInterface(t *testing.T) {
 	}
 }
 
-func TestMakeFuncVariadic(t *testing.T) {
+func TestMakeFuncVariadicUpstream(t *testing.T) {
 	// Test that variadic arguments are packed into a slice and passed as last arg
 	fn := func(_ int, is ...int) []int { return nil }
 	fv := MakeFunc(TypeOf(fn), func(in []Value) []Value { return in[1:2] })
@@ -2452,8 +2454,6 @@ func TestMakeFuncInvalidReturnAssignments(t *testing.T) {
 		f()
 	})
 }
-
-*/
 
 type Point struct {
 	x, y int
@@ -6643,6 +6643,8 @@ func (x *exhaustive) Maybe() bool {
 	return x.Choose(2) == 1
 }
 
+*/
+
 func GCFunc(args []Value) []Value {
 	runtime.GC()
 	return []Value{}
@@ -6654,6 +6656,8 @@ func TestReflectFuncTraceback(t *testing.T) {
 	f := MakeFunc(TypeOf(func() {}), GCFunc)
 	f.Call([]Value{})
 }
+
+/*
 
 func TestReflectMethodTraceback(t *testing.T) {
 	p := Point{3, 4}
@@ -6834,6 +6838,8 @@ func TestCallArgLive(t *testing.T) {
 	*CallGC = false
 }
 
+*/
+
 func TestMakeFuncStackCopy(t *testing.T) {
 	target := func(in []Value) []Value {
 		runtime.GC()
@@ -6858,6 +6864,8 @@ func useStack(n int) {
 	var b [1024]byte // makes frame about 1KB
 	useStack(n - 1 + int(b[99]))
 }
+
+/*
 
 type Impl struct{}
 
