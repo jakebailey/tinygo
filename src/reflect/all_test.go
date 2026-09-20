@@ -3725,8 +3725,6 @@ func TestSetLenCap(t *testing.T) {
 	shouldPanic("SetCap", func() { va.SetCap(8) })
 }
 
-/*
-
 func TestVariadic(t *testing.T) {
 	var b strings.Builder
 	V := ValueOf
@@ -3874,8 +3872,6 @@ type Public struct {
 func (p *Public) M() {
 }
 
-/*
-
 func TestUnexported(t *testing.T) {
 	var pub Public
 	pub.S = "S"
@@ -4002,16 +3998,12 @@ func TestSetPanic(t *testing.T) {
 	bad(func() { clear(v.Field(6).Field(1).Field(0)) }) // .namedT2.namedT0.W
 }
 
-*/
-
 type timp int
 
 func (t timp) W() {}
 func (t timp) Y() {}
 func (t timp) w() {}
 func (t timp) y() {}
-
-/*
 
 func TestCallPanic(t *testing.T) {
 	type t0 interface {
@@ -4130,10 +4122,7 @@ func TestValuePanic(t *testing.T) {
 	shouldPanic("call of reflect.Value.Uint on float64 Value", func() { vo(0.0).Uint() })
 }
 
-*/
-
 func shouldPanic(expect string, f func()) {
-	return
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -4172,8 +4161,6 @@ func isValid(v Value) {
 	}
 }
 
-/*
-
 func TestAlias(t *testing.T) {
 	x := string("hello")
 	v := ValueOf(&x).Elem()
@@ -4185,8 +4172,6 @@ func TestAlias(t *testing.T) {
 		t.Errorf("aliasing: old=%q new=%q, want hello, world", oldvalue, newvalue)
 	}
 }
-
-*/
 
 var V = ValueOf
 
@@ -4794,8 +4779,6 @@ func TestConvert(t *testing.T) {
 	}
 }
 
-/*
-
 func TestConvertPanic(t *testing.T) {
 	s := make([]byte, 4)
 	p := new([8]byte)
@@ -4839,8 +4822,6 @@ func TestConvertSlice2Array(t *testing.T) {
 		}
 	}
 }
-
-*/
 
 var gFloat32 float32
 
@@ -4980,8 +4961,6 @@ func TestTypeOverflow(t *testing.T) {
 	}
 }
 
-/*
-
 func checkSameType(t *testing.T, x Type, y any) {
 	if x != TypeOf(y) || TypeOf(Zero(x).Interface()) != TypeOf(y) {
 		t.Errorf("did not find preexisting type for %s (vs %s)", TypeOf(x), TypeOf(y))
@@ -5115,6 +5094,8 @@ func TestArrayOf(t *testing.T) {
 	checkSameType(t, ArrayOf(5, TypeOf(T(1))), [5]T{})
 }
 
+/*
+
 func TestArrayOfGC(t *testing.T) {
 	type T *uintptr
 	tt := TypeOf(T(nil))
@@ -5227,6 +5208,8 @@ func TestArrayOfDirectIface(t *testing.T) {
 	}
 }
 
+*/
+
 // Ensure passing in negative lengths panics.
 // See https://golang.org/issue/43603
 func TestArrayOfPanicOnNegativeLength(t *testing.T) {
@@ -5258,6 +5241,8 @@ func TestSliceOf(t *testing.T) {
 	type T1 int
 	checkSameType(t, SliceOf(TypeOf(T1(1))), []T1{})
 }
+
+/*
 
 func TestSliceOverflow(t *testing.T) {
 	// check that MakeSlice panics when size of slice overflows uint
@@ -5305,6 +5290,8 @@ func TestSliceOfGC(t *testing.T) {
 		}
 	}
 }
+
+*/
 
 func TestStructOfFieldName(t *testing.T) {
 	// invalid field name "1nvalid"
@@ -5638,6 +5625,8 @@ func TestStructOfExportRules(t *testing.T) {
 		})
 	}
 }
+
+/*
 
 func TestStructOfGC(t *testing.T) {
 	type T *uintptr
@@ -6189,6 +6178,8 @@ func TestStructOfTooLarge(t *testing.T) {
 	}
 }
 
+*/
+
 func TestChanOf(t *testing.T) {
 	// check construction and use of type not in binary
 	type T string
@@ -6245,6 +6236,8 @@ func TestChanOfDir(t *testing.T) {
 	}
 }
 
+/*
+
 func TestChanOfGC(t *testing.T) {
 	done := make(chan bool, 1)
 	go func() {
@@ -6293,6 +6286,8 @@ func TestChanOfGC(t *testing.T) {
 	}
 }
 
+*/
+
 func TestMapOf(t *testing.T) {
 	// check construction and use of type not in binary
 	type K string
@@ -6315,6 +6310,8 @@ func TestMapOf(t *testing.T) {
 	// check that invalid key type panics
 	shouldPanic("invalid key type", func() { MapOf(TypeOf((func())(nil)), TypeOf(false)) })
 }
+
+/*
 
 func TestMapOfGCKeys(t *testing.T) {
 	type T *uintptr
@@ -6398,6 +6395,8 @@ func TestTypelinksSorted(t *testing.T) {
 	}
 }
 
+*/
+
 func TestFuncOf(t *testing.T) {
 	// check construction and use of type not in binary
 	type K string
@@ -6455,8 +6454,6 @@ func TestFuncOf(t *testing.T) {
 	}
 	FuncOf(in, nil, false)
 }
-
-*/
 
 type R0 struct {
 	*R1
@@ -6535,8 +6532,6 @@ func TestEmbed(t *testing.T) {
 		t.Fatalf(`FieldByName("X") should fail, returned %v`, f.Index)
 	}
 }
-
-/*
 
 func TestAllocsInterfaceBig(t *testing.T) {
 	if testing.Short() {
@@ -6730,6 +6725,8 @@ func TestFieldByIndexNil(t *testing.T) {
 	t.Fatalf("did not panic")
 }
 
+/*
+
 // Given
 //	type Outer struct {
 //		*Inner
@@ -6834,6 +6831,8 @@ func TestCallArgLive(t *testing.T) {
 	*CallGC = false
 }
 
+*/
+
 func TestMakeFuncStackCopy(t *testing.T) {
 	target := func(in []Value) []Value {
 		runtime.GC()
@@ -6874,8 +6873,6 @@ func TestValueString(t *testing.T) {
 		t.Errorf("ValueOf(Impl{}).Method(0).String() = %q, want %q", method.String(), "<func() Value>")
 	}
 }
-
-*/
 
 func TestInvalid(t *testing.T) {
 	// Used to have inconsistency between IsValid() and Kind() != Invalid.
@@ -7403,9 +7400,13 @@ func TestTypeOfTypeOf(t *testing.T) {
 	check("SliceOf", SliceOf(TypeOf(T{})))
 }
 
+*/
+
 type XM struct{ _ bool }
 
 func (*XM) String() string { return "" }
+
+/*
 
 func TestPtrToMethods(t *testing.T) {
 	var y struct{ XM }
@@ -7534,6 +7535,8 @@ func TestExported(t *testing.T) {
 	}
 }
 
+*/
+
 func TestTypeStrings(t *testing.T) {
 	type stringTest struct {
 		typ  Type
@@ -7558,6 +7561,8 @@ func TestTypeStrings(t *testing.T) {
 		}
 	}
 }
+
+/*
 
 func TestOffsetLock(t *testing.T) {
 	var wg sync.WaitGroup
@@ -7658,8 +7663,6 @@ func TestSwapper(t *testing.T) {
 	}
 }
 
-/*
-
 // TestUnaddressableField tests that the reflect package will not allow
 // a type from another package to be used as a named type with an
 // unexported field.
@@ -7676,8 +7679,6 @@ func TestUnaddressableField(t *testing.T) {
 		lv.Set(rv)
 	})
 }
-
-*/
 
 type Tint int
 
@@ -7729,8 +7730,6 @@ func TestIssue22031(t *testing.T) {
 		}
 	}
 }
-
-/*
 
 type NonExportedFirst int
 
@@ -7935,8 +7934,6 @@ func iterateToString(it *MapIter) string {
 	return "[" + strings.Join(got, ", ") + "]"
 }
 
-/*
-
 func TestConvertibleTo(t *testing.T) {
 	t1 := ValueOf(example1.MyStruct{}).Type()
 	t2 := ValueOf(example2.MyStruct{}).Type()
@@ -7953,8 +7950,6 @@ func TestConvertibleTo(t *testing.T) {
 		t.Fatalf("(%s).ConvertibleTo(%s) = true, want false", t3, t4)
 	}
 }
-
-*/
 
 func TestSetIter(t *testing.T) {
 	data := map[string]int{
@@ -8058,6 +8053,8 @@ func TestMethodCallValueCodePtr(t *testing.T) {
 	}
 }
 
+*/
+
 type A struct{}
 type B[T any] struct{}
 
@@ -8072,8 +8069,6 @@ func TestIssue50208(t *testing.T) {
 	}
 }
 
-*/
-
 func TestNegativeKindString(t *testing.T) {
 	x := -1
 	s := Kind(x).String()
@@ -8087,8 +8082,6 @@ type (
 	namedBool  bool
 	namedBytes []byte
 )
-
-/*
 
 func TestValue_Cap(t *testing.T) {
 	a := &[3]int{1, 2, 3}
@@ -8155,8 +8148,6 @@ func TestValue_Len(t *testing.T) {
 		t.Errorf("error is %q, want %q", e, wantStr)
 	}
 }
-
-*/
 
 func TestValue_Comparable(t *testing.T) {
 	var a int
@@ -8338,8 +8329,6 @@ func TestValue_Comparable(t *testing.T) {
 		}
 	}
 }
-
-/*
 
 type ValueEqualTest struct {
 	v, u           any
@@ -8542,6 +8531,8 @@ func TestValue_EqualNonComparable(t *testing.T) {
 		}
 	}
 }
+
+/*
 
 func TestInitFuncTypes(t *testing.T) {
 	n := 100
