@@ -2497,8 +2497,6 @@ func (p *Point) Int32Method(x int32) int32 {
 	return x
 }
 
-/*
-// TODO(tinygo): missing method support
 func TestMethod(t *testing.T) {
 	// Non-curried method of type.
 	p := Point{3, 4}
@@ -2954,8 +2952,6 @@ func TestInterfaceSet(t *testing.T) {
 		t.Errorf("Interface Method returned %d; want 250", i)
 	}
 }
-
-*/
 
 type T1 struct {
 	a string

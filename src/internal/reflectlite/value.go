@@ -300,9 +300,6 @@ func (v Value) UnsafePointer() unsafe.Pointer {
 		return slice.data
 	case Func:
 		fn := (*funcHeader)(v.value)
-		if fn.Context != nil {
-			return fn.Context
-		}
 		return fn.Code
 	default:
 		panic(&ValueError{Method: "UnsafePointer", Kind: v.Kind()})
@@ -2758,12 +2755,124 @@ func makeFuncCall(context unsafe.Pointer, argPointers, resultPointers *unsafe.Po
 	runtimeKeepAlive(out)
 }
 
+//go:linkname dynamicMethodContext internal/reflectlite.dynamicMethodContext
+func dynamicMethodContext(actualType, receiver, signature unsafe.Pointer) unsafe.Pointer {
+	typ := (*RawType)(actualType)
+	var methods []dynamicMethod
+	switch typ.Kind() {
+	case Struct:
+		methods = (*dynamicStructType)(actualType).dynamicMethods
+	case Pointer:
+		methods = dynamicPointerMethods(typ)
+	default:
+		panic("reflect: invalid dynamic method receiver")
+	}
+	for _, method := range methods {
+		if method.signature != signature {
+			continue
+		}
+		receiverValue := Value{
+			typecode: typ,
+			value:    receiver,
+			flags:    valueFlagExported,
+		}
+		methodValue := method.entry.value
+		callback := func(args []Value) []Value {
+			args = append([]Value{receiverValue}, args...)
+			if method.callType.IsVariadic() {
+				return methodValue.CallSlice(args)
+			}
+			return methodValue.Call(args)
+		}
+		header := (*funcHeader)(unsafe.Pointer(&callback))
+		return unsafe.Pointer(&makeFuncContext{
+			typ:             method.callType,
+			callbackContext: header.Context,
+			callbackCode:    header.Code,
+		})
+	}
+	panic("reflect: dynamic method is unavailable")
+}
+
+//go:linkname dynamicTypeHasMethod internal/reflectlite.dynamicTypeHasMethod
+func dynamicTypeHasMethod(actualType, signature unsafe.Pointer) bool {
+	if actualType == nil {
+		return false
+	}
+	typ := (*RawType)(actualType)
+	var methods []dynamicMethod
+	switch typ.Kind() {
+	case Struct:
+		structType := (*structType)(actualType)
+		if !isDynamicStructType(structType) {
+			return false
+		}
+		methods = (*dynamicStructType)(actualType).dynamicMethods
+	case Pointer:
+		methods = dynamicPointerMethods(typ)
+	default:
+		return false
+	}
+	for _, method := range methods {
+		if method.signature == signature {
+			return true
+		}
+	}
+	return false
+}
+
 func (v Value) Method(i int) Value {
-	panic("unimplemented: (reflect.Value).Method()")
+	if !v.IsValid() {
+		panic(&ValueError{Method: "Method", Kind: Invalid})
+	}
+	if i < 0 || i >= v.NumMethod() {
+		panic("reflect: Method index out of range")
+	}
+	method := v.typecode.Method(i)
+	if v.Kind() == Interface {
+		elem := v.Elem()
+		if !elem.IsValid() {
+			panic("reflect: Method on nil interface value")
+		}
+		return elem.MethodByName(method.Name)
+	}
+	if !method.Func.IsValid() {
+		panic("reflect: method function is unavailable")
+	}
+
+	in := make([]Type, method.Type.NumIn()-1)
+	for i := range in {
+		in[i] = method.Type.In(i + 1)
+	}
+	out := make([]Type, method.Type.NumOut())
+	for i := range out {
+		out[i] = method.Type.Out(i)
+	}
+	boundType := FuncOf(in, out, method.Type.IsVariadic())
+	callback := func(args []Value) []Value {
+		callArgs := make([]Value, len(args)+1)
+		callArgs[0] = v
+		copy(callArgs[1:], args)
+		if method.Type.IsVariadic() {
+			return method.Func.CallSlice(callArgs)
+		}
+		return method.Func.Call(callArgs)
+	}
+	callbackHeader := (*funcHeader)(unsafe.Pointer(&callback))
+	result := MakeFunc(boundType, callbackHeader.Context, callbackHeader.Code)
+	result.flags = v.flags & (valueFlagExported | valueFlagRO)
+	return result
 }
 
 func (v Value) MethodByName(name string) Value {
-	panic("unimplemented: (reflect.Value).MethodByName()")
+	if !v.IsValid() {
+		panic(&ValueError{Method: "MethodByName", Kind: Invalid})
+	}
+	method, ok := v.typecode.MethodByName(name)
+	if !ok {
+		return Value{}
+	}
+	return v.Method(method.Index)
 }
 
 func (v Value) Send(x Value) {
