@@ -5001,8 +5001,6 @@ func checkSameType(t *testing.T, x Type, y any) {
 	}
 }
 
-/*
-
 func TestArrayOf(t *testing.T) {
 	// check construction and use of type not in binary
 	tests := []struct {
@@ -5130,6 +5128,8 @@ func TestArrayOf(t *testing.T) {
 	checkSameType(t, ArrayOf(5, TypeOf(T(1))), [5]T{})
 }
 
+/*
+
 func TestArrayOfGC(t *testing.T) {
 	type T *uintptr
 	tt := TypeOf(T(nil))
@@ -5242,6 +5242,8 @@ func TestArrayOfDirectIface(t *testing.T) {
 	}
 }
 
+*/
+
 // Ensure passing in negative lengths panics.
 // See https://golang.org/issue/43603
 func TestArrayOfPanicOnNegativeLength(t *testing.T) {
@@ -5249,8 +5251,6 @@ func TestArrayOfPanicOnNegativeLength(t *testing.T) {
 		ArrayOf(-1, TypeOf(byte(0)))
 	})
 }
-
-*/
 
 func TestSliceOf(t *testing.T) {
 	// check construction and use of type not in binary
