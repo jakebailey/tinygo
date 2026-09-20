@@ -1242,7 +1242,10 @@ func (c *compilerContext) getMethodSetValue(owner types.Type, methods []*types.F
 	// Create a sorted list of methods.
 	type methodRef struct {
 		signatureName string
-		methodName    string
+		metadataName  string
+		name          string
+		pkgPath       string
+		pkgName       string
 		signature     llvm.Value
 		methodType    llvm.Value
 	}
@@ -1250,11 +1253,18 @@ func (c *compilerContext) getMethodSetValue(owner types.Type, methods []*types.F
 	_, ownerIsInterface := owner.Underlying().(*types.Interface)
 	for _, method := range methods {
 		name := method.Name()
+		var pkgPath, pkgName string
 		if !token.IsExported(name) {
-			name = method.Pkg().Path() + "." + name
+			pkgPath = method.Pkg().Path()
+			pkgName = method.Pkg().Name()
 		}
 		s, _ := c.getTypeCodeName(method.Type())
-		globalName := "reflect/types.signature:" + name + ":" + s
+		signatureName := name
+		if pkgPath != "" {
+			signatureName = pkgPath + "." + name
+		}
+		metadataName := signatureName + ":" + s
+		globalName := "reflect/types.signature:" + metadataName
 		value := c.mod.NamedGlobal(globalName)
 		if value.IsNil() {
 			value = llvm.AddGlobal(c.mod, c.ctx.Int8Type(), globalName)
@@ -1294,8 +1304,11 @@ func (c *compilerContext) getMethodSetValue(owner types.Type, methods []*types.F
 			)
 		}
 		refs = append(refs, methodRef{
-			signatureName: name,
-			methodName:    name,
+			signatureName: signatureName,
+			metadataName:  metadataName,
+			name:          name,
+			pkgPath:       pkgPath,
+			pkgName:       pkgName,
 			signature:     value,
 			methodType:    c.getTypeCode(reflectedType),
 		})
@@ -1309,7 +1322,7 @@ func (c *compilerContext) getMethodSetValue(owner types.Type, methods []*types.F
 	var types []llvm.Value
 	for _, ref := range refs {
 		signatures = append(signatures, ref.signature)
-		names = append(names, c.getMethodNameGlobal(ref.methodName))
+		names = append(names, c.getMethodNameGlobal(ref.metadataName, ref.pkgPath, ref.pkgName, ref.name))
 		types = append(types, ref.methodType)
 	}
 
@@ -1321,13 +1334,13 @@ func (c *compilerContext) getMethodSetValue(owner types.Type, methods []*types.F
 	}, false)
 }
 
-func (c *compilerContext) getMethodNameGlobal(name string) llvm.Value {
-	globalName := "reflect/types.methodname:" + name
+func (c *compilerContext) getMethodNameGlobal(identity, pkgPath, pkgName, name string) llvm.Value {
+	globalName := "reflect/types.methodname:" + identity
 	global := c.mod.NamedGlobal(globalName)
 	if !global.IsNil() {
 		return global
 	}
-	value := c.ctx.ConstString(name+"\x00", false)
+	value := c.ctx.ConstString(pkgPath+"\x00"+pkgName+"\x00"+name+"\x00", false)
 	global = llvm.AddGlobal(c.mod, value.Type(), globalName)
 	global.SetInitializer(value)
 	global.SetGlobalConstant(true)
