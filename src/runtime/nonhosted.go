@@ -53,4 +53,18 @@ func init() {
 		}
 		env = append(env, s[start:])
 	}
+
+	if value := startupEnv("GOROOT"); value != "" {
+		goroot = value
+	}
+	godebugSetEnv(startupEnv("GODEBUG"))
+}
+
+func startupEnv(key string) string {
+	for _, entry := range env {
+		if len(entry) > len(key) && entry[:len(key)] == key && entry[len(key)] == '=' {
+			return entry[len(key)+1:]
+		}
+	}
+	return ""
 }

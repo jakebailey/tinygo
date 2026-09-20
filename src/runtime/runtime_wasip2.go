@@ -13,10 +13,24 @@ import (
 )
 
 func init() {
+	if value := startupEnv("GOROOT"); value != "" {
+		goroot = value
+	}
+	godebugSetEnv(startupEnv("GODEBUG"))
+
 	wasiclirun.Exports.Run = func() cm.BoolResult {
 		callMain()
 		return false
 	}
+}
+
+func startupEnv(key string) string {
+	for _, entry := range environment.GetEnvironment().Slice() {
+		if entry[0] == key {
+			return entry[1]
+		}
+	}
+	return ""
 }
 
 var args []string
