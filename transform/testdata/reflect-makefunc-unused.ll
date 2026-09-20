@@ -3,6 +3,7 @@
 @"internal/reflectlite.makeFuncLinksLen" = global i32 0
 @"reflect/types.type:named:unusedMakeFuncType" = internal constant { i8 } zeroinitializer
 @"reflect/types.type:func:{}{}" = constant { [2 x i32], i8, i8, i16, ptr, [0 x ptr] } { [2 x i32] [i32 ptrtoint (ptr @"reflect/call:func:{}{}" to i32), i32 ptrtoint (ptr @"reflect/makefunc:func:{}{}" to i32)], i8 24, i8 0, i16 0, ptr null, [0 x ptr] zeroinitializer }
+@"reflect/dynamicmethod.link:func:{}{}" = internal constant ptr @"reflect/makefunc:func:{}{}"
 
 define weak_odr void @"reflect/call:func:{}{}"() {
 entry:

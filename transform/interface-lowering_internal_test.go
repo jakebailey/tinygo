@@ -165,3 +165,34 @@ func TestReflectMethodFunctionDCE(t *testing.T) {
 		})
 	}
 }
+
+func TestUsesReflectStructOf(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"unused marker", "testdata/reflect-structof-unused.ll", false},
+		{"used marker", "testdata/reflect-structof-used.ll", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+			buf, err := llvm.NewMemoryBufferFromFile(tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mod, err := ctx.ParseIR(buf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer mod.Dispose()
+			p := lowerInterfacesPass{mod: mod}
+			if got := p.usesReflectStructOf(); got != tc.want {
+				t.Errorf("usesReflectStructOf() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
