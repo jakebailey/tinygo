@@ -449,11 +449,11 @@ func main() {
 		println("reflect map interface key ok")
 	}
 
-	// An array element type that only reflect boxes must stay in the
-	// interface method dispatch. See issue #6168.
 	{
-		var a any = [1]elemStringer{7}
-		println(reflect.ValueOf(a).Index(0).Interface().(stringer).String())
+		iter := reflect.ValueOf(map[[2]byte]uint16{{17, 25}: 42}).MapRange()
+		if !iter.Next() || iter.Key().Interface().([2]byte) != [2]byte{17, 25} || iter.Value().Uint() != 42 {
+			panic("map iterator changed inline values")
+		}
 	}
 
 	println("\nfunc type reflection")
@@ -483,6 +483,21 @@ func main() {
 	}
 	fn := reflectmakefunc.Make(reflect.TypeOf((func(int) int)(nil))).(func(int) int)
 	println("cross-package MakeFunc:", fn(41))
+
+	writer := reflect.ValueOf(&myWriter{})
+	method, ok := writer.Type().MethodByName("Write")
+	if !ok || !method.Func.IsValid() {
+		panic("reflected method function is unavailable")
+	}
+	results := writer.MethodByName("Write").Call([]reflect.Value{reflect.ValueOf([]byte("hello"))})
+	println("reflected pointer method:", results[0].Int(), results[1].IsNil())
+
+	// An array element type that only reflect boxes must stay in the
+	// interface method dispatch. See issue #6168.
+	{
+		var a any = [1]elemStringer{7}
+		println(reflect.ValueOf(a).Index(0).Interface().(stringer).String())
+	}
 }
 
 type elemStringer int

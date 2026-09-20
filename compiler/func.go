@@ -290,6 +290,10 @@ func (c *context) getLLVMFunctionType(typ *types.Signature) llvm.Type {
 	} else {
 		abi = c.getFunctionABI(typ, false)
 	}
+	return c.getLLVMFunctionTypeForABI(abi)
+}
+
+func (c *context) getLLVMFunctionTypeForABI(abi functionABI) llvm.Type {
 	returnType := abi.resultType
 
 	// Get the parameter types.
@@ -340,5 +344,6 @@ func (b *builder) parseMakeClosure(expr *ssa.MakeClosure) (llvm.Value, error) {
 
 	// Create the closure.
 	_, fn := b.getFunction(f)
+	b.markReflectFunctionValue(f, fn)
 	return b.createFuncValue(fn, context, f.Signature), nil
 }

@@ -2545,8 +2545,6 @@ func (p *Point) Int32Method(x int32) int32 {
 	return x
 }
 
-/*
-// TODO(tinygo): missing method support
 func TestMethod(t *testing.T) {
 	// Non-curried method of type.
 	p := Point{3, 4}
@@ -3003,8 +3001,6 @@ func TestInterfaceSet(t *testing.T) {
 	}
 }
 
-*/
-
 type T1 struct {
 	a string
 	int
@@ -3377,7 +3373,6 @@ func TestVariadicType(t *testing.T) {
 	t.Error(s)
 }
 
-/*
 type inner struct {
 	x int
 }
@@ -3392,7 +3387,7 @@ func (*outer) M() {}
 
 func TestNestedMethods(t *testing.T) {
 	typ := TypeOf((*outer)(nil))
-	if typ.NumMethod() != 1 || typ.Method(0).Func.UnsafePointer() != ValueOf((*outer).M).UnsafePointer() {
+	if typ.NumMethod() != 1 || typ.Method(0).Func.Type() != ValueOf((*outer).M).Type() {
 		t.Errorf("Wrong method table for outer: (M=%p)", (*outer).M)
 		for i := 0; i < typ.NumMethod(); i++ {
 			m := typ.Method(i)
@@ -3400,8 +3395,6 @@ func TestNestedMethods(t *testing.T) {
 		}
 	}
 }
-
-*/
 
 type unexp struct{}
 
@@ -3435,11 +3428,9 @@ func (i *InnerInt) M() int {
 	return i.X
 }
 
-/*
-
 func TestEmbeddedMethods(t *testing.T) {
 	typ := TypeOf((*OuterInt)(nil))
-	if typ.NumMethod() != 1 || typ.Method(0).Func.UnsafePointer() != ValueOf((*OuterInt).M).UnsafePointer() {
+	if typ.NumMethod() != 1 || typ.Method(0).Func.Type() != ValueOf((*OuterInt).M).Type() {
 		t.Errorf("Wrong method table for OuterInt: (m=%p)", (*OuterInt).M)
 		for i := 0; i < typ.NumMethod(); i++ {
 			m := typ.Method(i)
@@ -3462,8 +3453,6 @@ func TestEmbeddedMethods(t *testing.T) {
 		t.Errorf("f(o) = %d, want 2", v)
 	}
 }
-
-*/
 
 type FuncDDD func(...any) error
 
@@ -3776,8 +3765,6 @@ func TestSetLenCap(t *testing.T) {
 	shouldPanic("SetCap", func() { va.SetCap(8) })
 }
 
-/*
-
 func TestVariadic(t *testing.T) {
 	var b strings.Builder
 	V := ValueOf
@@ -3925,8 +3912,6 @@ type Public struct {
 func (p *Public) M() {
 }
 
-/*
-
 func TestUnexported(t *testing.T) {
 	var pub Public
 	pub.S = "S"
@@ -3966,8 +3951,6 @@ func TestUnexported(t *testing.T) {
 	shouldPanic("Interface", func() { v.Elem().FieldByName("y").Interface() })
 	shouldPanic("Method", func() { v.Type().Method(0) })
 }
-
-*/
 
 func TestSetPanic(t *testing.T) {
 	ok := func(f func()) { f() }
@@ -4061,8 +4044,6 @@ func (t timp) W() {}
 func (t timp) Y() {}
 func (t timp) w() {}
 func (t timp) y() {}
-
-/*
 
 func TestCallPanic(t *testing.T) {
 	type t0 interface {
@@ -4180,8 +4161,6 @@ func TestValuePanic(t *testing.T) {
 	shouldPanic("call of reflect.Value.TrySend on string Value", func() { vo("").TrySend(vo("")) })
 	shouldPanic("call of reflect.Value.Uint on float64 Value", func() { vo(0.0).Uint() })
 }
-
-*/
 
 func shouldPanic(expect string, f func()) {
 	defer func() {
@@ -5957,6 +5936,8 @@ func TestStructOfDirectIface(t *testing.T) {
 	}
 }
 
+*/
+
 type StructI int
 
 func (i StructI) Get() int { return int(i) }
@@ -6157,12 +6138,12 @@ func TestStructOfWithInterface(t *testing.T) {
 			Type:      StructOf(nil),
 		},
 	}
-	// With the current implementation this is expected to panic.
-	// Ideally it should work and we should be able to call the
-	// Set and Get methods.
-	shouldPanic("", func() {
-		StructOf(fields)
-	})
+	// Go rejects this layout because of its direct-interface representation.
+	// See https://go.dev/src/reflect/type.go.
+	rt = StructOf(fields)
+	if rt.NumField() != len(fields) || rt.Field(0).Type != fields[0].Type {
+		t.Errorf("StructOf returned incorrect fields: %v", rt)
+	}
 }
 
 func TestStructOfTooManyFields(t *testing.T) {
@@ -6175,8 +6156,6 @@ func TestStructOfTooManyFields(t *testing.T) {
 		t.Errorf("Expected method `After` to be found")
 	}
 }
-
-*/
 
 func TestStructOfDifferentPkgPath(t *testing.T) {
 	fields := []StructField{
@@ -6302,8 +6281,6 @@ func TestStructOfTooLarge(t *testing.T) {
 	}
 }
 
-/*
-
 func TestChanOf(t *testing.T) {
 	// check construction and use of type not in binary
 	type T string
@@ -6340,8 +6317,6 @@ func TestChanOf(t *testing.T) {
 	}
 }
 
-*/
-
 func TestChanOfDir(t *testing.T) {
 	// check construction and use of type not in binary
 	type T string
@@ -6361,8 +6336,6 @@ func TestChanOfDir(t *testing.T) {
 		t.Errorf("chan dir: have %q, want %q", cst.ChanDir().String(), "chan<-")
 	}
 }
-
-/*
 
 func TestChanOfGC(t *testing.T) {
 	done := make(chan bool, 1)
@@ -6411,8 +6384,6 @@ func TestChanOfGC(t *testing.T) {
 		}
 	}
 }
-
-*/
 
 func TestMapOf(t *testing.T) {
 	// check construction and use of type not in binary
@@ -6521,6 +6492,8 @@ func TestTypelinksSorted(t *testing.T) {
 	}
 }
 
+*/
+
 func TestFuncOf(t *testing.T) {
 	// check construction and use of type not in binary
 	type K string
@@ -6578,8 +6551,6 @@ func TestFuncOf(t *testing.T) {
 	}
 	FuncOf(in, nil, false)
 }
-
-*/
 
 type R0 struct {
 	*R1
@@ -6689,8 +6660,6 @@ func TestReflectFuncTraceback(t *testing.T) {
 	f.Call([]Value{})
 }
 
-/*
-
 func TestReflectMethodTraceback(t *testing.T) {
 	p := Point{3, 4}
 	m := ValueOf(p).MethodByName("GCMethod")
@@ -6699,8 +6668,6 @@ func TestReflectMethodTraceback(t *testing.T) {
 		t.Errorf("Call returned %d; want 8", i)
 	}
 }
-
-*/
 
 func TestSmallZero(t *testing.T) {
 	type T [10]byte
@@ -6897,8 +6864,6 @@ func useStack(n int) {
 	useStack(n - 1 + int(b[99]))
 }
 
-/*
-
 type Impl struct{}
 
 func (Impl) F() {}
@@ -6915,8 +6880,6 @@ func TestValueString(t *testing.T) {
 	}
 }
 
-*/
-
 func TestInvalid(t *testing.T) {
 	// Used to have inconsistency between IsValid() and Kind() != Invalid.
 	type T struct{ v any }
@@ -6930,8 +6893,6 @@ func TestInvalid(t *testing.T) {
 		t.Errorf("field elem: IsValid=%v, Kind=%v, want false, Invalid", v.IsValid(), v.Kind())
 	}
 }
-
-/*
 
 // Issue 8917.
 func TestLargeGCProg(t *testing.T) {
@@ -7071,6 +7032,8 @@ func clobber() {
 	}
 	runtime.GC()
 }
+
+/*
 
 func TestFuncLayout(t *testing.T) {
 	align := func(x uintptr) uintptr {
@@ -7443,6 +7406,8 @@ func TestTypeOfTypeOf(t *testing.T) {
 	check("SliceOf", SliceOf(TypeOf(T{})))
 }
 
+*/
+
 type XM struct{ _ bool }
 
 func (*XM) String() string { return "" }
@@ -7485,8 +7450,6 @@ func TestMapAlloc(t *testing.T) {
 	// the threshold to 10, to not make it overly brittle if something changes in the initial allocation of the
 	// map, but to still catch a regression where we keep re-allocating in the hashmap as new entries are added.
 }
-
-*/
 
 func TestChanAlloc(t *testing.T) {
 	// Note: for a chan int, the return Value must be allocated, so we
@@ -7574,6 +7537,8 @@ func TestExported(t *testing.T) {
 	}
 }
 
+*/
+
 func TestTypeStrings(t *testing.T) {
 	type stringTest struct {
 		typ  Type
@@ -7598,6 +7563,8 @@ func TestTypeStrings(t *testing.T) {
 		}
 	}
 }
+
+/*
 
 func TestOffsetLock(t *testing.T) {
 	var wg sync.WaitGroup
@@ -7698,8 +7665,6 @@ func TestSwapper(t *testing.T) {
 	}
 }
 
-/*
-
 // TestUnaddressableField tests that the reflect package will not allow
 // a type from another package to be used as a named type with an
 // unexported field.
@@ -7716,8 +7681,6 @@ func TestUnaddressableField(t *testing.T) {
 		lv.Set(rv)
 	})
 }
-
-*/
 
 type Tint int
 
@@ -7770,8 +7733,6 @@ func TestIssue22031(t *testing.T) {
 	}
 }
 
-/*
-
 type NonExportedFirst int
 
 func (i NonExportedFirst) ΦExported()       {}
@@ -7787,8 +7748,6 @@ func TestIssue22073(t *testing.T) {
 	// Shouldn't panic.
 	m.Call(nil)
 }
-
-*/
 
 func TestMapIterNonEmptyMap(t *testing.T) {
 	m := map[string]int{"one": 1, "two": 2, "three": 3}
@@ -7962,6 +7921,115 @@ func TestMapIterDelete1(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Errorf("iterator returned wrong number of elements: got %d, want 1", len(got))
+	}
+}
+
+func TestTinyMapIterSetAllocations(t *testing.T) {
+	m := ValueOf(map[int]int{1: 2, 3: 4})
+	iter := m.MapRange()
+	key, value := 0, 0
+	k, v := ValueOf(&key).Elem(), ValueOf(&value).Elem()
+	if got := testing.AllocsPerRun(10, func() {
+		iter.Reset(m)
+		for iter.Next() {
+			k.SetIterKey(iter)
+			v.SetIterValue(iter)
+		}
+	}); got != 0 {
+		t.Errorf("reusing a map iterator allocated %g times, want 0", got)
+	}
+}
+
+func TestTinyMapIterSnapshots(t *testing.T) {
+	m := map[string][3]int{"one": {1, 2, 3}, "two": {4, 5, 6}, "three": {7, 8, 9}}
+	type entry struct {
+		key, value Value
+		want       [3]int
+	}
+	var entries []entry
+	iter := ValueOf(m).MapRange()
+	for iter.Next() {
+		key, value := iter.Key(), iter.Value()
+		if key.CanAddr() || value.CanAddr() {
+			t.Fatal("iterator snapshots are addressable")
+		}
+		entries = append(entries, entry{key, value, m[key.String()]})
+	}
+	for key := range m {
+		m[key] = [3]int{-1, -1, -1}
+		delete(m, key)
+	}
+	iter.Reset(Value{})
+	runtime.GC()
+	for _, entry := range entries {
+		if got := entry.value.Interface().([3]int); got != entry.want {
+			t.Errorf("retained value for %q = %v, want %v", entry.key.String(), got, entry.want)
+		}
+	}
+}
+
+func TestTinyMapIterGrow(t *testing.T) {
+	m := make(map[int]int)
+	for i := 0; i < 32; i++ {
+		m[i] = i
+	}
+	iter := ValueOf(m).MapRange()
+	if !iter.Next() {
+		t.Fatal("empty iterator")
+	}
+	first := int(iter.Key().Int())
+	for i := 32; i < 512; i++ {
+		m[i] = i
+	}
+	for i := 0; i < 512; i++ {
+		m[i] = -i
+	}
+	deleted := (first + 1) % 32
+	delete(m, deleted)
+	seen := map[int]bool{first: true}
+	for iter.Next() {
+		key, value := int(iter.Key().Int()), int(iter.Value().Int())
+		if seen[key] {
+			t.Fatalf("duplicate key %d after growth", key)
+		}
+		if want, ok := m[key]; !ok || value != want {
+			t.Fatalf("entry (%d, %d) after growth, want (%d, %d), present %v", key, value, key, want, ok)
+		}
+		seen[key] = true
+	}
+	for i := 0; i < 32; i++ {
+		if i != deleted && !seen[i] {
+			t.Errorf("missed original key %d after growth", i)
+		}
+	}
+}
+
+func TestTinyMapIterIndirectEntries(t *testing.T) {
+	var key, value [256]byte
+	key[0], key[255] = 1, 2
+	value[0], value[255] = 3, 4
+	m := map[[256]byte][256]byte{key: value}
+	iter := ValueOf(m).MapRange()
+	var gotKey, gotValue [256]byte
+	k, v := ValueOf(&gotKey).Elem(), ValueOf(&gotValue).Elem()
+	if !iter.Next() {
+		t.Fatal("empty iterator")
+	}
+	k.SetIterKey(iter)
+	v.SetIterValue(iter)
+	if gotKey != key || gotValue != value {
+		t.Fatal("incorrect indirect entry")
+	}
+	snapshotKey, snapshotValue := iter.Key(), iter.Value()
+	delete(m, key)
+	iter.Reset(Value{})
+	runtime.GC()
+	if snapshotKey.Interface().([256]byte) != key || snapshotValue.Interface().([256]byte) != value {
+		t.Fatal("indirect snapshots changed")
+	}
+	empty := ValueOf(map[struct{}]struct{}{{}: {}}).MapRange()
+	if !empty.Next() || empty.Key().Interface() != (struct{}{}) || empty.Value().Interface() != (struct{}{}) || empty.Next() {
+		t.Fatal("incorrect zero-sized entry")
 	}
 }
 
@@ -8575,8 +8643,6 @@ func TestValue_EqualNonComparable(t *testing.T) {
 	}
 }
 
-/*
-
 func TestInitFuncTypes(t *testing.T) {
 	n := 100
 	var wg sync.WaitGroup
@@ -8593,5 +8659,3 @@ func TestInitFuncTypes(t *testing.T) {
 	}
 	wg.Wait()
 }
-
-*/
