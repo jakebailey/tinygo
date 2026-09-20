@@ -68,40 +68,40 @@ type Config struct {
 // must not contain function-dependent data such as an IR builder.
 type compilerContext struct {
 	*Config
-	DumpSSA          bool
-	mod              llvm.Module
-	ctx              llvm.Context
-	builder          llvm.Builder // only used for constant operations
-	dibuilder        *llvm.DIBuilder
-	cu               llvm.Metadata
-	difiles          map[string]llvm.Metadata
-	ditypes          map[types.Type]llvm.Metadata
-	llvmTypes        typeutil.Map
-	interfaceTypes   typeutil.Map
-	machine          llvm.TargetMachine
-	targetData       llvm.TargetData
-	intType          llvm.Type
-	dataPtrType      llvm.Type // pointer in address space 0
-	funcPtrType      llvm.Type // pointer in function address space (1 for AVR, 0 elsewhere)
-	funcPtrAddrSpace int
-	uintptrType      llvm.Type
-	program          *ssa.Program
-	diagnostics      []error
-	functionInfos    map[*ssa.Function]functionInfo
-	callProperties   map[*ssa.Function]functionCallProperties
-	asyncifyCatchers map[llvm.Type]llvm.Value
-	directCatchers   map[llvm.Value]llvm.Value
+	DumpSSA             bool
+	mod                 llvm.Module
+	ctx                 llvm.Context
+	builder             llvm.Builder // only used for constant operations
+	dibuilder           *llvm.DIBuilder
+	cu                  llvm.Metadata
+	difiles             map[string]llvm.Metadata
+	ditypes             map[types.Type]llvm.Metadata
+	llvmTypes           typeutil.Map
+	interfaceTypes      typeutil.Map
+	machine             llvm.TargetMachine
+	targetData          llvm.TargetData
+	intType             llvm.Type
+	dataPtrType         llvm.Type // pointer in address space 0
+	funcPtrType         llvm.Type // pointer in function address space (1 for AVR, 0 elsewhere)
+	funcPtrAddrSpace    int
+	uintptrType         llvm.Type
+	program             *ssa.Program
+	diagnostics         []error
+	functionInfos       map[*ssa.Function]functionInfo
+	callProperties      map[*ssa.Function]functionCallProperties
+	asyncifyCatchers    map[llvm.Type]llvm.Value
+	directCatchers      map[llvm.Value]llvm.Value
 	indirectCatchers map[llvm.Type]llvm.Value
 	asyncifyReplays  map[llvm.Type]llvm.Value
 	functionABIs     map[functionABIKey]functionABI
-	astComments      map[string]*ast.CommentGroup
-	cgoImportDynamic map[string]string // //go:cgo_import_dynamic local name -> remote symbol
-	embedGlobals     map[string][]*loader.EmbedFile
-	pkg              *types.Package
-	loaderPkg        *loader.Package // current package being compiled (for AST access)
-	packageDir       string          // directory for this package
-	runtimePkg       *types.Package
-	localTypeNames   typeutil.Map // *types.Named (synthetic local from generic instantiation) -> string
+	astComments         map[string]*ast.CommentGroup
+	cgoImportDynamic    map[string]string // //go:cgo_import_dynamic local name -> remote symbol
+	embedGlobals        map[string][]*loader.EmbedFile
+	pkg                 *types.Package
+	loaderPkg           *loader.Package // current package being compiled (for AST access)
+	packageDir          string          // directory for this package
+	runtimePkg          *types.Package
+	localTypeNames      typeutil.Map // *types.Named (synthetic local from generic instantiation) -> string
 }
 
 // newCompilerContext returns a new compiler context ready for use, most
@@ -2279,12 +2279,43 @@ func (b *builder) createBuiltin(argTypes []types.Type, argValues []llvm.Value, c
 	}
 }
 
+func (b *builder) markReflectMakeFuncUse(call *ssa.CallCommon) {
+	pkg := b.fn.Pkg
+	if pkg == nil && b.fn.Origin() != nil {
+		pkg = b.fn.Origin().Pkg
+	}
+	if pkg != nil {
+		switch pkg.Pkg.Path() {
+		case "reflect", "internal/reflectlite":
+			return
+		}
+	}
+
+	var function *types.Func
+	if call.IsInvoke() {
+		function = call.Method
+	} else if callee := call.StaticCallee(); callee != nil {
+		if object := callee.Object(); object != nil {
+			function, _ = object.(*types.Func)
+		}
+	}
+	if function == nil || function.Pkg() == nil || function.Pkg().Path() != "reflect" {
+		return
+	}
+	if function.Name() == "MakeFunc" {
+		attr := b.ctx.CreateStringAttribute("tinygo-reflect-makefunc", "")
+		b.llvmFn.AddFunctionAttr(attr)
+	}
+}
+
 // createFunctionCall lowers a Go SSA call instruction (to a simple function,
 // closure, function pointer, builtin, method, etc.) to LLVM IR, usually a call
 // instruction.
 //
 // This is also where compiler intrinsics are implemented.
 func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) {
+	b.markReflectMakeFuncUse(instr)
+
 	// See if this is an intrinsic function that is handled specially.
 	if fn := instr.StaticCallee(); fn != nil {
 		// Direct function call, either to a named or anonymous (directly

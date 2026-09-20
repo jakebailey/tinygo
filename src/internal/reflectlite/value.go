@@ -88,6 +88,9 @@ func composeInterface(unsafe.Pointer, unsafe.Pointer) interface{}
 //go:linkname decomposeInterface runtime.decomposeInterface
 func decomposeInterface(i interface{}) (unsafe.Pointer, unsafe.Pointer)
 
+//go:linkname runtimeKeepAlive runtime.KeepAlive
+func runtimeKeepAlive(x interface{})
+
 func ValueOf(i interface{}) Value {
 	typecode, value := decomposeInterface(i)
 	return Value{
@@ -2032,6 +2035,32 @@ type funcHeader struct {
 	Code    unsafe.Pointer
 }
 
+type reflectCallAdapter func(uintptr, unsafe.Pointer, *unsafe.Pointer, *unsafe.Pointer)
+
+//go:extern internal/reflectlite.funcCallTypes
+var funcCallTypes **RawType
+
+//go:extern internal/reflectlite.funcCallAdapters
+var funcCallAdapters *unsafe.Pointer
+
+//go:extern internal/reflectlite.funcCallLinksLen
+var funcCallLinksLen uintptr
+
+//go:extern internal/reflectlite.makeFuncTypes
+var makeFuncTypes **RawType
+
+//go:extern internal/reflectlite.makeFuncAdapters
+var makeFuncAdapters *unsafe.Pointer
+
+//go:extern internal/reflectlite.makeFuncLinksLen
+var makeFuncLinksLen uintptr
+
+type makeFuncContext struct {
+	typ             *RawType
+	callbackContext unsafe.Pointer
+	callbackCode    unsafe.Pointer
+}
+
 // Slice header that matches the underlying structure. Used for when we switch
 // to a precise GC, which needs to know exactly where pointers live.
 type sliceHeader struct {
@@ -2519,11 +2548,214 @@ func MakeChan(typ Type, size int) Value {
 }
 
 func (v Value) Call(in []Value) []Value {
-	panic("unimplemented: (reflect.Value).Call()")
+	return v.call(in, false)
 }
 
 func (v Value) CallSlice(in []Value) []Value {
-	panic("unimplemented: (reflect.Value).CallSlice()")
+	return v.call(in, true)
+}
+
+func (v Value) call(in []Value, callSlice bool) []Value {
+	method := "Call"
+	if callSlice {
+		method = "CallSlice"
+	}
+	if v.Kind() != Func {
+		panic(&ValueError{Method: method, Kind: v.Kind()})
+	}
+	fn := (*funcHeader)(v.value)
+	if fn.Code == nil {
+		panic("reflect: call of nil function")
+	}
+
+	typ := v.typecode
+	numIn := typ.NumIn()
+	var args []Value
+	if callSlice {
+		if !typ.IsVariadic() {
+			panic("reflect: CallSlice of non-variadic function")
+		}
+		if len(in) != numIn {
+			panic("reflect: CallSlice with wrong argument count")
+		}
+		args = in
+	} else if typ.IsVariadic() {
+		fixed := numIn - 1
+		if len(in) < fixed {
+			panic("reflect: Call with too few input arguments")
+		}
+		args = make([]Value, numIn)
+		copy(args, in[:fixed])
+		sliceType := typ.In(fixed).(*RawType)
+		variadic := MakeSlice(sliceType, len(in)-fixed, len(in)-fixed)
+		elemType := sliceType.elem()
+		for i, arg := range in[fixed:] {
+			checkCallArgument(arg, elemType)
+			variadic.Index(i).Set(arg)
+		}
+		args[fixed] = variadic
+	} else {
+		if len(in) != numIn {
+			panic("reflect: Call with wrong argument count")
+		}
+		args = in
+	}
+
+	argStorage := make([]Value, numIn)
+	argPointers := make([]unsafe.Pointer, numIn)
+	for i, arg := range args {
+		paramType := typ.In(i).(*RawType)
+		checkCallArgument(arg, paramType)
+		storage := New(paramType).Elem()
+		storage.Set(arg)
+		argStorage[i] = storage
+		argPointers[i] = storage.value
+	}
+
+	numOut := typ.NumOut()
+	resultStorage := make([]Value, numOut)
+	resultPointers := make([]unsafe.Pointer, numOut)
+	for i := range numOut {
+		storage := New(typ.Out(i)).Elem()
+		resultStorage[i] = storage
+		resultPointers[i] = storage.value
+	}
+
+	if fn.Code == makeFuncStubCode() {
+		makeFuncCall(fn.Context, unsafe.SliceData(argPointers), unsafe.SliceData(resultPointers))
+	} else {
+		adapter := reflectCallAdapterFor(typ)
+		call := *(*reflectCallAdapter)(unsafe.Pointer(&funcHeader{Code: adapter}))
+		call(uintptr(fn.Code), fn.Context, unsafe.SliceData(argPointers), unsafe.SliceData(resultPointers))
+	}
+	runtimeKeepAlive(v)
+	runtimeKeepAlive(argStorage)
+
+	for i := range resultStorage {
+		result := &resultStorage[i]
+		result.flags = valueFlagExported
+		if result.typecode.Size() <= unsafe.Sizeof(uintptr(0)) {
+			result.value = loadSmallValue(result.value, result.typecode.Size())
+		}
+	}
+	return resultStorage
+}
+
+func checkCallArgument(arg Value, typ *RawType) {
+	if !arg.IsValid() {
+		panic("reflect: Call using zero Value argument")
+	}
+	if !arg.isExported() || arg.isRO() {
+		panic("reflect: Call using value obtained using unexported field")
+	}
+	if !arg.typecode.AssignableTo(typ) {
+		panic("reflect: Call using " + arg.typecode.String() + " as type " + typ.String())
+	}
+}
+
+func reflectCallAdapterFor(typ *RawType) unsafe.Pointer {
+	typ = typ.underlying()
+	types := unsafe.Slice(funcCallTypes, funcCallLinksLen)
+	adapters := unsafe.Slice(funcCallAdapters, funcCallLinksLen)
+	for i, candidate := range types {
+		if candidate == typ {
+			return adapters[i]
+		}
+	}
+	panic("reflect: function type has no call adapter")
+}
+
+func MakeFunc(typ Type, callbackContext, callbackCode unsafe.Pointer) Value {
+	if typ.Kind() != Func {
+		panic("reflect: call of MakeFunc with non-Func type")
+	}
+	rawType := typ.(*RawType)
+	context := &makeFuncContext{
+		typ:             rawType,
+		callbackContext: callbackContext,
+		callbackCode:    callbackCode,
+	}
+	header := &funcHeader{
+		Context: unsafe.Pointer(context),
+		Code:    makeFuncAdapterFor(rawType),
+	}
+	return Value{
+		typecode: rawType,
+		value:    unsafe.Pointer(header),
+		flags:    valueFlagExported,
+	}
+}
+
+func makeFuncAdapterFor(typ *RawType) unsafe.Pointer {
+	typ = typ.underlying()
+	types := unsafe.Slice(makeFuncTypes, makeFuncLinksLen)
+	adapters := unsafe.Slice(makeFuncAdapters, makeFuncLinksLen)
+	for i, candidate := range types {
+		if candidate == typ {
+			return adapters[i]
+		}
+	}
+	return makeFuncStubCode()
+}
+
+func makeFuncStub() {
+	panic("reflect: internal error: called MakeFunc stub")
+}
+
+func makeFuncStubCode() unsafe.Pointer {
+	stub := makeFuncStub
+	return (*funcHeader)(unsafe.Pointer(&stub)).Code
+}
+
+func makeFuncCall(context unsafe.Pointer, argPointers, resultPointers *unsafe.Pointer) {
+	impl := (*makeFuncContext)(context)
+	numIn := impl.typ.NumIn()
+	rawArgs := unsafe.Slice(argPointers, numIn)
+	args := make([]Value, numIn)
+	for i, ptr := range rawArgs {
+		typ := impl.typ.In(i).(*RawType)
+		value := ptr
+		if typ.Size() <= unsafe.Sizeof(uintptr(0)) {
+			value = loadSmallValue(ptr, typ.Size())
+		}
+		args[i] = Value{
+			typecode: typ,
+			value:    value,
+			flags:    valueFlagExported,
+		}
+	}
+
+	callbackHeader := funcHeader{
+		Context: impl.callbackContext,
+		Code:    impl.callbackCode,
+	}
+	callback := *(*func([]Value) []Value)(unsafe.Pointer(&callbackHeader))
+	out := callback(args)
+	numOut := impl.typ.NumOut()
+	if len(out) != numOut {
+		panic("reflect: wrong return count from function created by MakeFunc")
+	}
+	rawResults := unsafe.Slice(resultPointers, numOut)
+	for i, result := range out {
+		typ := impl.typ.Out(i).(*RawType)
+		if !result.IsValid() {
+			panic("reflect: function created by MakeFunc returned zero Value")
+		}
+		if !result.isExported() || result.isRO() {
+			panic("reflect: function created by MakeFunc returned value obtained from unexported field")
+		}
+		if !result.typecode.AssignableTo(typ) {
+			panic("reflect.MakeFunc: value of type " + result.typecode.String() + " is not assignable to type " + typ.String())
+		}
+		storage := Value{
+			typecode: typ,
+			value:    rawResults[i],
+			flags:    valueFlagIndirect | valueFlagExported,
+		}
+		storage.Set(result)
+	}
+	runtimeKeepAlive(impl)
+	runtimeKeepAlive(out)
 }
 
 func (v Value) Method(i int) Value {
