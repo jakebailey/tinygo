@@ -1,7 +1,11 @@
 package builder
 
 import (
+	"crypto/sha512"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,13 +15,11 @@ import (
 
 	"github.com/tinygo-org/tinygo/compileopts"
 	"github.com/tinygo-org/tinygo/goenv"
+	"tinygo.org/x/go-llvm"
 )
 
 // Library is a container for information about a single C library, such as a
 // compiler runtime or libc.
-//
-// Note: whenever a library gets changed, the version in compileopts/config.go
-// probably also needs to be incremented.
 type Library struct {
 	// The library name, such as compiler-rt or picolibc.
 	name string
@@ -37,6 +39,12 @@ type Library struct {
 	// The source directory.
 	sourceDir func() string
 
+	// A unified diff applied to a private copy of the source directory.
+	sourcePatch []byte
+
+	// The input directory that contains headers and other non-source inputs.
+	inputDir func() string
+
 	// The source files, relative to sourceDir.
 	librarySources func(target string, libcNeedsMalloc bool) ([]string, error)
 
@@ -44,105 +52,347 @@ type Library struct {
 	crt1Source string
 }
 
-// load returns a compile job to build this library file for the given target
-// and CPU. It may return a dummy compileJob if the library build is already
-// cached. The path is stored as job.result but is only valid after the job has
-// been run.
-// The provided tmpdir will be used to store intermediary files and possibly the
-// output archive file, it is expected to be removed after use.
-// As a side effect, this call creates the library header files if they didn't
-// exist yet.
-func (l *Library) load(config *compileopts.Config, tmpdir string) (job *compileJob, abortLock func(), err error) {
-	outdir := config.LibraryPath(l.name)
-	archiveFilePath := filepath.Join(outdir, "lib.a")
+const (
+	libraryHeaderPathPlaceholder = "$HEADER"
+	libraryBuildDirPlaceholder   = "$BUILDDIR"
+	libraryCacheDirPlaceholder   = "$GOCACHE"
+	// Increment when the archive construction changes in a way that can affect linking.
+	libraryArchiveFormatVersion = 1
+)
 
-	// Create a lock on the output (if supported).
-	// This is a bit messy, but avoids a deadlock because it is ordered consistently with other library loads within a build.
-	outname := filepath.Base(outdir)
-	unlock := lock(filepath.Join(goenv.Get("GOCACHE"), outname+".lock"))
-	var ok bool
-	defer func() {
-		if !ok {
-			unlock()
+type librarySourceInput struct {
+	Path   string
+	Hash   string
+	CFlags []string
+}
+
+type libraryCacheInput struct {
+	Name             string
+	Target           string
+	LibcNeedsMalloc  bool
+	ArchiveFormat    int
+	LLVMVersion      string
+	CompilerIdentity string
+	ResourceDir      string
+	SourceDir        string
+	SourcePatch      []byte
+	InputDir         string
+	InputFiles       map[string]string
+	CompileInputs    map[string]map[string]string
+	GeneratedHeaders map[string]string
+	CompileArgs      []string
+	Sources          []librarySourceInput
+	Crt1Source       string
+	Crt1Hash         string
+}
+
+type configuredLibrarySet struct {
+	libc   *Library
+	linker []*Library
+}
+
+func configuredLibraries(config *compileopts.Config) (configuredLibrarySet, error) {
+	var libraries configuredLibrarySet
+	switch config.Target.Libc {
+	case "musl":
+		libraries.libc = &libMusl
+	case "picolibc":
+		libraries.libc = &libPicolibc
+	case "wasi-libc":
+		libraries.libc = &libWasiLibc
+	case "wasmbuiltins":
+		libraries.libc = &libWasmBuiltins
+	case "mingw-w64":
+		libraries.libc = &libMinGW
+	case "darwin-libSystem", "":
+		// These libc configurations don't use a Library-backed cache.
+	default:
+		return configuredLibrarySet{}, fmt.Errorf("unknown libc: %s", config.Target.Libc)
+	}
+	if config.Target.RTLib == "compiler-rt" {
+		libraries.linker = append(libraries.linker, &libCompilerRT)
+	}
+	if config.GC() == "boehm" {
+		libraries.linker = append(libraries.linker, &BoehmGC)
+	}
+	return libraries, nil
+}
+
+func (libraries configuredLibrarySet) all() []*Library {
+	result := make([]*Library, 0, 1+len(libraries.linker))
+	if libraries.libc != nil {
+		result = append(result, libraries.libc)
+	}
+	result = append(result, libraries.linker...)
+	return result
+}
+
+func makeLibraryCacheInputs(config *compileopts.Config, libraries configuredLibrarySet) (map[string]*libraryCacheInput, map[string]string, error) {
+	inputs := make(map[string]*libraryCacheInput)
+	keys := make(map[string]string)
+	keyConfig := *config
+	keyConfig.LibraryKeys = keys
+
+	setKey := func(l *Library) error {
+		if _, ok := keys[l.name]; ok {
+			return nil
 		}
-	}()
-
-	// Try to fetch this library from the cache.
-	if _, err := os.Stat(archiveFilePath); err == nil {
-		return dummyCompileJob(archiveFilePath), func() {}, nil
-	}
-	// Cache miss, build it now.
-
-	// Create the destination directory where the components of this library
-	// (lib.a file, include directory) are placed.
-	err = os.MkdirAll(filepath.Join(goenv.Get("GOCACHE"), outname), 0o777)
-	if err != nil {
-		// Could not create directory (and not because it already exists).
-		return nil, nil, err
+		input, err := l.cacheInput(&keyConfig)
+		if err != nil {
+			return err
+		}
+		inputs[l.name] = input
+		keys[l.name] = input.key()
+		return nil
 	}
 
-	// Make headers if needed.
-	headerPath := filepath.Join(outdir, "include")
+	for _, library := range libraries.all() {
+		if err := setKey(library); err != nil {
+			return nil, nil, err
+		}
+	}
+	return inputs, keys, nil
+}
+
+func (l *Library) cacheInput(config *compileopts.Config) (*libraryCacheInput, error) {
 	target := config.Triple()
-	if l.makeHeaders != nil {
-		if _, err = os.Stat(headerPath); err != nil {
-			temporaryHeaderPath, err := os.MkdirTemp(outdir, "include.tmp*")
-			if err != nil {
-				return nil, nil, err
-			}
-			defer os.RemoveAll(temporaryHeaderPath)
-			err = l.makeHeaders(target, temporaryHeaderPath)
-			if err != nil {
-				return nil, nil, err
-			}
-			err = os.Chmod(temporaryHeaderPath, 0o755) // TempDir uses 0o700 by default
-			if err != nil {
-				return nil, nil, err
-			}
-			err = os.Rename(temporaryHeaderPath, headerPath)
-			if err != nil {
-				switch {
-				case errors.Is(err, fs.ErrExist):
-					// Another invocation of TinyGo also seems to have already created the headers.
+	sourceDir := l.sourceDir()
+	sources, err := l.librarySources(target, config.LibcNeedsMalloc())
+	if err != nil {
+		return nil, err
+	}
 
-				case runtime.GOOS == "windows" && errors.Is(err, fs.ErrPermission):
-					// On Windows, a rename with a destination directory that already
-					// exists does not result in an IsExist error, but rather in an
-					// access denied error. To be sure, check for this case by checking
-					// whether the target directory exists.
-					if _, err := os.Stat(headerPath); err == nil {
-						break
-					}
-					fallthrough
+	inputDir := sourceDir
+	if l.inputDir != nil {
+		inputDir = l.inputDir()
+	}
+	compilerID, err := clangCompilerIdentity()
+	if err != nil {
+		return nil, err
+	}
+	compileArgs := l.compileArgs(config, target, libraryHeaderPathPlaceholder, libraryBuildDirPlaceholder)
 
-				default:
-					return nil, nil, err
+	input := libraryCacheInput{
+		Name:             l.name,
+		Target:           target,
+		LibcNeedsMalloc:  config.LibcNeedsMalloc(),
+		ArchiveFormat:    libraryArchiveFormatVersion,
+		LLVMVersion:      llvm.Version,
+		CompilerIdentity: compilerID,
+		ResourceDir:      goenv.ClangResourceDir(config.TrimPath()),
+		SourceDir:        sourceDir,
+		SourcePatch:      append([]byte(nil), l.sourcePatch...),
+		InputDir:         inputDir,
+		CompileArgs:      compileArgs,
+		Sources:          make([]librarySourceInput, 0, len(sources)),
+		Crt1Source:       l.crt1Source,
+	}
+	for _, source := range sources {
+		hash, err := hashFile(filepath.Join(sourceDir, source))
+		if err != nil {
+			return nil, err
+		}
+		sourceInput := librarySourceInput{
+			Path: filepath.ToSlash(source),
+			Hash: hash,
+		}
+		if l.cflagsForFile != nil {
+			sourceInput.CFlags = l.cflagsForFile(source)
+		}
+		input.Sources = append(input.Sources, sourceInput)
+	}
+	if l.crt1Source != "" {
+		hash, err := hashFile(filepath.Join(sourceDir, l.crt1Source))
+		if err != nil {
+			return nil, err
+		}
+		input.Crt1Source = filepath.ToSlash(l.crt1Source)
+		input.Crt1Hash = hash
+	}
+	inputFiles, err := hashLibraryInputFiles(inputDir)
+	if err != nil {
+		return nil, err
+	}
+	input.InputFiles = inputFiles
+	compileInputs, err := hashLibraryCompileInputs(compileArgs, sourceDir, inputDir)
+	if err != nil {
+		return nil, err
+	}
+	input.CompileInputs = compileInputs
+	generatedHeaders, err := l.hashGeneratedHeaders(target)
+	if err != nil {
+		return nil, err
+	}
+	input.GeneratedHeaders = generatedHeaders
+
+	return &input, nil
+}
+
+func (input *libraryCacheInput) key() string {
+	data, err := json.Marshal(input)
+	if err != nil {
+		panic(err)
+	}
+	sum := sha512.Sum512_224(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func (l *Library) hashGeneratedHeaders(target string) (map[string]string, error) {
+	if l.makeHeaders == nil {
+		return nil, nil
+	}
+	dir, err := os.MkdirTemp("", "tinygo-lib-headers-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	if err := l.makeHeaders(target, dir); err != nil {
+		return nil, err
+	}
+	return hashLibraryInputFiles(dir)
+}
+
+func hashLibraryInputFiles(root string) (map[string]string, error) {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	hashes := map[string]string{}
+	info, err := os.Stat(resolvedRoot)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode().IsRegular() {
+		hash, err := hashFile(resolvedRoot)
+		if err != nil {
+			return nil, err
+		}
+		hashes["."] = hash
+		return hashes, nil
+	}
+	if !info.IsDir() {
+		return hashes, nil
+	}
+	err = hashLibraryInputDir(resolvedRoot, "", hashes, make(map[string]bool))
+	return hashes, err
+}
+
+func hashLibraryInputDir(dir, prefix string, hashes map[string]string, ancestors map[string]bool) error {
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return err
+	}
+	if ancestors[resolvedDir] {
+		return nil
+	}
+	ancestors[resolvedDir] = true
+	defer delete(ancestors, resolvedDir)
+
+	entries, err := os.ReadDir(resolvedDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		path := filepath.Join(resolvedDir, entry.Name())
+		rel := filepath.Join(prefix, entry.Name())
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if err := hashLibraryInputDir(path, rel, hashes, ancestors); err != nil {
+				return err
+			}
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		hash, err := hashFile(path)
+		if err != nil {
+			return err
+		}
+		hashes[filepath.ToSlash(rel)] = hash
+	}
+	return nil
+}
+
+func hashLibraryCompileInputs(args []string, coveredRoots ...string) (map[string]map[string]string, error) {
+	paths := compilerInputPaths(args)
+	inputs := make(map[string]map[string]string, len(paths))
+	cacheDir := filepath.Clean(goenv.Get("GOCACHE"))
+	for _, path := range paths {
+		if strings.Contains(path, libraryHeaderPathPlaceholder) ||
+			strings.Contains(path, libraryBuildDirPlaceholder) {
+			continue
+		}
+		path = filepath.Clean(path)
+		covered := false
+		for _, root := range coveredRoots {
+			rel, err := filepath.Rel(filepath.Clean(root), path)
+			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue
+		}
+		if rel, err := filepath.Rel(cacheDir, path); err == nil &&
+			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			// Cached library include paths contain the dependency's content key.
+			continue
+		}
+		hashes, err := hashLibraryInputFiles(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			inputs[path] = nil
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		inputs[path] = hashes
+	}
+	return inputs, nil
+}
+
+func compilerInputPaths(args []string) []string {
+	var paths []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "-I", "-isystem", "-iquote", "-idirafter", "-include", "-imacros",
+			"-resource-dir", "--sysroot", "-isysroot":
+			if i+1 < len(args) {
+				i++
+				paths = append(paths, args[i])
+			}
+		default:
+			for _, prefix := range []string{
+				"-I", "-isystem", "-iquote", "-idirafter", "-include", "-imacros",
+				"-resource-dir=", "--sysroot=", "-isysroot",
+			} {
+				if strings.HasPrefix(arg, prefix) && len(arg) != len(prefix) {
+					paths = append(paths, strings.TrimPrefix(arg, prefix))
+					break
 				}
 			}
 		}
 	}
+	return paths
+}
 
+func (l *Library) compileArgs(config *compileopts.Config, target, headerPath, dir string) []string {
 	remapDir := filepath.Join(os.TempDir(), "tinygo-"+l.name)
 	if config.TrimPath() {
 		remapDir = config.CSourcePath(filepath.Join("github.com/tinygo-org/tinygo", ".tinygo-build", l.name))
 	}
-	dir := filepath.Join(tmpdir, "build-lib-"+l.name)
-	err = os.Mkdir(dir, 0777)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Precalculate the flags to the compiler invocation.
-	// Note: -fdebug-prefix-map is necessary to make the output archive
-	// reproducible. Otherwise the temporary directory is stored in the archive
-	// itself, which varies each run.
 	args := append(l.cflags(target, headerPath), "-c", "-Oz", "-gdwarf-4", "-ffunction-sections", "-fdata-sections", "-Wno-macro-redefined", "--target="+compileopts.ClangTriple(target), "-fdebug-prefix-map="+dir+"="+remapDir)
 	resourceDir := goenv.ClangResourceDir(config.TrimPath())
 	if config.TrimPath() {
 		args = append(args,
 			"-ffile-prefix-map="+goenv.Get("TINYGOROOT")+"="+config.CSourcePath("github.com/tinygo-org/tinygo"),
-			"-ffile-prefix-map="+goenv.Get("GOCACHE")+"="+config.CSourcePath("tinygo-cache"),
-			"-fdebug-compilation-dir=.",
+			"-ffile-prefix-map="+libraryCacheDirPlaceholder+"="+config.CSourcePath("tinygo-cache"),
 			"-gno-record-command-line",
 		)
 		if resourceDir != "" {
@@ -202,6 +452,139 @@ func (l *Library) load(config *compileopts.Config, tmpdir string) (job *compileJ
 	if l.needsLibc {
 		args = append(args, config.LibcCFlags()...)
 	}
+	return appendCacheStableCFlags(args)
+}
+
+func expandLibraryCompileArgs(args []string, headerPath, dir string) []string {
+	expanded := append([]string(nil), args...)
+	for i, arg := range expanded {
+		arg = strings.ReplaceAll(arg, libraryHeaderPathPlaceholder, headerPath)
+		arg = strings.ReplaceAll(arg, libraryBuildDirPlaceholder, dir)
+		arg = strings.ReplaceAll(arg, libraryCacheDirPlaceholder, goenv.Get("GOCACHE"))
+		expanded[i] = arg
+	}
+	return expanded
+}
+
+// load returns a compile job to build this library file for the given target
+// and CPU. It may return a dummy compileJob if the library build is already
+// cached. The path is stored as job.result but is only valid after the job has
+// been run.
+// The provided tmpdir will be used to store intermediary files and possibly the
+// output archive file, it is expected to be removed after use.
+// As a side effect, this call creates the library header files if they didn't
+// exist yet.
+func (l *Library) load(config *compileopts.Config, tmpdir string, input *libraryCacheInput) (job *compileJob, abortLock func(), err error) {
+	key := input.key()
+	if existingKey, ok := config.LibraryKeys[l.name]; ok {
+		if existingKey != key {
+			return nil, nil, fmt.Errorf("library cache key changed for %s", l.name)
+		}
+	} else {
+		return nil, nil, fmt.Errorf("library cache key missing for %s", l.name)
+	}
+	outdir := config.LibraryPath(l.name)
+	archiveFilePath := filepath.Join(outdir, "lib.a")
+
+	// Create a lock on the output (if supported).
+	// This is a bit messy, but avoids a deadlock because it is ordered consistently with other library loads within a build.
+	outname := filepath.Base(outdir)
+	unlock := lock(filepath.Join(goenv.Get("GOCACHE"), outname+".lock"))
+	var ok bool
+	defer func() {
+		if !ok {
+			unlock()
+		}
+	}()
+
+	// Try to fetch this library from the cache.
+	if _, err := os.Stat(archiveFilePath); err == nil {
+		return dummyCompileJob(archiveFilePath), func() {}, nil
+	}
+	// Cache miss, build it now.
+
+	sourceDir := input.SourceDir
+	if len(input.SourcePatch) != 0 {
+		sourceDir = filepath.Join(tmpdir, "source-"+l.name)
+		if err := prepareLibrarySources(input.SourceDir, sourceDir, input.SourcePatch); err != nil {
+			return nil, nil, fmt.Errorf("patch %s sources: %w", l.name, err)
+		}
+	}
+
+	// Create the destination directory where the components of this library
+	// (lib.a file, include directory) are placed.
+	err = os.MkdirAll(filepath.Join(goenv.Get("GOCACHE"), outname), 0o777)
+	if err != nil {
+		// Could not create directory (and not because it already exists).
+		return nil, nil, err
+	}
+
+	// Make headers if needed.
+	headerPath := filepath.Join(outdir, "include")
+	if len(input.SourcePatch) != 0 && l.makeHeaders == nil {
+		headerPath = filepath.Join(sourceDir, "include")
+	}
+	target := config.Triple()
+	if l.makeHeaders != nil {
+		if _, err = os.Stat(headerPath); err != nil {
+			temporaryHeaderPath, err := os.MkdirTemp(outdir, "include.tmp*")
+			if err != nil {
+				return nil, nil, err
+			}
+			defer os.RemoveAll(temporaryHeaderPath)
+			err = l.makeHeaders(target, temporaryHeaderPath)
+			if err != nil {
+				return nil, nil, err
+			}
+			err = os.Chmod(temporaryHeaderPath, 0o755) // TempDir uses 0o700 by default
+			if err != nil {
+				return nil, nil, err
+			}
+			err = os.Rename(temporaryHeaderPath, headerPath)
+			if err != nil {
+				switch {
+				case errors.Is(err, fs.ErrExist):
+					// Another invocation of TinyGo also seems to have already created the headers.
+
+				case runtime.GOOS == "windows" && errors.Is(err, fs.ErrPermission):
+					// On Windows, a rename with a destination directory that already
+					// exists does not result in an IsExist error, but rather in an
+					// access denied error. To be sure, check for this case by checking
+					// whether the target directory exists.
+					if _, err := os.Stat(headerPath); err == nil {
+						break
+					}
+					fallthrough
+
+				default:
+					return nil, nil, err
+				}
+			}
+		}
+	}
+
+	dir := filepath.Join(tmpdir, "build-lib-"+l.name)
+	err = os.Mkdir(dir, 0777)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Precalculate the flags to the compiler invocation.
+	// Note: -fdebug-prefix-map is necessary to make the output archive
+	// reproducible. Otherwise the temporary directory is stored in the archive
+	// itself, which varies each run.
+	args := expandLibraryCompileArgs(input.CompileArgs, headerPath, dir)
+	if sourceDir != input.SourceDir {
+		sourcePath := input.SourceDir
+		if config.TrimPath() {
+			relative, err := filepath.Rel(goenv.Get("TINYGOROOT"), input.SourceDir)
+			if err != nil {
+				return nil, nil, err
+			}
+			sourcePath = config.CSourcePath(filepath.Join("github.com/tinygo-org/tinygo", relative))
+		}
+		args = append(args, "-ffile-prefix-map="+sourceDir+"="+sourcePath)
+	}
 
 	var once sync.Once
 
@@ -236,16 +619,12 @@ func (l *Library) load(config *compileopts.Config, tmpdir string) (job *compileJ
 		},
 	}
 
-	sourceDir := l.sourceDir()
-
 	// Create jobs to compile all sources. These jobs are depended upon by the
 	// archive job above, so must be run first.
-	paths, err := l.librarySources(target, config.LibcNeedsMalloc())
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, path := range paths {
+	for _, source := range input.Sources {
 		// Strip leading "../" parts off the path.
+		source := source
+		path := filepath.FromSlash(source.Path)
 		cleanpath := path
 		for strings.HasPrefix(cleanpath, "../") {
 			cleanpath = cleanpath[3:]
@@ -259,9 +638,7 @@ func (l *Library) load(config *compileopts.Config, tmpdir string) (job *compileJ
 			run: func(*compileJob) error {
 				var compileArgs []string
 				compileArgs = append(compileArgs, args...)
-				if l.cflagsForFile != nil {
-					compileArgs = append(compileArgs, l.cflagsForFile(path)...)
-				}
+				compileArgs = append(compileArgs, source.CFlags...)
 				compileArgs = append(compileArgs, "-o", objpath, srcpath)
 				if config.Options.PrintCommands != nil {
 					config.Options.PrintCommands("clang", compileArgs...)
