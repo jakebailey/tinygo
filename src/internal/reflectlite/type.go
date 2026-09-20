@@ -406,6 +406,7 @@ var funcTypeLinksLen uintptr
 type methodEntry struct {
 	name *byte
 	typ  *RawType
+	fn   uintptr
 }
 
 // Method set, as emitted by the compiler.
@@ -1497,6 +1498,7 @@ func methodSetEntry(methods *methodSet, i int) methodEntry {
 	return methodEntry{
 		name: *(**byte)(unsafe.Add(signatures, (count+uintptr(i))*ptrSize)),
 		typ:  *(**RawType)(unsafe.Add(signatures, (2*count+uintptr(i))*ptrSize)),
+		fn:   *(*uintptr)(unsafe.Add(signatures, (3*count+uintptr(i))*ptrSize)),
 	}
 }
 
@@ -1541,6 +1543,7 @@ func (t *RawType) Method(i int) MethodInfo {
 				Name:    name,
 				PkgPath: pkgPath,
 				Type:    entry.typ,
+				Func:    methodFunc(entry),
 				Index:   i,
 			}
 		}
@@ -1570,6 +1573,7 @@ func (t *RawType) MethodByName(name string) (MethodInfo, bool) {
 				Name:    entryName,
 				PkgPath: pkgPath,
 				Type:    entry.typ,
+				Func:    methodFunc(entry),
 				Index:   index,
 			}, true
 		}
@@ -1582,7 +1586,20 @@ type MethodInfo struct {
 	Name    string
 	PkgPath string
 	Type    *RawType
+	Func    Value
 	Index   int
+}
+
+func methodFunc(entry methodEntry) Value {
+	if entry.fn == 0 {
+		return Value{}
+	}
+	header := &funcHeader{Code: unsafe.Pointer(entry.fn)}
+	return Value{
+		typecode: entry.typ,
+		value:    unsafe.Pointer(header),
+		flags:    valueFlagExported,
+	}
 }
 
 // Read and return a null terminated string starting from data.
@@ -1604,7 +1621,7 @@ func (t *RawType) name() string {
 	if ntype.numMethod&numMethodHasMethodSet != 0 {
 		ms := (*methodSet)(ptr)
 		// Skip past the length field and method entries.
-		ptr = unsafe.Add(ptr, unsafe.Sizeof(uintptr(0))+3*uintptr(ms.length)*unsafe.Sizeof(unsafe.Pointer(nil)))
+		ptr = unsafe.Add(ptr, unsafe.Sizeof(uintptr(0))+4*uintptr(ms.length)*unsafe.Sizeof(unsafe.Pointer(nil)))
 	}
 	return readStringZ(ptr)
 }
