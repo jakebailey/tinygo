@@ -69,40 +69,40 @@ type Config struct {
 // must not contain function-dependent data such as an IR builder.
 type compilerContext struct {
 	*Config
-	DumpSSA             bool
-	mod                 llvm.Module
-	ctx                 llvm.Context
-	builder             llvm.Builder // only used for constant operations
-	dibuilder           *llvm.DIBuilder
-	cu                  llvm.Metadata
-	difiles             map[string]llvm.Metadata
-	ditypes             map[types.Type]llvm.Metadata
-	llvmTypes           typeutil.Map
-	interfaceTypes      typeutil.Map
-	machine             llvm.TargetMachine
-	targetData          llvm.TargetData
-	intType             llvm.Type
-	dataPtrType         llvm.Type // pointer in address space 0
-	funcPtrType         llvm.Type // pointer in function address space (1 for AVR, 0 elsewhere)
-	funcPtrAddrSpace    int
-	uintptrType         llvm.Type
-	program             *ssa.Program
-	diagnostics         []error
-	functionInfos       map[*ssa.Function]functionInfo
-	callProperties      map[*ssa.Function]functionCallProperties
-	asyncifyCatchers    map[llvm.Type]llvm.Value
-	directCatchers      map[llvm.Value]llvm.Value
+	DumpSSA          bool
+	mod              llvm.Module
+	ctx              llvm.Context
+	builder          llvm.Builder // only used for constant operations
+	dibuilder        *llvm.DIBuilder
+	cu               llvm.Metadata
+	difiles          map[string]llvm.Metadata
+	ditypes          map[types.Type]llvm.Metadata
+	llvmTypes        typeutil.Map
+	interfaceTypes   typeutil.Map
+	machine          llvm.TargetMachine
+	targetData       llvm.TargetData
+	intType          llvm.Type
+	dataPtrType      llvm.Type // pointer in address space 0
+	funcPtrType      llvm.Type // pointer in function address space (1 for AVR, 0 elsewhere)
+	funcPtrAddrSpace int
+	uintptrType      llvm.Type
+	program          *ssa.Program
+	diagnostics      []error
+	functionInfos    map[*ssa.Function]functionInfo
+	callProperties   map[*ssa.Function]functionCallProperties
+	asyncifyCatchers map[llvm.Type]llvm.Value
+	directCatchers   map[llvm.Value]llvm.Value
 	indirectCatchers map[llvm.Type]llvm.Value
 	asyncifyReplays  map[llvm.Type]llvm.Value
 	functionABIs     map[functionABIKey]functionABI
-	astComments         map[string]*ast.CommentGroup
-	cgoImportDynamic    map[string]string // //go:cgo_import_dynamic local name -> remote symbol
-	embedGlobals        map[string][]*loader.EmbedFile
-	pkg                 *types.Package
-	loaderPkg           *loader.Package // current package being compiled (for AST access)
-	packageDir          string          // directory for this package
-	runtimePkg          *types.Package
-	localTypeNames      typeutil.Map // *types.Named (synthetic local from generic instantiation) -> string
+	astComments      map[string]*ast.CommentGroup
+	cgoImportDynamic map[string]string // //go:cgo_import_dynamic local name -> remote symbol
+	embedGlobals     map[string][]*loader.EmbedFile
+	pkg              *types.Package
+	loaderPkg        *loader.Package // current package being compiled (for AST access)
+	packageDir       string          // directory for this package
+	runtimePkg       *types.Package
+	localTypeNames   typeutil.Map // *types.Named (synthetic local from generic instantiation) -> string
 }
 
 // newCompilerContext returns a new compiler context ready for use, most
@@ -1679,9 +1679,14 @@ func (b *builder) markReflectMethodUse(call *ssa.CallCommon) {
 	}
 	switch method.Name() {
 	case "Method", "MethodByName", "Methods":
-		attr := b.ctx.CreateStringAttribute("tinygo-reflect-method", "")
+	case "StructOf":
+		attr := b.ctx.CreateStringAttribute("tinygo-reflect-structof", "")
 		b.llvmFn.AddFunctionAttr(attr)
+	default:
+		return
 	}
+	attr := b.ctx.CreateStringAttribute("tinygo-reflect-method", "")
+	b.llvmFn.AddFunctionAttr(attr)
 }
 
 func (b *builder) setValue(value ssa.Value, llvmValue llvm.Value) {
@@ -2381,7 +2386,7 @@ func (b *builder) markReflectMakeFuncUse(call *ssa.CallCommon) {
 		return
 	}
 	switch function.Name() {
-	case "MakeFunc", "Method", "MethodByName":
+	case "MakeFunc", "Method", "MethodByName", "StructOf":
 		attr := b.ctx.CreateStringAttribute("tinygo-reflect-makefunc", "")
 		b.llvmFn.AddFunctionAttr(attr)
 	}
