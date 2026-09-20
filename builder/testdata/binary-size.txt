@@ -16,7 +16,7 @@ pico2                    ./testdata/size-contains                 z       6780  
 pico2                    ./testdata/size-os                       z       6279     1209      128     5592
 pico2                    ./testdata/size-os                       2      17285     1003      128     5592
 pico2                    ./testdata/size-timer                    z      35160     4512      184     5688
-pico2                    ./testdata/size-timer                    2      75666     4574      232     5692
+pico2                    ./testdata/size-timer                    2      75682     4574      232     5692
 cortex-m-qemu            ./testdata/size-corpus                   z       8793     1295       80     4188
 cortex-m-qemu            ./testdata/size-corpus                   2      19838      810       72     4188
 riscv-qemu               ./testdata/size-corpus                   z      16228     1028       88    16660

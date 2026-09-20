@@ -3,6 +3,7 @@
 @"internal/reflectlite.makeFuncLinksLen" = global i32 0
 @"reflect/types.type:named:unusedMakeFuncType" = internal constant { i8 } zeroinitializer
 @"reflect/makefunc.link:func:{}{}" = internal constant ptr @"reflect/makefunc:func:{}{}"
+@"reflect/dynamicmethod.link:func:{}{}" = internal constant ptr @"reflect/makefunc:func:{}{}"
 
 define internal void @unused() #0 {
 entry:
