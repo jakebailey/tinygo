@@ -9,6 +9,18 @@ import (
 	"testing"
 )
 
+func checkConstructedType[T any](t *testing.T, value reflect.Value) {
+	t.Helper()
+	if _, ok := value.Interface().(T); !ok {
+		t.Fatalf("constructed %v failed a concrete type assertion", value.Type())
+	}
+	switch value.Interface().(type) {
+	case T:
+	default:
+		t.Fatalf("constructed %v failed a type switch", value.Type())
+	}
+}
+
 func TestTypeFor(t *testing.T) {
 	type (
 		mystring string

@@ -12,9 +12,18 @@ target triple = "wasm32-unknown-wasi"
 @tinygo_rewinding = external global i8
 @tinygo_panic_rewinding = external global i8
 @"runtime/gc.layout:258-000000000000000000000000000000000000000000000000000000000000000002" = linkonce_odr unnamed_addr constant { i32, [33 x i8] } { i32 258, [33 x i8] c"\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\02" }
-@"reflect/types.typeid:named:main.largeValue" = external constant i8
+@"reflect/types.type:named:main.largeValue" = linkonce_odr constant { i8, i16, ptr, ptr, ptr, [16 x i8] } { i8 -9, i16 0, ptr @"reflect/types.type:pointer:named:main.largeValue", ptr @"reflect/types.type:array:1025:basic:uint8", ptr @"reflect/types.type.pkgpath:main", [16 x i8] c"main.largeValue\00" }, align 4
+@"reflect/types.type.pkgpath:main" = linkonce_odr unnamed_addr constant [5 x i8] c"main\00", align 1
+@"reflect/types.type:pointer:named:main.largeValue" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:named:main.largeValue" }, align 4
+@"reflect/types.type:array:1025:basic:uint8" = linkonce_odr constant { i8, i16, ptr, ptr, i32, ptr, ptr } { i8 -41, i16 0, ptr @"reflect/types.type:pointer:array:1025:basic:uint8", ptr @"reflect/types.type:basic:uint8", i32 1025, ptr @"reflect/types.type:slice:basic:uint8", ptr inttoptr (i32 3 to ptr) }, align 4
+@"reflect/types.type:pointer:array:1025:basic:uint8" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:array:1025:basic:uint8" }, align 4
+@"reflect/types.type:basic:uint8" = linkonce_odr constant { i8, ptr } { i8 -56, ptr @"reflect/types.type:pointer:basic:uint8" }, align 4
+@"reflect/types.type:pointer:basic:uint8" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:basic:uint8" }, align 4
+@"reflect/types.type:slice:basic:uint8" = linkonce_odr constant { i8, i16, ptr, ptr } { i8 22, i16 0, ptr @"reflect/types.type:pointer:slice:basic:uint8", ptr @"reflect/types.type:basic:uint8" }, align 4
+@"reflect/types.type:pointer:slice:basic:uint8" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:slice:basic:uint8" }, align 4
 @"runtime.hashmapType:[1025]byte:[1025]byte" = linkonce_odr unnamed_addr constant { ptr, ptr, ptr } { ptr inttoptr (i32 3 to ptr), ptr inttoptr (i32 3 to ptr), ptr inttoptr (i32 67108137 to ptr) }
 @llvm.used = appending global [15 x ptr] [ptr @"(main.largeReceiver).makeLargeValue", ptr @"(main.largeReceiver).readLargeValue", ptr @main.makeLargeValue, ptr @main.makeZeroLargeValue, ptr @main.readLargeValue, ptr @main.deferLargeValue, ptr @main.goLargeValue, ptr @main.makeLargeResults, ptr @main.makeTwoLargeResults, ptr @main.makeMixedLargeResults, ptr @main.chooseLargeValue, ptr @main.makePointerLargeValue, ptr @main.useLargeMap, ptr @main.useLargeChannel, ptr @main.selectLargeChannel]
+@tinygo.indirect-abi = appending global [15 x ptr] [ptr @"(main.largeReceiver).makeLargeValue", ptr @"(main.largeReceiver).readLargeValue", ptr @main.makeLargeValue, ptr @main.makeZeroLargeValue, ptr @main.readLargeValue, ptr @main.deferLargeValue, ptr @main.goLargeValue, ptr @main.makeLargeResults, ptr @main.makeTwoLargeResults, ptr @main.makeMixedLargeResults, ptr @main.chooseLargeValue, ptr @main.makePointerLargeValue, ptr @main.useLargeMap, ptr @main.useLargeChannel, ptr @main.selectLargeChannel]
 @"main$string" = internal unnamed_addr constant [31 x i8] c"blocking select matched no case", align 1
 @"main$pack" = internal unnamed_addr constant { %runtime._string } { %runtime._string { ptr @"main$string", i32 31 } }
 @"reflect/types.type:basic:string" = linkonce_odr constant { i8, ptr } { i8 81, ptr @"reflect/types.type:pointer:basic:string" }, align 4
@@ -412,7 +421,7 @@ entry:
   %stackalloc = alloca i8, align 1
   %large = call align 1 dereferenceable(1025) ptr @runtime.alloc(i32 1025, ptr nonnull inttoptr (i32 3 to ptr), ptr undef) #13
   call void @runtime.trackPointer(ptr nonnull %large, ptr nonnull %stackalloc, ptr undef) #13
-  %typecode = call i1 @runtime.typeAssert(ptr %value.typecode, ptr nonnull @"reflect/types.typeid:named:main.largeValue", ptr undef) #13
+  %typecode = icmp eq ptr %value.typecode, @"reflect/types.type:named:main.largeValue"
   %typeassert.result = call align 1 dereferenceable(1026) ptr @runtime.alloc(i32 1026, ptr nonnull inttoptr (i32 3 to ptr), ptr undef) #13
   call void @runtime.trackPointer(ptr nonnull %typeassert.result, ptr nonnull %stackalloc, ptr undef) #13
   call void @llvm.memset.p0.i32(ptr noundef nonnull align 1 dereferenceable(1026) %typeassert.result, i8 0, i32 1026, i1 false)
@@ -439,8 +448,6 @@ if.done:                                          ; preds = %typeassert.next
 if.then:                                          ; preds = %typeassert.next
   ret i8 0
 }
-
-declare i1 @runtime.typeAssert(ptr, ptr dereferenceable_or_null(1), ptr) #0
 
 ; Function Attrs: nocallback nofree nounwind willreturn memory(argmem: write)
 declare void @llvm.memset.p0.i32(ptr nocapture writeonly, i8, i32, i1 immarg) #11
