@@ -1,7 +1,7 @@
 target        package                opt  code rodata data   bss
 hifive1b      examples/echo          z    4558    402    0  2276
 microbit      examples/serial        z    2985    439    8  2272
-wioterminal   examples/pininterrupt  z    8410   1790  148  7512
+wioterminal   examples/pininterrupt  z    8426   1790  148  7512
 cortex-m-qemu ./testdata/size-corpus z    9925   1299   80  4188
 cortex-m-qemu ./testdata/size-corpus 2   17468    860   72  4188
 riscv-qemu    ./testdata/size-corpus z   17428   1028   88 16660

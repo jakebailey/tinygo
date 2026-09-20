@@ -2380,7 +2380,8 @@ func (b *builder) markReflectMakeFuncUse(call *ssa.CallCommon) {
 	if function == nil || function.Pkg() == nil || function.Pkg().Path() != "reflect" {
 		return
 	}
-	if function.Name() == "MakeFunc" {
+	switch function.Name() {
+	case "MakeFunc", "Method", "MethodByName":
 		attr := b.ctx.CreateStringAttribute("tinygo-reflect-makefunc", "")
 		b.llvmFn.AddFunctionAttr(attr)
 	}

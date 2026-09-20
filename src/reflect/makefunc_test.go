@@ -3,6 +3,7 @@ package reflect_test
 import (
 	"io"
 	"reflect"
+	"reflect/internal/makefunchelper"
 	"testing"
 )
 
@@ -18,6 +19,19 @@ func TestMakeFunc(t *testing.T) {
 	b, c, d, e, f, g, h := fn(10, 20, 30, pair{40, 50}, 60, 70, 80)
 	if b != 10 || c != 20 || d != 30 || e != (pair{40, 50}) || f != 60 || g != 70 || h != 80 {
 		t.Fatalf("MakeFunc returned %d, %d, %d, %v, %d, %g, %d", b, c, d, e, f, g, h)
+	}
+
+}
+
+func TestMakeFuncAcrossPackages(t *testing.T) {
+	value := makefunchelper.Make(
+		reflect.TypeOf((func(int) int)(nil)),
+		func(args []reflect.Value) []reflect.Value {
+			return []reflect.Value{reflect.ValueOf(int(args[0].Int()) + 1)}
+		},
+	)
+	if got := value.(func(int) int)(41); got != 42 {
+		t.Fatalf("MakeFunc result returned %d, want 42", got)
 	}
 }
 

@@ -970,25 +970,30 @@ func (p *lowerInterfacesPass) defineInterfaceAssertFunc(fn llvm.Value, itf *inte
 }
 
 // isMethodSetType reports whether ty has the shape of a method-set struct:
-// { uintptr, [N x ptr], [N x ptr], [N x ptr] }.
+// { uintptr, [N x ptr], [N x ptr], [N x ptr], [N x uintptr] }.
 func (p *lowerInterfacesPass) isMethodSetType(ty llvm.Type) bool {
 	if ty.TypeKind() != llvm.StructTypeKind {
 		return false
 	}
 	elems := ty.StructElementTypes()
-	if len(elems) != 4 {
+	if len(elems) != 5 {
 		return false
 	}
 	if elems[0] != p.uintptrType {
 		return false
 	}
 	length := elems[1].ArrayLength()
-	for _, elem := range elems[1:] {
+	for _, elem := range elems[1:4] {
 		if elem.TypeKind() != llvm.ArrayTypeKind ||
 			elem.ElementType() != p.ptrType ||
 			elem.ArrayLength() != length {
 			return false
 		}
+	}
+	if elems[4].TypeKind() != llvm.ArrayTypeKind ||
+		elems[4].ElementType() != p.uintptrType ||
+		elems[4].ArrayLength() != length {
+		return false
 	}
 	return true
 }
@@ -1027,6 +1032,7 @@ func (p *lowerInterfacesPass) filterMethodSet(field llvm.Value, keepSigs map[str
 	methodArray := p.builder.CreateExtractValue(field, 1, "")
 	nameArray := p.builder.CreateExtractValue(field, 2, "")
 	typeArray := p.builder.CreateExtractValue(field, 3, "")
+	functionArray := p.builder.CreateExtractValue(field, 4, "")
 	numMethods := methodArray.Type().ArrayLength()
 
 	// Strip mode: replace with empty method set.
@@ -1036,6 +1042,7 @@ func (p *lowerInterfacesPass) filterMethodSet(field llvm.Value, keepSigs map[str
 			llvm.ConstArray(p.ptrType, nil),
 			llvm.ConstArray(p.ptrType, nil),
 			llvm.ConstArray(p.ptrType, nil),
+			llvm.ConstArray(p.uintptrType, nil),
 		}, false)
 	}
 
@@ -1048,6 +1055,7 @@ func (p *lowerInterfacesPass) filterMethodSet(field llvm.Value, keepSigs map[str
 		signature llvm.Value
 		namePtr   llvm.Value
 		typePtr   llvm.Value
+		function  llvm.Value
 		name      string
 	}
 	entries := make([]methodEntry, numMethods)
@@ -1060,6 +1068,7 @@ func (p *lowerInterfacesPass) filterMethodSet(field llvm.Value, keepSigs map[str
 			signature: sig,
 			namePtr:   p.builder.CreateExtractValue(nameArray, j, ""),
 			typePtr:   p.builder.CreateExtractValue(typeArray, j, ""),
+			function:  p.builder.CreateExtractValue(functionArray, j, ""),
 			name:      name,
 		}
 		nameSet[name] = struct{}{}
@@ -1081,6 +1090,7 @@ func (p *lowerInterfacesPass) filterMethodSet(field llvm.Value, keepSigs map[str
 			llvm.ConstArray(p.ptrType, nil),
 			llvm.ConstArray(p.ptrType, nil),
 			llvm.ConstArray(p.ptrType, nil),
+			llvm.ConstArray(p.uintptrType, nil),
 		}, false)
 	}
 
@@ -1088,15 +1098,18 @@ func (p *lowerInterfacesPass) filterMethodSet(field llvm.Value, keepSigs map[str
 	var keptSignatures []llvm.Value
 	var keptNames []llvm.Value
 	var keptTypes []llvm.Value
+	var keptFunctions []llvm.Value
 	for _, e := range entries {
 		if _, ok := keepSigs[e.name]; ok {
 			keptSignatures = append(keptSignatures, e.signature)
 			if p.keepMethodNames {
 				keptNames = append(keptNames, e.namePtr)
 				keptTypes = append(keptTypes, e.typePtr)
+				keptFunctions = append(keptFunctions, e.function)
 			} else {
 				keptNames = append(keptNames, llvm.ConstNull(p.ptrType))
 				keptTypes = append(keptTypes, llvm.ConstNull(p.ptrType))
+				keptFunctions = append(keptFunctions, llvm.ConstInt(p.uintptrType, 0, false))
 			}
 		}
 	}
@@ -1110,6 +1123,7 @@ func (p *lowerInterfacesPass) filterMethodSet(field llvm.Value, keepSigs map[str
 		llvm.ConstArray(p.ptrType, keptSignatures),
 		llvm.ConstArray(p.ptrType, keptNames),
 		llvm.ConstArray(p.ptrType, keptTypes),
+		llvm.ConstArray(p.uintptrType, keptFunctions),
 	}, false)
 }
 

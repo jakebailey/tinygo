@@ -250,6 +250,7 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 			types.NewVar(token.NoPos, nil, "signatures", types.NewArray(types.Typ[types.UnsafePointer], int64(len(methods)))),
 			types.NewVar(token.NoPos, nil, "names", types.NewArray(types.Typ[types.UnsafePointer], int64(len(methods)))),
 			types.NewVar(token.NoPos, nil, "types", types.NewArray(types.Typ[types.UnsafePointer], int64(len(methods)))),
+			types.NewVar(token.NoPos, nil, "functions", types.NewArray(types.Typ[types.Uintptr], int64(len(methods)))),
 		}, nil)
 		var methodSetValue llvm.Value
 		switch typ := typ.(type) {
@@ -1483,6 +1484,7 @@ func (c *compilerContext) getMethodSetValue(owner types.Type, methods []*types.F
 		pkgName       string
 		signature     llvm.Value
 		methodType    llvm.Value
+		method        *types.Func
 	}
 	var refs []methodRef
 	_, ownerIsInterface := owner.Underlying().(*types.Interface)
@@ -1546,19 +1548,31 @@ func (c *compilerContext) getMethodSetValue(owner types.Type, methods []*types.F
 			pkgName:       pkgName,
 			signature:     value,
 			methodType:    c.getTypeCode(reflectedType),
+			method:        method,
 		})
 	}
 	sort.Slice(refs, func(i, j int) bool {
 		return refs[i].signatureName < refs[j].signatureName
 	})
 
-	var signatures []llvm.Value
-	var names []llvm.Value
-	var types []llvm.Value
+	var signatures, names, types, functions []llvm.Value
+	methodSelections := c.program.MethodSets.MethodSet(owner)
 	for _, ref := range refs {
 		signatures = append(signatures, ref.signature)
 		names = append(names, c.getMethodNameGlobal(ref.metadataName, ref.pkgPath, ref.pkgName, ref.name))
 		types = append(types, ref.methodType)
+		function := llvm.ConstInt(c.uintptrType, 0, false)
+		if !ownerIsInterface {
+			for selection := range methodSelections.Methods() {
+				if selection.Obj() != ref.method {
+					continue
+				}
+				_, llvmFn := c.getFunction(c.program.MethodValue(selection))
+				function = llvm.ConstPtrToInt(llvmFn, c.uintptrType)
+				break
+			}
+		}
+		functions = append(functions, function)
 	}
 
 	return c.ctx.ConstStruct([]llvm.Value{
@@ -1566,6 +1580,7 @@ func (c *compilerContext) getMethodSetValue(owner types.Type, methods []*types.F
 		llvm.ConstArray(c.dataPtrType, signatures),
 		llvm.ConstArray(c.dataPtrType, names),
 		llvm.ConstArray(c.dataPtrType, types),
+		llvm.ConstArray(c.uintptrType, functions),
 	}, false)
 }
 
