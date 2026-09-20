@@ -6244,6 +6244,8 @@ func TestChanOf(t *testing.T) {
 	}
 }
 
+*/
+
 func TestChanOfDir(t *testing.T) {
 	// check construction and use of type not in binary
 	type T string
@@ -6263,6 +6265,8 @@ func TestChanOfDir(t *testing.T) {
 		t.Errorf("chan dir: have %q, want %q", cst.ChanDir().String(), "chan<-")
 	}
 }
+
+/*
 
 func TestChanOfGC(t *testing.T) {
 	done := make(chan bool, 1)
