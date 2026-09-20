@@ -250,6 +250,7 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 			types.NewVar(token.NoPos, nil, "signatures", types.NewArray(types.Typ[types.UnsafePointer], int64(len(methods)))),
 			types.NewVar(token.NoPos, nil, "names", types.NewArray(types.Typ[types.UnsafePointer], int64(len(methods)))),
 			types.NewVar(token.NoPos, nil, "types", types.NewArray(types.Typ[types.UnsafePointer], int64(len(methods)))),
+			types.NewVar(token.NoPos, nil, "functions", types.NewArray(types.Typ[types.Uintptr], int64(len(methods)))),
 		}, nil)
 		var methodSetValue llvm.Value
 		switch typ := typ.(type) {
@@ -825,7 +826,40 @@ func (c *compilerContext) getReflectMakeFuncWrapper(sig *types.Signature) llvm.V
 	link.SetInitializer(llvm.ConstPointerCast(wrapper, c.dataPtrType))
 	link.SetLinkage(llvm.WeakODRLinkage)
 	link.SetGlobalConstant(true)
+	c.requireReflectDynamicMethodHelpers()
 	return wrapper
+}
+
+func (c *compilerContext) requireReflectDynamicMethodHelpers() {
+	helpers := []struct {
+		name       string
+		resultType llvm.Type
+		paramTypes []llvm.Type
+	}{
+		{
+			name:       "internal/reflectlite.dynamicMethodContext",
+			resultType: c.dataPtrType,
+			paramTypes: []llvm.Type{c.dataPtrType, c.dataPtrType, c.dataPtrType, c.dataPtrType},
+		},
+		{
+			name:       "internal/reflectlite.dynamicTypeHasMethod",
+			resultType: c.ctx.Int1Type(),
+			paramTypes: []llvm.Type{c.dataPtrType, c.dataPtrType, c.dataPtrType},
+		},
+	}
+	for _, helper := range helpers {
+		fn := c.mod.NamedFunction(helper.name)
+		if fn.IsNil() {
+			fn = llvm.AddFunction(c.mod, helper.name, llvm.FunctionType(helper.resultType, helper.paramTypes, false))
+		}
+		linkName := "reflect/dynamicmethod.link:" + helper.name
+		if c.mod.NamedGlobal(linkName).IsNil() {
+			link := llvm.AddGlobal(c.mod, c.dataPtrType, linkName)
+			link.SetInitializer(llvm.ConstPointerCast(fn, c.dataPtrType))
+			link.SetLinkage(llvm.WeakODRLinkage)
+			link.SetGlobalConstant(true)
+		}
+	}
 }
 
 // getTypeKind returns the type kind for the given type, as defined by
@@ -1483,6 +1517,7 @@ func (c *compilerContext) getMethodSetValue(owner types.Type, methods []*types.F
 		pkgName       string
 		signature     llvm.Value
 		methodType    llvm.Value
+		method        *types.Func
 	}
 	var refs []methodRef
 	_, ownerIsInterface := owner.Underlying().(*types.Interface)
@@ -1524,6 +1559,14 @@ func (c *compilerContext) getMethodSetValue(owner types.Type, methods []*types.F
 		reflectedType := method.Type()
 		if !ownerIsInterface {
 			signature := method.Type().(*types.Signature)
+			c.getReflectMakeFuncWrapper(types.NewSignatureType(
+				nil,
+				nil,
+				nil,
+				signature.Params(),
+				signature.Results(),
+				signature.Variadic(),
+			))
 			params := make([]*types.Var, 0, signature.Params().Len()+1)
 			params = append(params, types.NewVar(token.NoPos, nil, "", owner))
 			for param := range signature.Params().Variables() {
@@ -1546,26 +1589,42 @@ func (c *compilerContext) getMethodSetValue(owner types.Type, methods []*types.F
 			pkgName:       pkgName,
 			signature:     value,
 			methodType:    c.getTypeCode(reflectedType),
+			method:        method,
 		})
 	}
 	sort.Slice(refs, func(i, j int) bool {
 		return refs[i].signatureName < refs[j].signatureName
 	})
 
-	var signatures []llvm.Value
-	var names []llvm.Value
-	var types []llvm.Value
+	var signatures, names, methodTypes, functions []llvm.Value
+	var methodSelections *types.MethodSet
+	if !ownerIsInterface {
+		methodSelections = c.program.MethodSets.MethodSet(owner)
+	}
 	for _, ref := range refs {
 		signatures = append(signatures, ref.signature)
 		names = append(names, c.getMethodNameGlobal(ref.metadataName, ref.pkgPath, ref.pkgName, ref.name))
-		types = append(types, ref.methodType)
+		methodTypes = append(methodTypes, ref.methodType)
+		function := llvm.ConstInt(c.uintptrType, 0, false)
+		if methodSelections != nil {
+			for selection := range methodSelections.Methods() {
+				if selection.Obj() != ref.method {
+					continue
+				}
+				_, llvmFn := c.getFunction(c.program.MethodValue(selection))
+				function = llvm.ConstPtrToInt(llvmFn, c.uintptrType)
+				break
+			}
+		}
+		functions = append(functions, function)
 	}
 
 	return c.ctx.ConstStruct([]llvm.Value{
 		llvm.ConstInt(c.uintptrType, uint64(len(refs)), false),
 		llvm.ConstArray(c.dataPtrType, signatures),
 		llvm.ConstArray(c.dataPtrType, names),
-		llvm.ConstArray(c.dataPtrType, types),
+		llvm.ConstArray(c.dataPtrType, methodTypes),
+		llvm.ConstArray(c.uintptrType, functions),
 	}, false)
 }
 

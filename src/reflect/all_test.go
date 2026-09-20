@@ -2497,8 +2497,6 @@ func (p *Point) Int32Method(x int32) int32 {
 	return x
 }
 
-/*
-// TODO(tinygo): missing method support
 func TestMethod(t *testing.T) {
 	// Non-curried method of type.
 	p := Point{3, 4}
@@ -2954,8 +2952,6 @@ func TestInterfaceSet(t *testing.T) {
 		t.Errorf("Interface Method returned %d; want 250", i)
 	}
 }
-
-*/
 
 type T1 struct {
 	a string
@@ -3876,8 +3872,6 @@ type Public struct {
 func (p *Public) M() {
 }
 
-/*
-
 func TestUnexported(t *testing.T) {
 	var pub Public
 	pub.S = "S"
@@ -3917,8 +3911,6 @@ func TestUnexported(t *testing.T) {
 	shouldPanic("Interface", func() { v.Elem().FieldByName("y").Interface() })
 	shouldPanic("Method", func() { v.Type().Method(0) })
 }
-
-*/
 
 func TestSetPanic(t *testing.T) {
 	ok := func(f func()) { f() }
@@ -4012,8 +4004,6 @@ func (t timp) W() {}
 func (t timp) Y() {}
 func (t timp) w() {}
 func (t timp) y() {}
-
-/*
 
 func TestCallPanic(t *testing.T) {
 	type t0 interface {
@@ -4131,8 +4121,6 @@ func TestValuePanic(t *testing.T) {
 	shouldPanic("call of reflect.Value.TrySend on string Value", func() { vo("").TrySend(vo("")) })
 	shouldPanic("call of reflect.Value.Uint on float64 Value", func() { vo(0.0).Uint() })
 }
-
-*/
 
 func shouldPanic(expect string, f func()) {
 	defer func() {
@@ -6665,8 +6653,6 @@ func TestReflectFuncTraceback(t *testing.T) {
 	f.Call([]Value{})
 }
 
-/*
-
 func TestReflectMethodTraceback(t *testing.T) {
 	p := Point{3, 4}
 	m := ValueOf(p).MethodByName("GCMethod")
@@ -6675,8 +6661,6 @@ func TestReflectMethodTraceback(t *testing.T) {
 		t.Errorf("Call returned %d; want 8", i)
 	}
 }
-
-*/
 
 func TestSmallZero(t *testing.T) {
 	type T [10]byte
@@ -6874,8 +6858,6 @@ func useStack(n int) {
 	useStack(n - 1 + int(b[99]))
 }
 
-/*
-
 type Impl struct{}
 
 func (Impl) F() {}
@@ -6891,8 +6873,6 @@ func TestValueString(t *testing.T) {
 		t.Errorf("ValueOf(Impl{}).Method(0).String() = %q, want %q", method.String(), "<func() Value>")
 	}
 }
-
-*/
 
 func TestInvalid(t *testing.T) {
 	// Used to have inconsistency between IsValid() and Kind() != Invalid.
@@ -7747,8 +7727,6 @@ func TestIssue22031(t *testing.T) {
 	}
 }
 
-/*
-
 type NonExportedFirst int
 
 func (i NonExportedFirst) ΦExported()       {}
@@ -7764,8 +7742,6 @@ func TestIssue22073(t *testing.T) {
 	// Shouldn't panic.
 	m.Call(nil)
 }
-
-*/
 
 func TestMapIterNonEmptyMap(t *testing.T) {
 	m := map[string]int{"one": 1, "two": 2, "three": 3}

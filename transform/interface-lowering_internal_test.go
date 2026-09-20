@@ -23,6 +23,7 @@ func TestUsesReflectMethods(t *testing.T) {
 			want: true,
 		},
 	}
+
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -42,6 +43,47 @@ func TestUsesReflectMethods(t *testing.T) {
 			p := lowerInterfacesPass{mod: mod}
 			if got := p.usesReflectMethods(); got != tc.want {
 				t.Errorf("usesReflectMethods() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestUsesReflectStructOf(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{
+			name: "unused marker",
+			path: "testdata/reflect-structof-unused.ll",
+		},
+		{
+			name: "used marker",
+			path: "testdata/reflect-structof-used.ll",
+			want: true,
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+			buf, err := llvm.NewMemoryBufferFromFile(tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mod, err := ctx.ParseIR(buf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer mod.Dispose()
+
+			p := lowerInterfacesPass{mod: mod}
+			if got := p.usesReflectStructOf(); got != tc.want {
+				t.Errorf("usesReflectStructOf() = %v, want %v", got, tc.want)
 			}
 		})
 	}
