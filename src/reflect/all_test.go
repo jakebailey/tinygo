@@ -2174,8 +2174,6 @@ func fmtSelect(info []caseInfo) string {
 	return buf.String()
 }
 
-// TODO(tinygo): missing func/method/call support
-
 type two [2]uintptr
 
 // Difficult test for function call because of
@@ -3731,8 +3729,6 @@ func TestSetLenCap(t *testing.T) {
 	shouldPanic("SetCap", func() { va.SetCap(8) })
 }
 
-/*
-
 func TestVariadic(t *testing.T) {
 	var b strings.Builder
 	V := ValueOf
@@ -3778,8 +3774,6 @@ func TestStructArg(t *testing.T) {
 		t.Errorf("function called with (%v, %v), want (%v, %v)", gotA, gotB, wantA, wantB)
 	}
 }
-
-*/
 
 var tagGetTests = []struct {
 	Tag   StructTag
@@ -6666,12 +6660,12 @@ func GCFunc(args []Value) []Value {
 	return []Value{}
 }
 
-/*
-
 func TestReflectFuncTraceback(t *testing.T) {
 	f := MakeFunc(TypeOf(func() {}), GCFunc)
 	f.Call([]Value{})
 }
+
+/*
 
 func TestReflectMethodTraceback(t *testing.T) {
 	p := Point{3, 4}
@@ -6853,6 +6847,8 @@ func TestCallArgLive(t *testing.T) {
 	*CallGC = false
 }
 
+*/
+
 func TestMakeFuncStackCopy(t *testing.T) {
 	target := func(in []Value) []Value {
 		runtime.GC()
@@ -6877,6 +6873,8 @@ func useStack(n int) {
 	var b [1024]byte // makes frame about 1KB
 	useStack(n - 1 + int(b[99]))
 }
+
+/*
 
 type Impl struct{}
 

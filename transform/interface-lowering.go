@@ -503,6 +503,8 @@ func (p *lowerInterfacesPass) run() error {
 	}
 
 	p.createReflectTypeLinks(typeNames)
+	p.createReflectCallLinks(typeNames)
+	p.createReflectMakeFuncLinks(typeNames)
 
 	return nil
 }
@@ -570,6 +572,181 @@ func (p *lowerInterfacesPass) createReflectTypeLinks(typeNames []string) {
 			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
 		}))
 		dataGlobal.SetGlobalConstant(true)
+	}
+}
+
+func (p *lowerInterfacesPass) createReflectCallLinks(typeNames []string) {
+	typesGlobal := p.mod.NamedGlobal("internal/reflectlite.funcCallTypes")
+	adaptersGlobal := p.mod.NamedGlobal("internal/reflectlite.funcCallAdapters")
+	lengthGlobal := p.mod.NamedGlobal("internal/reflectlite.funcCallLinksLen")
+	if typesGlobal.IsNil() && adaptersGlobal.IsNil() && lengthGlobal.IsNil() {
+		p.eraseGlobalsWithPrefix("reflect/call.link:")
+		p.internalizeFunctionsWithPrefix("reflect/call:")
+		return
+	}
+	if typesGlobal.IsNil() || adaptersGlobal.IsNil() || lengthGlobal.IsNil() {
+		panic("reflect call link globals must be defined together")
+	}
+
+	var typeCodes, adapters []llvm.Value
+	for _, name := range typeNames {
+		if !strings.HasPrefix(name, "func:") {
+			continue
+		}
+		typ := p.types[name]
+		link := p.mod.NamedGlobal("reflect/call.link:" + name)
+		if link.IsNil() {
+			panic("missing reflect call adapter for " + name)
+		}
+		adapter := stripPointerCasts(link.Initializer())
+		typeCodes = append(typeCodes, llvm.ConstGEP(typ.typecode.GlobalValueType(), typ.typecode, []llvm.Value{
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+		}))
+		adapters = append(adapters, adapter)
+		link.EraseFromParentAsGlobal()
+	}
+	p.eraseGlobalsWithPrefix("reflect/call.link:")
+	p.internalizeFunctionsWithPrefix("reflect/call:")
+
+	lengthGlobal.SetInitializer(llvm.ConstInt(p.uintptrType, uint64(len(typeCodes)), false))
+	lengthGlobal.SetGlobalConstant(true)
+	for _, table := range []struct {
+		global llvm.Value
+		values []llvm.Value
+		name   string
+	}{
+		{typesGlobal, typeCodes, "internal/reflectlite.funcCallTypes.data"},
+		{adaptersGlobal, adapters, "internal/reflectlite.funcCallAdapters.data"},
+	} {
+		if len(table.values) == 0 {
+			table.global.SetInitializer(llvm.ConstPointerNull(p.ptrType))
+			table.global.SetGlobalConstant(true)
+			continue
+		}
+		arrayType := llvm.ArrayType(p.ptrType, len(table.values))
+		array := llvm.AddGlobal(p.mod, arrayType, table.name)
+		array.SetInitializer(llvm.ConstArray(p.ptrType, table.values))
+		array.SetGlobalConstant(true)
+		array.SetLinkage(llvm.InternalLinkage)
+		table.global.SetInitializer(llvm.ConstGEP(arrayType, array, []llvm.Value{
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+		}))
+		table.global.SetGlobalConstant(true)
+	}
+}
+
+func (p *lowerInterfacesPass) usesReflectMakeFunc() bool {
+	for fn := p.mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		attr := fn.GetStringAttributeAtIndex(-1, "tinygo-reflect-makefunc")
+		if !attr.IsNil() && hasUses(fn) {
+			return true
+		}
+	}
+	return false
+}
+
+func pruneUnusedReflectMakeFunc(mod llvm.Module) {
+	p := lowerInterfacesPass{mod: mod}
+	if p.usesReflectMakeFunc() {
+		return
+	}
+
+	p.eraseGlobalsWithPrefix("reflect/makefunc.link:")
+	p.internalizeFunctionsWithPrefix("reflect/makefunc:")
+}
+
+func (p *lowerInterfacesPass) createReflectMakeFuncLinks(typeNames []string) {
+	used := p.usesReflectMakeFunc()
+
+	typesGlobal := p.mod.NamedGlobal("internal/reflectlite.makeFuncTypes")
+	adaptersGlobal := p.mod.NamedGlobal("internal/reflectlite.makeFuncAdapters")
+	lengthGlobal := p.mod.NamedGlobal("internal/reflectlite.makeFuncLinksLen")
+	if typesGlobal.IsNil() && adaptersGlobal.IsNil() && lengthGlobal.IsNil() {
+		p.eraseGlobalsWithPrefix("reflect/makefunc.link:")
+		p.internalizeFunctionsWithPrefix("reflect/makefunc:")
+		return
+	}
+	if typesGlobal.IsNil() || adaptersGlobal.IsNil() || lengthGlobal.IsNil() {
+		panic("reflect MakeFunc link globals must be defined together")
+	}
+	if !used {
+		p.eraseGlobalsWithPrefix("reflect/makefunc.link:")
+		p.internalizeFunctionsWithPrefix("reflect/makefunc:")
+		lengthGlobal.SetInitializer(llvm.ConstInt(p.uintptrType, 0, false))
+		lengthGlobal.SetGlobalConstant(true)
+		typesGlobal.SetInitializer(llvm.ConstPointerNull(p.ptrType))
+		typesGlobal.SetGlobalConstant(true)
+		adaptersGlobal.SetInitializer(llvm.ConstPointerNull(p.ptrType))
+		adaptersGlobal.SetGlobalConstant(true)
+		return
+	}
+
+	var typeCodes, adapters []llvm.Value
+	for _, name := range typeNames {
+		if !strings.HasPrefix(name, "func:") {
+			continue
+		}
+		typ := p.types[name]
+		link := p.mod.NamedGlobal("reflect/makefunc.link:" + name)
+		if link.IsNil() {
+			continue
+		}
+		adapter := stripPointerCasts(link.Initializer())
+		typeCodes = append(typeCodes, llvm.ConstGEP(typ.typecode.GlobalValueType(), typ.typecode, []llvm.Value{
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+		}))
+		adapters = append(adapters, adapter)
+		link.EraseFromParentAsGlobal()
+	}
+	p.eraseGlobalsWithPrefix("reflect/makefunc.link:")
+	p.internalizeFunctionsWithPrefix("reflect/makefunc:")
+
+	lengthGlobal.SetInitializer(llvm.ConstInt(p.uintptrType, uint64(len(typeCodes)), false))
+	lengthGlobal.SetGlobalConstant(true)
+	for _, table := range []struct {
+		global llvm.Value
+		values []llvm.Value
+		name   string
+	}{
+		{typesGlobal, typeCodes, "internal/reflectlite.makeFuncTypes.data"},
+		{adaptersGlobal, adapters, "internal/reflectlite.makeFuncAdapters.data"},
+	} {
+		if len(table.values) == 0 {
+			table.global.SetInitializer(llvm.ConstPointerNull(p.ptrType))
+			table.global.SetGlobalConstant(true)
+			continue
+		}
+		arrayType := llvm.ArrayType(p.ptrType, len(table.values))
+		array := llvm.AddGlobal(p.mod, arrayType, table.name)
+		array.SetInitializer(llvm.ConstArray(p.ptrType, table.values))
+		array.SetGlobalConstant(true)
+		array.SetLinkage(llvm.InternalLinkage)
+		table.global.SetInitializer(llvm.ConstGEP(arrayType, array, []llvm.Value{
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+		}))
+		table.global.SetGlobalConstant(true)
+	}
+}
+
+func (p *lowerInterfacesPass) eraseGlobalsWithPrefix(prefix string) {
+	for global := p.mod.FirstGlobal(); !global.IsNil(); {
+		next := llvm.NextGlobal(global)
+		if strings.HasPrefix(global.Name(), prefix) {
+			global.EraseFromParentAsGlobal()
+		}
+		global = next
+	}
+}
+
+func (p *lowerInterfacesPass) internalizeFunctionsWithPrefix(prefix string) {
+	for fn := p.mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		if strings.HasPrefix(fn.Name(), prefix) {
+			fn.SetLinkage(llvm.InternalLinkage)
+		}
 	}
 }
 
