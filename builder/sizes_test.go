@@ -230,6 +230,54 @@ func TestSizeFull(t *testing.T) {
 	}
 }
 
+func TestUnusedHTTPFIPS(t *testing.T) {
+	for _, opt := range []string{"s", "1"} {
+		for _, enabled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("opt=%s/fips=%t", opt, enabled), func(t *testing.T) {
+				t.Parallel()
+				options := compileopts.Options{
+					Target:        "waveshare-rp2350-pizero",
+					Scheduler:     "cores",
+					Opt:           opt,
+					Semaphore:     sema,
+					InterpTimeout: time.Minute,
+					Debug:         true,
+					VerifyIR:      true,
+				}
+				if enabled {
+					options.GlobalValues = map[string]map[string]string{
+						"runtime": {"osEnv": "GODEBUG=fips140=on"},
+					}
+				}
+				config, err := NewConfig(&options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				result, err := Build("./testdata/unusedhttp", "", t.TempDir(), config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sizes, err := loadProgramSize(result.Executable, result.PackagePathMap)
+				if err != nil {
+					t.Fatal("could not read program size:", err)
+				}
+				var code uint64
+				for pkg, size := range sizes.Packages {
+					if strings.HasPrefix(pkg, "crypto/internal/fips140") {
+						code += size.Code
+					}
+				}
+				if enabled && code == 0 {
+					t.Error("enabled FIPS initialization was removed")
+				}
+				if !enabled && code != 0 {
+					t.Errorf("unused FIPS initialization retained %d bytes of code", code)
+				}
+			})
+		}
+	}
+}
+
 func buildBinary(t *testing.T, targetString, pkgName string, trimPath bool) BuildResult {
 	t.Helper()
 	result, err := buildBinaryInDir(targetString, pkgName, "z", t.TempDir(), trimPath)

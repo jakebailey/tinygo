@@ -1,10 +1,12 @@
 package reflectlite
 
 import (
+	"internal/abi"
 	"internal/gclayout"
 	"internal/hashmap"
 	"internal/itoa"
 	"math"
+	"tinygo"
 	"unsafe"
 )
 
@@ -99,6 +101,15 @@ func ValueOf(i interface{}) Value {
 		value:    value,
 		flags:    valueFlagExported,
 	}
+}
+
+// InterfaceData returns two unspecified words for an interface Value or panics.
+// Deprecated: https://pkg.go.dev/reflect#Value.InterfaceData.
+func (v Value) InterfaceData() [2]uintptr {
+	if v.Kind() != Interface {
+		panic(&ValueError{Method: "reflect.Value.InterfaceData", Kind: v.Kind()})
+	}
+	return *abi.Escape((*[2]uintptr)(v.value))
 }
 
 func (v Value) Interface() interface{} {
@@ -2523,13 +2534,6 @@ func chanSelect(recvbuf unsafe.Pointer, states []chanSelectState, ops []channelO
 // MakeMapWithSize creates a new map with the specified type and initial space
 // for approximately n elements.
 func MakeMapWithSize(typ Type, n int) Value {
-
-	// TODO(dgryski): deduplicate these?  runtime and reflect both need them.
-	const (
-		hashmapAlgorithmBinary uint8 = iota
-		hashmapAlgorithmString
-	)
-
 	if typ.Kind() != Map {
 		panic(&ValueError{Method: "MakeMap", Kind: typ.Kind()})
 	}
@@ -2545,9 +2549,9 @@ func MakeMapWithSize(typ Type, n int) Value {
 	var m unsafe.Pointer
 
 	if key.Kind() == String {
-		m = hashmapMake(key.Size(), val.Size(), uintptr(n), typeInfo, hashmapAlgorithmString)
+		m = hashmapMake(key.Size(), val.Size(), uintptr(n), typeInfo, uint8(tinygo.HashmapAlgorithmString))
 	} else if key.isBinary() {
-		m = hashmapMake(key.Size(), val.Size(), uintptr(n), typeInfo, hashmapAlgorithmBinary)
+		m = hashmapMake(key.Size(), val.Size(), uintptr(n), typeInfo, uint8(tinygo.HashmapAlgorithmBinary))
 	} else {
 		// Composite key type (struct with strings, floats, etc.).
 		// Use runtime-generated hash/equal closures that walk the

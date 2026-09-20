@@ -9,8 +9,10 @@ import (
 var wg sync.WaitGroup
 var panicMap = map[interface{}]int{}
 var repeatedPanicFunc = repeatedPanic
+var recoveredInitValue = recoveredInit()
 
 func main() {
+	println("recovered init:", recoveredInitValue)
 	println("# simple recover")
 	recoverSimple()
 
@@ -60,6 +62,16 @@ func main() {
 
 	println("\n# recover from hardware signals")
 	recoverSignals()
+}
+
+func recoveredInit() (result int) {
+	defer func() {
+		if recover() == "init panic" {
+			result += 2
+		}
+	}()
+	result = 40
+	panic("init panic")
 }
 
 func recoverSimple() {
