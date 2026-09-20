@@ -1715,8 +1715,6 @@ func TestNilMap(t *testing.T) {
 	mv.SetMapIndex(ValueOf("hi"), Value{})
 }
 
-/* // TODO(tinygo): missing chan reflect support
-
 func TestChan(t *testing.T) {
 	for loop := 0; loop < 2; loop++ {
 		var c chan int
@@ -1814,6 +1812,8 @@ func TestChan(t *testing.T) {
 		t.Errorf("Len/Cap = %d/%d want %d/%d", l, m, len(c), cap(c))
 	}
 }
+
+/*
 
 // caseInfo describes a single case in a select test.
 type caseInfo struct {
