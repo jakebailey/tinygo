@@ -33,6 +33,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/tinygo-org/tinygo/compileopts"
 	"github.com/tinygo-org/tinygo/compiler"
+	"github.com/tinygo-org/tinygo/compiler/llvmutil"
 	"github.com/tinygo-org/tinygo/goenv"
 	"github.com/tinygo-org/tinygo/interp"
 	"github.com/tinygo-org/tinygo/loader"
@@ -670,7 +671,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (*BuildR
 					}
 					fn.SetLinkage(llvm.LinkOnceODRLinkage)
 				}
-				err = linker.LinkModule(pkgMod)
+				err = linkPackageModule(linker, mod, pkgMod)
 				if err != nil {
 					return fmt.Errorf("failed to link module: %w", err)
 				}
@@ -1258,6 +1259,28 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (*BuildR
 	}
 
 	return result, nil
+}
+
+func linkPackageModule(linker llvm.Linker, mod, pkgMod llvm.Module) error {
+	attributes := make(map[string]llvmutil.FunctionUsageAttributes)
+	for fn := pkgMod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		attrs := llvmutil.ReadFunctionUsageAttributes(fn)
+		attrs = attrs.Merge(llvmutil.ReadFunctionUsageAttributes(mod.NamedFunction(fn.Name())))
+		if len(attrs) != 0 {
+			attributes[fn.Name()] = attrs
+		}
+	}
+	if err := linker.LinkModule(pkgMod); err != nil {
+		return err
+	}
+	for name, attrs := range attributes {
+		fn := mod.NamedFunction(name)
+		if fn.IsNil() {
+			continue
+		}
+		attrs.Apply(fn)
+	}
+	return nil
 }
 
 func linkOrCopyFile(src, dst string) error {

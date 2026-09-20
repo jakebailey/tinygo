@@ -102,6 +102,8 @@ func TestBuild(t *testing.T) {
 		"print.go",
 		"promoted.go",
 		"reflect.go",
+		"reflect-method-values.go",
+		"reflect-method-init.go",
 		"signal.go",
 		"signalnotify.go",
 		"slice.go",
