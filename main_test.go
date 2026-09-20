@@ -345,6 +345,8 @@ func TestBuild(t *testing.T) {
 		"oldgo/",
 		"print.go",
 		"reflect.go",
+		"reflect-method-values.go",
+		"reflect-method-init.go",
 		"signal.go",
 		"signalnotify.go",
 		"slice.go",

@@ -77,7 +77,6 @@ TEST_PACKAGES_FAST = \
 # archive/zip requires os.ReadAt, which is not yet supported on windows
 # bytes requires mmap
 # compress/flate appears to hang on wasi
-# crypto/aes needs reflect.Type.Method(), not yet implemented
 # debug/plan9obj requires os.ReadAt, which is not yet supported on windows
 # encoding/xml takes a minute on linux and gives a stack overflow on wasi
 # io/ioutil requires os.ReadDir, which is not yet supported on windows or wasi
@@ -101,6 +100,7 @@ TEST_PACKAGES_LINUX := \
 	debug/plan9obj \
 	encoding/gob \
 	encoding/xml \
+	fmt \
 	go/printer \
 	io/ioutil \
 	iter \
@@ -207,7 +207,7 @@ TEST_PACKAGES_HOST := $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_WINDOWS)
 TEST_IOFS := false
 endif
 
-TEST_SKIP_FLAG := -skip='TestExtraMethods|TestAsValidation|TestUnmarshalNestingLimitSlice|TestUnmarshalNestingLimitStruct'
+TEST_SKIP_FLAG := -skip='TestAsValidation|TestUnmarshalNestingLimitSlice|TestUnmarshalNestingLimitStruct'
 TEST_ADDITIONAL_FLAGS ?=
 
 # These packages spend almost all of their test time in a few tests that Go
@@ -221,7 +221,9 @@ TEST_PACKAGES_SHORT = \
 TEST_PACKAGES_SHORT_HOST := $(filter $(TEST_PACKAGES_SHORT),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
 TEST_PACKAGES_PRINTER_HOST := $(filter go/printer,$(TEST_PACKAGES_HOST))
 TEST_PACKAGES_ALLOC_SHA := crypto/sha256 crypto/sha512
-TEST_ALLOC_SHA_SKIP_FLAG := -skip='^(TestExtraMethods|TestAllocations|TestAllocatonsWithTypeAsserts)$$'
+TEST_ALLOC_SHA_SKIP_FLAG := -skip='^(TestAllocations|TestAllocatonsWithTypeAsserts)$$'
+TEST_PACKAGES_ALLOC_FMT := fmt
+TEST_ALLOC_FMT_SKIP_FLAG := -skip='^TestCountMallocs$$'
 TEST_PACKAGES_ALLOC_STRCONV := strconv
 TEST_ALLOC_STRCONV_SKIP_FLAG := -skip='^(TestCountMallocs|TestAllocationsFromBytes)$$'
 TEST_PACKAGES_ALLOC_UNICODE := unicode/utf16 unicode/utf8
@@ -242,6 +244,7 @@ TEST_PACKAGES_ALLOC_STRINGS := strings
 TEST_ALLOC_STRINGS_SKIP_FLAG := -skip='^(TestBuilderAllocs|TestBuilderGrow|TestBuilderGrowSizeclasses|TestIndexRune|TestReplace)$$'
 TEST_PACKAGES_ALLOCS := \
 	$(TEST_PACKAGES_ALLOC_SHA) \
+	$(TEST_PACKAGES_ALLOC_FMT) \
 	$(TEST_PACKAGES_ALLOC_STRCONV) \
 	$(TEST_PACKAGES_ALLOC_UNICODE) \
 	$(TEST_PACKAGES_ALLOC_CONTEXT) \
@@ -255,6 +258,7 @@ TEST_PACKAGES_ALLOCS := \
 
 define run-tinygo-alloc-tests
 $(if $(filter $(TEST_PACKAGES_ALLOC_SHA),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_SHA_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_SHA),$(1)))
+$(if $(filter $(TEST_PACKAGES_ALLOC_FMT),$(1)),$(3) $(TINYGO) test $(2) -stack-size=1MB $(TEST_ALLOC_FMT_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_FMT),$(1)))
 $(if $(filter $(TEST_PACKAGES_ALLOC_STRCONV),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_STRCONV_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_STRCONV),$(1)))
 $(if $(filter $(TEST_PACKAGES_ALLOC_UNICODE),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_UNICODE_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_UNICODE),$(1)))
 $(if $(filter $(TEST_PACKAGES_ALLOC_CONTEXT),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_CONTEXT_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_CONTEXT),$(1)))
@@ -279,7 +283,6 @@ TEST_PACKAGES_GOB_HOST := $(filter encoding/gob,$(TEST_PACKAGES_HOST))
 # TODO: parallelize, and only show failing tests (no implied -v flag).
 .PHONY: tinygo-test
 tinygo-test:
-	@# TestExtraMethods: used by many crypto packages and uses reflect.Type.Method which is not implemented.
 	@# TestUnmarshalNestingLimit{Slice,Struct}: encoding/asn1 nesting limit added in
 	@# https://github.com/golang/go/commit/6a6d115f9a7422b2fa081ba6f567eefb4a099462
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/gob encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_NETIP_HOST) $(TEST_PACKAGES_QUICK_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
