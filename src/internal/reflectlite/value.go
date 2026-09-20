@@ -2789,6 +2789,42 @@ func callMakeFunc(context unsafe.Pointer, argPointers, resultPointers []unsafe.P
 	runtimeKeepAlive(unsafe.SliceData(out))
 }
 
+//go:linkname dynamicMethodContext internal/reflectlite.dynamicMethodContext
+func dynamicMethodContext(actualType, receiver, signature unsafe.Pointer) unsafe.Pointer {
+	typ := (*RawType)(actualType)
+	for _, method := range typ.dynamicMethods() {
+		if method.source.signature != signature {
+			continue
+		}
+		receiverValue := Value{
+			typecode: typ,
+			value:    receiver,
+			flags:    valueFlagExported,
+		}
+		callback := func(args []Value) []Value { return method.call(receiverValue, args) }
+		header := (*funcHeader)(unsafe.Pointer(&callback))
+		return unsafe.Pointer(&makeFuncContext{
+			typ:             method.funcType(nil),
+			callbackContext: header.Context,
+			callbackCode:    header.Code,
+		})
+	}
+	panic("reflect: dynamic method is unavailable")
+}
+
+//go:linkname dynamicTypeHasMethod internal/reflectlite.dynamicTypeHasMethod
+func dynamicTypeHasMethod(actualType, signature unsafe.Pointer) bool {
+	if actualType == nil {
+		return false
+	}
+	for _, method := range (*RawType)(actualType).dynamicMethods() {
+		if method.source.signature == signature {
+			return true
+		}
+	}
+	return false
+}
+
 func (v Value) Method(i int) Value {
 	if !v.IsValid() {
 		panic(&ValueError{Method: "Method", Kind: Invalid})

@@ -188,9 +188,10 @@ type cacheKey struct {
 }
 
 type cacheEntry struct {
-	key  cacheKey
-	typ  *RawType
-	next *cacheEntry
+	key     cacheKey
+	typ     *RawType
+	methods []dynamicMethod
+	next    *cacheEntry
 }
 
 var lookupCache atomic.Pointer[cacheEntry]
@@ -205,17 +206,20 @@ func loadCachedType(key cacheKey) *RawType {
 }
 
 func loadOrStoreCachedType(key cacheKey, typ *RawType) *RawType {
-	entry := &cacheEntry{key: key, typ: typ}
+	return loadOrStoreCachedTypeEntry(&cacheEntry{key: key, typ: typ})
+}
+
+func loadOrStoreCachedTypeEntry(entry *cacheEntry) *RawType {
 	for {
 		head := lookupCache.Load()
 		for existing := head; existing != nil; existing = existing.next {
-			if existing.key == key {
+			if existing.key == entry.key {
 				return existing.typ
 			}
 		}
 		entry.next = head
 		if lookupCache.CompareAndSwap(head, entry) {
-			return typ
+			return entry.typ
 		}
 	}
 }
@@ -354,10 +358,18 @@ type structType struct {
 
 type dynamicStructType struct {
 	structType
-	dynamicFields []structField
-	fieldData     []string
-	pkgpathData   string
-	layoutData    []byte
+	dynamicFields  []structField
+	dynamicMethods []dynamicMethod
+	fieldData      []string
+	pkgpathData    string
+	layoutData     []byte
+}
+
+type dynamicMethod struct {
+	source      methodEntry
+	fieldIndex  int
+	methodIndex int
+	isInterface bool
 }
 
 type structCacheEntry struct {
@@ -410,9 +422,11 @@ var funcTypeLinks **RawType
 var funcTypeLinksLen uintptr
 
 type methodEntry struct {
-	name *byte
-	typ  *RawType
-	fn   uintptr
+	signature unsafe.Pointer
+	name      *byte
+	typ       *RawType
+	fn        uintptr
+	value     Value
 }
 
 // Method set, as emitted by the compiler.
@@ -552,7 +566,24 @@ func pointerTo(t *RawType) *RawType {
 	case Func:
 		return (*funcType)(unsafe.Pointer(t)).ptrTo
 	case Struct:
-		return (*structType)(unsafe.Pointer(t)).ptrTo
+		typ := (*structType)(unsafe.Pointer(t))
+		if isDynamicStructType(typ) {
+			key := cacheKey{kind: Pointer, t1: t}
+			if pointer := loadCachedType(key); pointer != nil {
+				return pointer
+			}
+			typ := &ptrType{
+				RawType: RawType{meta: uint8(Pointer) | flagComparable | flagIsBinary},
+				elem:    t,
+			}
+			pointer := &typ.RawType
+			methods := (*dynamicStructType)(unsafe.Pointer(t)).dynamicMethods
+			if len(methods) != 0 {
+				typ.numMethod = uint16(len(methods)) | numMethodHasMethodSet
+			}
+			return loadOrStoreCachedTypeEntry(&cacheEntry{key: key, typ: pointer, methods: methods})
+		}
+		return typ.ptrTo
 	default:
 		return (*elemType)(unsafe.Pointer(t)).ptrTo
 	}
@@ -1301,11 +1332,17 @@ func typeImplementsMethodSet(concreteType, assertedMethodSet unsafe.Pointer) boo
 		if ct.numMethod&numMethodHasMethodSet == 0 {
 			return false
 		}
+		if dynamicMethods := dynamicPointerMethods((*RawType)(concreteType)); dynamicMethods != nil {
+			return dynamicMethodsImplementMethodSet(dynamicMethods, assertedMethodSet, itfNumMethod)
+		}
 		methods = &ct.methods
 	} else if metaByte&kindMask == uint8(Struct) {
 		ct := (*structType)(concreteType)
 		if ct.numMethod&numMethodHasMethodSet == 0 {
 			return false
+		}
+		if isDynamicStructType(ct) {
+			return dynamicMethodsImplementMethodSet((*dynamicStructType)(concreteType).dynamicMethods, assertedMethodSet, itfNumMethod)
 		}
 		// For struct types, the method set follows after the variable-length
 		// fields array. We need to compute its offset dynamically.
@@ -1434,6 +1471,9 @@ func (t *RawType) NumMethod() int {
 	}
 	switch t.Kind() {
 	case Pointer:
+		if methods := dynamicPointerMethods(t); methods != nil {
+			return len(methods)
+		}
 		return int((*ptrType)(unsafe.Pointer(t)).numMethod & ^uint16(numMethodHasMethodSet))
 	case Struct:
 		return int((*structType)(unsafe.Pointer(t)).numMethod & ^uint16(numMethodHasMethodSet))
@@ -1464,10 +1504,16 @@ func (t *RawType) getMethodSet() *methodSet {
 		if typ.numMethod&numMethodHasMethodSet == 0 {
 			return nil
 		}
+		if dynamicPointerMethods(t) != nil {
+			return nil
+		}
 		return &typ.methods
 	case Struct:
 		typ := (*structType)(unsafe.Pointer(t))
 		if typ.numMethod&numMethodHasMethodSet == 0 {
+			return nil
+		}
+		if isDynamicStructType(typ) {
 			return nil
 		}
 		fieldSize := unsafe.Sizeof(structField{})
@@ -1482,10 +1528,59 @@ func methodSetEntry(methods *methodSet, i int) methodEntry {
 	signatures := unsafe.Pointer(&methods.signatures)
 	count := uintptr(methods.length)
 	return methodEntry{
-		name: *(**byte)(unsafe.Add(signatures, (count+uintptr(i))*ptrSize)),
-		typ:  *(**RawType)(unsafe.Add(signatures, (2*count+uintptr(i))*ptrSize)),
-		fn:   *(*uintptr)(unsafe.Add(signatures, (3*count+uintptr(i))*ptrSize)),
+		signature: *(*unsafe.Pointer)(unsafe.Add(signatures, uintptr(i)*ptrSize)),
+		name:      *(**byte)(unsafe.Add(signatures, (count+uintptr(i))*ptrSize)),
+		typ:       *(**RawType)(unsafe.Add(signatures, (2*count+uintptr(i))*ptrSize)),
+		fn:        *(*uintptr)(unsafe.Add(signatures, (3*count+uintptr(i))*ptrSize)),
 	}
+}
+
+func dynamicMethodsImplementMethodSet(methods []dynamicMethod, assertedMethodSet unsafe.Pointer, itfNumMethod uintptr) bool {
+	assertedTypePtr := unsafe.Add(assertedMethodSet, unsafe.Sizeof(uintptr(0)))
+	assertedTypeEnd := unsafe.Add(assertedTypePtr, itfNumMethod*unsafe.Sizeof(unsafe.Pointer(nil)))
+	for assertedTypePtr != assertedTypeEnd {
+		assertedMethod := *(*unsafe.Pointer)(assertedTypePtr)
+		found := false
+		for _, method := range methods {
+			if method.source.signature == assertedMethod {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+		assertedTypePtr = unsafe.Add(assertedTypePtr, unsafe.Sizeof(unsafe.Pointer(nil)))
+	}
+	return true
+}
+
+func isDynamicStructType(typ *structType) bool {
+	return typ.ptrTo == (*RawType)(unsafe.Add(unsafe.Pointer(&typ.RawType), 1))
+}
+
+func (t *RawType) dynamicMethods() []dynamicMethod {
+	if t.ptrtag() != 0 || t.isNamed() {
+		return nil
+	}
+	switch t.Kind() {
+	case Struct:
+		if typ := (*structType)(unsafe.Pointer(t)); isDynamicStructType(typ) {
+			return (*dynamicStructType)(unsafe.Pointer(t)).dynamicMethods
+		}
+	case Pointer:
+		return dynamicPointerMethods(t)
+	}
+	return nil
+}
+
+func dynamicPointerMethods(typ *RawType) []dynamicMethod {
+	for entry := lookupCache.Load(); entry != nil; entry = entry.next {
+		if entry.key.kind == Pointer && entry.typ == typ {
+			return entry.methods
+		}
+	}
+	return nil
 }
 
 func methodName(entry methodEntry) (name, pkgPath, pkgName string) {
@@ -1511,6 +1606,9 @@ func (t *RawType) Method(i int) MethodInfo {
 			return MethodInfo{}
 		}
 		panic("reflect: Method index out of range")
+	}
+	if methods := t.dynamicMethods(); methods != nil {
+		return methods[i].info(t, i)
 	}
 	methods := t.getMethodSet()
 	if methods == nil {
@@ -1539,6 +1637,15 @@ func (t *RawType) Method(i int) MethodInfo {
 }
 
 func (t *RawType) MethodByName(name string) (MethodInfo, bool) {
+	if methods := t.dynamicMethods(); methods != nil {
+		for i, method := range methods {
+			entryName, _, _ := methodName(method.source)
+			if entryName == name {
+				return method.info(t, i), true
+			}
+		}
+		return MethodInfo{}, false
+	}
 	methods := t.getMethodSet()
 	if methods == nil {
 		if t.NumMethod() != 0 {
@@ -1577,6 +1684,9 @@ type MethodInfo struct {
 }
 
 func methodFunc(entry methodEntry) Value {
+	if entry.value.IsValid() {
+		return entry.value
+	}
 	if entry.fn == 0 {
 		return Value{}
 	}
@@ -2052,12 +2162,6 @@ func StructOf(fields []StructField) Type {
 		}
 	}
 
-	for _, field := range rawFields {
-		if field.Anonymous && embeddedTypeHasMethods(field.Type) {
-			panic("reflect.StructOf: embedded type with methods not implemented")
-		}
-	}
-
 	dynamic := &dynamicStructType{
 		structType: structType{
 			RawType:  RawType{meta: uint8(Struct)},
@@ -2066,6 +2170,55 @@ func StructOf(fields []StructField) Type {
 		},
 		dynamicFields: make([]structField, len(rawFields)),
 		fieldData:     make([]string, len(rawFields)),
+	}
+	concreteMethods := false
+	for i, field := range rawFields {
+		if !field.Anonymous || !embeddedTypeHasMethods(field.Type) {
+			continue
+		}
+		sourceIsInterface := field.Type.Kind() == Interface
+		if !sourceIsInterface {
+			if i != 0 || (len(rawFields) > 1 && field.Type.Kind() == Pointer) {
+				panic("reflect.StructOf: embedded type with methods not implemented")
+			}
+			concreteMethods = true
+		} else if concreteMethods {
+			panic("reflect.StructOf: embedded type with methods not implemented")
+		}
+		for methodIndex := 0; methodIndex < field.Type.NumMethod(); methodIndex++ {
+			sourceEntry := field.Type.methodEntry(methodIndex)
+			if !isExportedMethod(sourceEntry) {
+				panic("reflect: embedded interface with unexported method(s) not implemented")
+			}
+			dynamic.dynamicMethods = append(dynamic.dynamicMethods, dynamicMethod{
+				source:      sourceEntry,
+				fieldIndex:  i,
+				methodIndex: methodIndex,
+				isInterface: sourceIsInterface,
+			})
+		}
+	}
+	if len(dynamic.dynamicMethods) != 0 {
+		if len(dynamic.dynamicMethods) >= numMethodHasMethodSet {
+			panic("reflect.StructOf: too many methods")
+		}
+		for i, method := range dynamic.dynamicMethods {
+			name, _, _ := methodName(method.source)
+			j := i
+			for j > 0 {
+				previous, _, _ := methodName(dynamic.dynamicMethods[j-1].source)
+				if previous == name {
+					panic("reflect.StructOf: embedded types with overlapping methods not implemented")
+				}
+				if previous < name {
+					break
+				}
+				dynamic.dynamicMethods[j] = dynamic.dynamicMethods[j-1]
+				j--
+			}
+			dynamic.dynamicMethods[j] = method
+		}
+		dynamic.numMethod = uint16(len(dynamic.dynamicMethods)) | numMethodHasMethodSet
 	}
 	if comparable {
 		dynamic.meta |= flagComparable
@@ -2129,6 +2282,79 @@ func embeddedTypeHasMethods(typ *RawType) bool {
 		return true
 	}
 	return typ.Kind() == Pointer && typ.elem().NumMethod() != 0
+}
+
+func (t *RawType) methodEntry(i int) methodEntry {
+	if methods := t.dynamicMethods(); methods != nil {
+		info := methods[i].info(t, i)
+		return methodEntry{signature: methods[i].source.signature, name: methods[i].source.name, typ: info.Type, value: info.Func}
+	}
+	methods := t.getMethodSet()
+	if methods == nil {
+		panic("reflect: method metadata is unavailable")
+	}
+
+	index := 0
+	for j := 0; j < int(methods.length); j++ {
+		entry := methodSetEntry(methods, j)
+		if t.Kind() != Interface && !isExportedMethod(entry) {
+			continue
+		}
+		if index == i {
+			return entry
+		}
+		index++
+	}
+	panic("reflect: Method index out of range")
+}
+
+func (m dynamicMethod) funcType(receiver *RawType) *RawType {
+	ft := m.source.typ.funcDescriptor()
+	numIn, numOut := int(ft.numIn), int(ft.numOut&^funcTypeVariadic)
+	inOut := unsafe.Slice((**RawType)(unsafe.Pointer(&ft.inOut)), numIn+numOut)
+	in := inOut[:numIn]
+	if !m.isInterface {
+		in = in[1:]
+	}
+	if receiver != nil {
+		if len(in) == int(^uint8(0)) {
+			panic("reflect: too many inputs for method type")
+		}
+		in = append([]*RawType{receiver}, in...)
+	}
+	return funcOf(in, inOut[numIn:], ft.numOut&funcTypeVariadic != 0)
+}
+
+func (m dynamicMethod) info(receiver *RawType, index int) MethodInfo {
+	typ := m.funcType(receiver)
+	callback := func(args []Value) []Value { return m.call(args[0], args[1:]) }
+	header := (*funcHeader)(unsafe.Pointer(&callback))
+	name, pkgPath, _ := methodName(m.source)
+	return MethodInfo{
+		Name:    name,
+		PkgPath: pkgPath,
+		Type:    typ,
+		Func:    MakeFunc(typ, header.Context, header.Code),
+		Index:   index,
+	}
+}
+
+func (m dynamicMethod) call(receiver Value, args []Value) []Value {
+	if receiver.Kind() == Pointer {
+		receiver = receiver.Elem()
+	}
+	field := receiver.Field(m.fieldIndex)
+	var function Value
+	if m.isInterface {
+		function = field.Method(m.methodIndex)
+	} else {
+		function = methodFunc(m.source)
+		args = append([]Value{field}, args...)
+	}
+	if m.source.typ.IsVariadic() {
+		return function.CallSlice(args)
+	}
+	return function.Call(args)
 }
 
 func structTypeMatches(typ *RawType, fields []rawStructField) bool {

@@ -842,13 +842,31 @@ func (c *context) getReflectCallWrapper(sig *types.Signature) llvm.Value {
 
 func (c *context) getReflectMakeFuncWrapper(sig *types.Signature) llvm.Value {
 	typeName, _ := c.getTypeCodeName(sig)
-	name := "reflect/makefunc:" + typeName
+	return c.getReflectMakeFuncWrapperForABI(sig, "reflect/makefunc:"+typeName, c.getFunctionABI(sig, false))
+}
+
+func (c *context) getReflectDynamicMethodWrapper(method *types.Signature) {
+	sig := types.NewSignatureType(nil, nil, nil, method.Params(), method.Results(), method.Variadic())
+	c.getReflectMakeFuncWrapper(sig)
+	ordinary := c.getFunctionABI(sig, false)
+	// The invoke ABI budgets the receiver and typecode before lowering arguments.
+	invoke := c.getInterfaceFunctionABI(method)
+	invoke.params = invoke.params[1:]
+	for i, param := range invoke.params {
+		if param.indirect != ordinary.params[i].indirect {
+			typeName, _ := c.getTypeCodeName(sig)
+			c.getReflectMakeFuncWrapperForABI(sig, "reflect/makefunc:interface:"+typeName, invoke)
+			return
+		}
+	}
+}
+
+func (c *context) getReflectMakeFuncWrapperForABI(sig *types.Signature, name string, abi functionABI) llvm.Value {
 	if wrapper := c.mod.NamedFunction(name); !wrapper.IsNil() {
 		return wrapper
 	}
 
-	abi := c.getFunctionABI(sig, false)
-	wrapper := llvm.AddFunction(c.mod, name, c.getLLVMFunctionType(sig))
+	wrapper := llvm.AddFunction(c.mod, name, c.getLLVMFunctionTypeForABI(abi))
 	wrapper.SetLinkage(llvm.WeakODRLinkage)
 
 	irbuilder := c.mod.NewBuilder()
@@ -957,7 +975,40 @@ func (c *context) getReflectMakeFuncWrapper(sig *types.Signature) llvm.Value {
 		b.CreateRet(result)
 	}
 
+	c.requireReflectDynamicMethodHelpers()
 	return wrapper
+}
+
+func (c *context) requireReflectDynamicMethodHelpers() {
+	helpers := []struct {
+		name       string
+		resultType llvm.Type
+		paramTypes []llvm.Type
+	}{
+		{
+			name:       "internal/reflectlite.dynamicMethodContext",
+			resultType: c.dataPtrType,
+			paramTypes: []llvm.Type{c.dataPtrType, c.dataPtrType, c.dataPtrType, c.dataPtrType},
+		},
+		{
+			name:       "internal/reflectlite.dynamicTypeHasMethod",
+			resultType: c.ctx.Int1Type(),
+			paramTypes: []llvm.Type{c.dataPtrType, c.dataPtrType, c.dataPtrType},
+		},
+	}
+	for _, helper := range helpers {
+		fn := c.mod.NamedFunction(helper.name)
+		if fn.IsNil() {
+			fn = llvm.AddFunction(c.mod, helper.name, llvm.FunctionType(helper.resultType, helper.paramTypes, false))
+		}
+		linkName := "reflect/dynamicmethod.link:" + helper.name
+		if c.mod.NamedGlobal(linkName).IsNil() {
+			link := llvm.AddGlobal(c.mod, c.dataPtrType, linkName)
+			link.SetInitializer(llvm.ConstPointerCast(fn, c.dataPtrType))
+			link.SetLinkage(llvm.WeakODRLinkage)
+			link.SetGlobalConstant(true)
+		}
+	}
 }
 
 // getTypeKind returns the type kind for the given type, as defined by
@@ -1670,6 +1721,7 @@ func (c *context) getMethodSetValue(owner types.Type, methods []*types.Func) llv
 		reflectedType := method.Type().(*types.Signature)
 		if !ownerIsInterface {
 			signature := method.Type().(*types.Signature)
+			c.getReflectDynamicMethodWrapper(signature)
 			params := make([]*types.Var, 0, signature.Params().Len()+1)
 			params = append(params, types.NewVar(token.NoPos, nil, "", owner))
 			for param := range signature.Params().Variables() {
@@ -1695,19 +1747,25 @@ func (c *context) getMethodSetValue(owner types.Type, methods []*types.Func) llv
 			callType:      reflectedType,
 			method:        method,
 		})
+		if ownerIsInterface {
+			c.getReflectDynamicMethodWrapper(reflectedType)
+		}
 	}
 	sort.Slice(refs, func(i, j int) bool {
 		return refs[i].signatureName < refs[j].signatureName
 	})
 
-	var signatures, names, types, functions []llvm.Value
-	methodSelections := c.program.MethodSets.MethodSet(owner)
+	var signatures, names, methodTypes, functions []llvm.Value
+	var methodSelections *types.MethodSet
+	if !ownerIsInterface {
+		methodSelections = c.program.MethodSets.MethodSet(owner)
+	}
 	for _, ref := range refs {
 		signatures = append(signatures, ref.signature)
 		names = append(names, c.getMethodNameGlobal(ref.metadataName, ref.pkgPath, ref.pkgName, ref.name))
-		types = append(types, ref.methodType)
+		methodTypes = append(methodTypes, ref.methodType)
 		function := llvm.ConstInt(c.uintptrType, 0, false)
-		if !ownerIsInterface {
+		if methodSelections != nil {
 			for selection := range methodSelections.Methods() {
 				if selection.Obj() != ref.method {
 					continue
@@ -1724,7 +1782,7 @@ func (c *context) getMethodSetValue(owner types.Type, methods []*types.Func) llv
 		llvm.ConstInt(c.uintptrType, uint64(len(refs)), false),
 		llvm.ConstArray(c.dataPtrType, signatures),
 		llvm.ConstArray(c.dataPtrType, names),
-		llvm.ConstArray(c.dataPtrType, types),
+		llvm.ConstArray(c.dataPtrType, methodTypes),
 		llvm.ConstArray(c.uintptrType, functions),
 	}, false)
 }

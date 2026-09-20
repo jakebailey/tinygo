@@ -701,9 +701,9 @@ func TestValueMethodByNameMissing(t *testing.T) {
 	}
 }
 
-type wideMethodTarget struct{}
+type WideMethodTarget struct{}
 
-func (wideMethodTarget) Wide(
+func (WideMethodTarget) Wide(
 	first, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _,
 	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _,
 	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _,
@@ -717,14 +717,51 @@ func (wideMethodTarget) Wide(
 }
 
 func TestValueWideMethod(t *testing.T) {
-	value := reflect.ValueOf(wideMethodTarget{})
 	args := make([]reflect.Value, 128)
 	for i := range args {
 		args[i] = reflect.ValueOf(i + 1)
 	}
-	for _, method := range []reflect.Value{value.Method(0), value.MethodByName("Wide")} {
-		if got := method.Call(args)[0].Int(); got != 129 {
-			t.Fatalf("wide method returned %d, want 129", got)
+	typ := reflect.StructOf([]reflect.StructField{{
+		Name: "WideMethodTarget", Type: reflect.TypeFor[WideMethodTarget](), Anonymous: true,
+	}})
+	for _, value := range []reflect.Value{
+		reflect.ValueOf(WideMethodTarget{}), reflect.New(typ).Elem(), reflect.New(typ),
+	} {
+		for _, method := range []reflect.Value{value.Method(0), value.MethodByName("Wide")} {
+			if got := method.Call(args)[0].Int(); got != 129 {
+				t.Fatalf("%v wide method returned %d, want 129", value.Type(), got)
+			}
 		}
+	}
+}
+
+func TestFuncOfStructOfType(t *testing.T) {
+	structType := reflect.StructOf([]reflect.StructField{{
+		Name: "Generated",
+		Type: reflect.TypeOf(uint64(0)),
+	}})
+	pointerType := reflect.PointerTo(structType)
+	sliceType := reflect.SliceOf(reflect.TypeOf(""))
+	typ := reflect.FuncOf(
+		[]reflect.Type{pointerType, sliceType},
+		[]reflect.Type{structType, reflect.TypeOf(false)},
+		true,
+	)
+	if typ.In(0) != pointerType || typ.In(1) != sliceType || typ.Out(0) != structType || !typ.IsVariadic() {
+		t.Fatalf("FuncOf returned incorrect constructed types: %v", typ)
+	}
+	if again := reflect.FuncOf([]reflect.Type{pointerType, sliceType}, []reflect.Type{structType, reflect.TypeOf(false)}, true); again != typ {
+		t.Fatal("FuncOf did not preserve constructed type identity")
+	}
+	fn := reflect.MakeFunc(typ, func(args []reflect.Value) []reflect.Value {
+		value := args[0].Elem()
+		value.Field(0).SetUint(value.Field(0).Uint() + uint64(args[1].Len()))
+		return []reflect.Value{value, reflect.ValueOf(true)}
+	})
+	value := reflect.New(structType)
+	value.Elem().Field(0).SetUint(40)
+	out := fn.Call([]reflect.Value{value, reflect.ValueOf("first"), reflect.ValueOf("second")})
+	if len(out) != 2 || out[0].Type() != structType || out[0].Field(0).Uint() != 42 || !out[1].Bool() {
+		t.Fatalf("Call returned incorrect constructed result: %v", out)
 	}
 }

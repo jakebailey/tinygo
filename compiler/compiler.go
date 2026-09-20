@@ -1740,6 +1740,13 @@ func (b *builder) markReflectMethodUseFor(call *ssa.CallCommon, target llvm.Valu
 		return
 	}
 	switch method.Name() {
+	case "StructOf":
+		if !call.IsInvoke() && method.Pkg().Path() == "reflect" {
+			target.AddFunctionAttr(b.ctx.CreateStringAttribute("tinygo-reflect-structof", ""))
+			target.AddFunctionAttr(b.ctx.CreateStringAttribute("tinygo-reflect-makefunc", ""))
+			target.AddFunctionAttr(b.ctx.CreateStringAttribute("tinygo-reflect-method", ""))
+		}
+		return
 	case "Method", "MethodByName", "Methods":
 	default:
 		return
