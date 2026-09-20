@@ -2176,8 +2176,6 @@ func fmtSelect(info []caseInfo) string {
 	return buf.String()
 }
 
-// TODO(tinygo): missing func/method/call support
-
 type two [2]uintptr
 
 // Difficult test for function call because of
@@ -3777,8 +3775,6 @@ func TestStructArg(t *testing.T) {
 		t.Errorf("function called with (%v, %v), want (%v, %v)", gotA, gotB, wantA, wantB)
 	}
 }
-
-*/
 
 var tagGetTests = []struct {
 	Tag   StructTag
