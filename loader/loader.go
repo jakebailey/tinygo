@@ -54,6 +54,7 @@ type PackageJSON struct {
 	Name           string
 	ForTest        string
 	Root           string
+	Standard       bool
 	DefaultGODEBUG string
 	Module         struct {
 		Path      string
@@ -123,6 +124,9 @@ func Load(config *compileopts.Config, inputPkg string, typeChecker types.Config)
 			return nil, err
 		}
 	}
+	if config.TestConfig.StandardPackage {
+		wd = filepath.Join(goroot, "src")
+	}
 	p := &Program{
 		config:      config,
 		typeChecker: typeChecker,
@@ -140,6 +144,10 @@ func Load(config *compileopts.Config, inputPkg string, typeChecker types.Config)
 	cmd, err := List(config, extraArgs, []string{inputPkg})
 	if err != nil {
 		return nil, err
+	}
+	if config.TestConfig.StandardPackage {
+		cmd.Dir = wd
+		cmd.Env = append(cmd.Env, "GOWORK=off")
 	}
 	buf := &bytes.Buffer{}
 	cmd.Stdout = buf

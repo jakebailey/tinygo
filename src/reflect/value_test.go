@@ -86,6 +86,51 @@ func TestNewAt(t *testing.T) {
 	}
 }
 
+func TestTinySetPointer(t *testing.T) {
+	type pointer unsafe.Pointer
+	var p pointer
+	value := ValueOf(&p).Elem()
+	object := new(int)
+	*object = 17
+	value.SetPointer(unsafe.Pointer(object))
+	runtime.GC()
+	if got := *(*int)(unsafe.Pointer(p)); got != 17 {
+		t.Fatalf("SetPointer stored %d, want 17", got)
+	}
+	value.SetPointer(nil)
+	if p != nil {
+		t.Fatal("SetPointer(nil) did not clear the pointer")
+	}
+	shouldPanic("", func() { ValueOf(p).SetPointer(nil) })
+	shouldPanic("", func() { ValueOf(new(*int)).Elem().SetPointer(nil) })
+	shouldPanic("", func() { Value{}.SetPointer(nil) })
+	fields := struct{ pointer unsafe.Pointer }{unsafe.Pointer(object)}
+	shouldPanic("", func() { ValueOf(&fields).Elem().Field(0).SetPointer(nil) })
+	if fields.pointer != unsafe.Pointer(object) {
+		t.Fatal("SetPointer changed an unexported field")
+	}
+}
+
+func TestTinyInterfaceData(t *testing.T) {
+	var empty any
+	var nonempty error = fmt.Errorf("interface data")
+	fields := struct{ hidden any }{new(int)}
+	for _, test := range []struct {
+		value  Value
+		header unsafe.Pointer
+	}{
+		{ValueOf(&empty).Elem(), unsafe.Pointer(&empty)},
+		{ValueOf(&nonempty).Elem(), unsafe.Pointer(&nonempty)},
+		{ValueOf(&fields).Elem().Field(0), unsafe.Pointer(&fields.hidden)},
+	} {
+		if got, want := test.value.InterfaceData(), *(*[2]uintptr)(test.header); got != want {
+			t.Errorf("InterfaceData = %v, want %v", got, want)
+		}
+	}
+	shouldPanic("", func() { ValueOf(1).InterfaceData() })
+	shouldPanic("", func() { Value{}.InterfaceData() })
+}
+
 func TestTinyInvalidValueString(t *testing.T) {
 	if got := (Value{}).String(); got != "<invalid Value>" {
 		t.Errorf("Value{}.String() = %q, want %q", got, "<invalid Value>")

@@ -25,7 +25,7 @@ import (
 // library path in advance in several places).
 var libVersions = map[string]int{
 	"musl":         3,
-	"bdwgc":        4,
+	"bdwgc":        6,
 	"picolibc":     2,
 	"wasmbuiltins": 1,
 }
@@ -734,6 +734,10 @@ func (c *Config) Emulator(format, binary string) ([]string, error) {
 	}
 	var emulator []string
 	for _, s := range parts {
+		if c.TestConfig.CompileTestBinary && c.EmulatorName() == "wasmtime" && s == "--dir={tmpDir}::/tmp" {
+			// Tests mount the host root, so do not shadow its /tmp directory.
+			continue
+		}
 		s = strings.ReplaceAll(s, "{root}", goenv.Get("TINYGOROOT"))
 		// Allow replacement of what's usually /tmp except notably Windows.
 		s = strings.ReplaceAll(s, "{tmpDir}", os.TempDir())
@@ -745,6 +749,7 @@ func (c *Config) Emulator(format, binary string) ([]string, error) {
 
 type TestConfig struct {
 	CompileTestBinary bool
+	StandardPackage   bool
 	CompileOnly       bool
 	Verbose           bool
 	Short             bool

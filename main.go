@@ -215,10 +215,11 @@ func Build(pkgName, outpath string, config *compileopts.Config) error {
 
 // Test runs the tests in the given package. Returns whether the test passed and
 // possibly an error if the test failed to run.
-func Test(pkgName string, stdout, stderr io.Writer, options *compileopts.Options, outpath string) (bool, error) {
+func Test(pkgName string, standardPackage bool, stdout, stderr io.Writer, options *compileopts.Options, outpath string) (bool, error) {
 	optionsCopy := *options
 	options = &optionsCopy
 	options.TestConfig.CompileTestBinary = true
+	options.TestConfig.StandardPackage = standardPackage
 	config, err := builder.NewConfig(options)
 	if err != nil {
 		return false, err
@@ -331,33 +332,6 @@ func Test(pkgName string, stdout, stderr io.Writer, options *compileopts.Options
 		fmt.Fprintf(w, "FAIL\t%s\t%.3fs\n", importPath, duration.Seconds())
 	}
 	return passed, err
-}
-
-func dirsToModuleRootRel(maindir, modroot string) []string {
-	var dirs []string
-	last := ".."
-	// strip off path elements until we hit the module root
-	// adding `..`, `../..`, `../../..` until we're done
-	for maindir != modroot {
-		dirs = append(dirs, last)
-		last = filepath.Join(last, "..")
-		maindir = filepath.Dir(maindir)
-	}
-	dirs = append(dirs, ".")
-	return dirs
-}
-
-func dirsToModuleRootAbs(maindir, modroot string) []string {
-	var dirs = []string{maindir}
-	last := filepath.Join(maindir, "..")
-	// strip off path elements until we hit the module root
-	// adding `..`, `../..`, `../../..` until we're done
-	for maindir != modroot {
-		dirs = append(dirs, last)
-		last = filepath.Join(last, "..")
-		maindir = filepath.Dir(maindir)
-	}
-	return dirs
 }
 
 // validateOutputFormat checks if the output file extension matches the expected format
@@ -977,30 +951,23 @@ func buildAndRun(pkgName string, config *compileopts.Config, stdout io.Writer, c
 				emulator = emulator[1:]
 			}
 
-			wd, _ := os.Getwd()
-
-			// Below adds additional wasmtime flags in case a test reads files
-			// outside its directory, like "../testdata/e.txt". This allows any
-			// relative directory up to the module root, even if the test never
-			// reads any files.
-			if config.TestConfig.CompileTestBinary {
-				// Set working directory to package dir
-				wd = result.MainDir
-
-				// Add relative dirs (../, ../..) up to module root (for wasip1)
-				dirs := dirsToModuleRootRel(result.MainDir, result.ModuleRoot)
-
-				// Add absolute dirs up to module root (for wasip2)
-				dirs = append(dirs, dirsToModuleRootAbs(result.MainDir, result.ModuleRoot)...)
-
-				for _, d := range dirs {
-					emuArgs = append(emuArgs, "--dir="+d)
-				}
-			} else {
-				emuArgs = append(emuArgs, "--dir=.")
+			wd, err := os.Getwd()
+			if err != nil {
+				return result, err
 			}
 
-			emuArgs = append(emuArgs, "--dir="+wd)
+			if config.TestConfig.CompileTestBinary {
+				// Match Go's WASI runner in lib/wasm/go_wasip1_wasm_exec.
+				emuArgs = append(emuArgs, "--dir=/")
+				// Resolve virtual GOROOT links created by loader/goroot.go.
+				wd, err = filepath.EvalSymlinks(result.MainDir)
+				if err != nil {
+					return result, fmt.Errorf("could not resolve WASI test directory: %w", err)
+				}
+			} else {
+				emuArgs = append(emuArgs, "--dir=.", "--dir="+wd)
+			}
+
 			emuArgs = append(emuArgs, "--env=PWD="+wd)
 			for _, v := range environmentVars {
 				emuArgs = append(emuArgs, "--env", v)
@@ -1736,13 +1703,12 @@ func parseGoLinkFlag(flagsString string) (map[string]map[string]string, string, 
 
 // getListOfPackages returns a standard list of packages for a given list that might
 // include wildards using `go list`.
-// For example [./...] => ["pkg1", "pkg1/pkg12", "pkg2"]
-func getListOfPackages(pkgs []string, options *compileopts.Options) ([]string, error) {
+func getListOfPackages(pkgs []string, options *compileopts.Options) ([]loader.PackageJSON, error) {
 	config, err := builder.NewConfig(options)
 	if err != nil {
 		return nil, err
 	}
-	cmd, err := loader.List(config, nil, pkgs)
+	cmd, err := loader.List(config, []string{"-json"}, pkgs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run `go list`: %w", err)
 	}
@@ -1754,13 +1720,17 @@ func getListOfPackages(pkgs []string, options *compileopts.Options) ([]string, e
 		return nil, err
 	}
 
-	var pkgNames []string
-	sc := bufio.NewScanner(outputBuf)
-	for sc.Scan() {
-		pkgNames = append(pkgNames, sc.Text())
+	var packages []loader.PackageJSON
+	decoder := json.NewDecoder(outputBuf)
+	for {
+		var pkg loader.PackageJSON
+		if err := decoder.Decode(&pkg); err == io.EOF {
+			return packages, nil
+		} else if err != nil {
+			return nil, fmt.Errorf("failed to decode go list output: %w", err)
+		}
+		packages = append(packages, pkg)
 	}
-
-	return pkgNames, nil
 }
 
 func main() {
@@ -2079,7 +2049,7 @@ func main() {
 		// Build and run the tests concurrently.
 		// This uses an additional semaphore to reduce the memory usage.
 		testSema := make(chan struct{}, cap(options.Semaphore))
-		for i, pkgName := range explicitPkgNames {
+		for i, pkg := range explicitPkgNames {
 			buf := &bufs[i]
 			testSema <- struct{}{}
 			wg.Add(1)
@@ -2089,7 +2059,7 @@ func main() {
 				defer close(buf.done)
 				stdout := (*testStdout)(buf)
 				stderr := (*testStderr)(buf)
-				passed, err := Test(pkgName, stdout, stderr, options, outpath)
+				passed, err := Test(pkg.ImportPath, pkg.Standard, stdout, stderr, options, outpath)
 				if err != nil {
 					wd, getwdErr := os.Getwd()
 					if getwdErr != nil {

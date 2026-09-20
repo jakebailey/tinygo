@@ -313,6 +313,44 @@ func TestTrimPathTestPackages(t *testing.T) {
 	}
 }
 
+func TestWASIp2WorkingDirectory(t *testing.T) {
+	opts := optionsFromTarget("wasip2", sema)
+	emuCheck(t, opts)
+	config, err := builder.NewConfig(&opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	result, err := builder.Build("testdata/wasip2_cwd.go", "wasm", dir, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		pwd  string
+		cwd  string
+	}{
+		{"NestedPreopen", "/workspace/testdata", "/workspace/testdata"},
+		{"NormalizedPWD", "/workspace/../workspace/testdata/", "/workspace/testdata/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			output, err := exec.CommandContext(ctx, "wasmtime", "run", "--dir="+wd+"::/workspace",
+				"--dir="+filepath.Join(wd, "testdata")+"::/workspace/test",
+				"--env=PWD="+tc.pwd, "--env=EXPECT_CWD="+tc.cwd,
+				result.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("failed to run: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
 func TestBuild(t *testing.T) {
 	t.Parallel()
 
@@ -839,6 +877,12 @@ func runPlatTests(options compileopts.Options, tests []string, t *testing.T) {
 		t.Run("filesystem.go", func(t *testing.T) {
 			t.Parallel()
 			runTest("filesystem.go", options, t, nil, nil)
+		})
+	}
+	if options.Target == "wasm" || isBaremetal {
+		t.Run("devnull.go", func(t *testing.T) {
+			t.Parallel()
+			runTest("devnull.go", options, t, nil, nil)
 		})
 	}
 	if options.Target == "" || options.Target == "wasm" || isWASI {
@@ -1725,6 +1769,197 @@ func TestStdin(t *testing.T) {
 	checkOutput(t, TESTDATA+"/stdin.txt", output.Bytes())
 }
 
+func TestWASIWorkingDirectory(t *testing.T) {
+	opts := optionsFromTarget("wasip1", sema)
+	emuCheck(t, opts)
+	config, err := builder.NewConfig(&opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := builder.Build(TESTDATA+"/env.go", "wasm", t.TempDir(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	preopen := "--dir=" + wd + "::/workspace"
+	for _, tc := range []struct {
+		name string
+		cwd  string
+		args []string
+	}{
+		{"NoPreopens", "", nil},
+		{"FirstPreopen", "/workspace", []string{preopen, "--env=EXPECT_FILE=testdata/filesystem.txt"}},
+		{"PWD", "/workspace/testdata", []string{preopen, "--env=PWD=/workspace/testdata", "--env=EXPECT_FILE=filesystem.txt"}},
+		{"NormalizedPWD", "/workspace/testdata", []string{preopen, "--env=PWD=/workspace/../workspace/testdata", "--env=EXPECT_FILE=filesystem.txt"}},
+		{"TrailingSlash", "/workspace/testdata/", []string{preopen, "--env=PWD=/workspace/testdata/", "--env=EXPECT_FILE=filesystem.txt"}},
+		{"UnmappedPWD", "/no-access", []string{"--env=PWD=/no-access", "--env=EXPECT_FILE_FAILURE=missing"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"run", "--env=ENV1=VALUE1", "--env=ENV2=VALUE2", "--env=EXPECT_CWD=" + tc.cwd}
+			args = append(args, tc.args...)
+			args = append(args, result.Binary, "first", "second")
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			output, err := exec.CommandContext(ctx, "wasmtime", args...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("failed to run: %v\n%s", err, output)
+			}
+			checkOutput(t, TESTDATA+"/env.txt", output)
+		})
+	}
+}
+
+func TestWASIStdlibDirectory(t *testing.T) {
+	t.Parallel()
+	for _, target := range []string{"wasip1", "wasip2"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+			opts := optionsFromTarget(target, sema)
+			opts.Tags = append(opts.Tags, "runtime_asserts")
+			opts.TestConfig.CompileTestBinary = true
+			emuCheck(t, opts)
+			config, err := builder.NewConfig(&opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output := &bytes.Buffer{}
+			_, err = buildAndRun("html/template", config, output,
+				[]string{"-test.run=^TestEmptyTemplateHTML$"},
+				nil, time.Minute, func(cmd *exec.Cmd, result builder.BuildResult) error {
+					physicalDir, err := filepath.EvalSymlinks(result.MainDir)
+					if err != nil {
+						return err
+					}
+					if !slices.Contains(cmd.Args, "--env=PWD="+physicalDir) {
+						t.Errorf("test cwd does not match the physical package directory %q", physicalDir)
+					}
+					return cmd.Run()
+				})
+			if err != nil {
+				t.Fatalf("failed to run: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
+func TestWASITestPreopens(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	pkgDir := filepath.Join(dir, "package")
+	if err := os.MkdirAll(filepath.Join(pkgDir, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pkgNameForTest := pkgDir
+	if runtime.GOOS != "windows" {
+		pkgNameForTest = filepath.Join(dir, "alias")
+		if err := os.Symlink(pkgDir, pkgNameForTest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, data := range map[string]string{
+		"go.mod":              "module example.com/wasi-test-root\n\ngo 1.23\n",
+		"parent.txt":          "fixture\n",
+		"package/fixture.txt": "fixture\n",
+		"package/access_test.go": `package access
+
+import (
+	"io"
+	"os"
+	"testing"
+)
+
+func TestFileAccess(t *testing.T) {
+	for _, name := range []string{"fixture.txt", "../parent.txt", "/custom/parent.txt"} {
+		if data, err := os.ReadFile(name); err != nil || string(data) != "fixture\n" {
+			t.Fatalf("read %q: %q, %v", name, data, err)
+		}
+	}
+	f, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if data, err := io.ReadAll(f); err != nil || len(data) != 0 {
+		t.Fatalf("read null: %q, %v", data, err)
+	}
+	if n, err := io.WriteString(f, "discard"); err != nil || n != 7 {
+		t.Fatalf("write null: %d, %v", n, err)
+	}
+	if err := os.Chdir("child"); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile("../../parent.txt"); err != nil || string(data) != "fixture\n" {
+		t.Fatalf("read after chdir: %q, %v", data, err)
+	}
+	tmp, err := os.CreateTemp("", "wasi-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"wasip1", "wasip2"} {
+		for _, compileTest := range []bool{false, true} {
+			name := "Run"
+			pkgName := "testdata/stdlib.go"
+			if compileTest {
+				name = "Test"
+				pkgName = pkgNameForTest
+			}
+			t.Run(target+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				opts := optionsFromTarget(target, sema)
+				opts.TestConfig.CompileTestBinary = compileTest
+				if compileTest {
+					opts.Directory = pkgDir
+				}
+				emuCheck(t, opts)
+				config, err := builder.NewConfig(&opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				custom := "--dir=" + dir + "::/custom"
+				config.Target.Emulator = strings.Replace(config.Target.Emulator, " {}", " "+custom+" {}", 1)
+				output := &bytes.Buffer{}
+				_, err = buildAndRun(pkgName, config, output, nil, nil, time.Minute, func(cmd *exec.Cmd, _ builder.BuildResult) error {
+					var dirs []string
+					for _, arg := range cmd.Args {
+						if strings.HasPrefix(arg, "--dir=") {
+							dirs = append(dirs, arg)
+						}
+					}
+					want := []string{"--dir=.", "--dir=" + wd, "--dir=" + os.TempDir() + "::/tmp", custom}
+					if compileTest {
+						want = []string{"--dir=/", custom}
+					}
+					if !slices.Equal(dirs, want) {
+						t.Errorf("preopens = %v, want %v", dirs, want)
+					}
+					return cmd.Run()
+				})
+				if err != nil {
+					t.Fatalf("failed to run: %v\n%s", err, output)
+				}
+			})
+		}
+	}
+}
+
 func TestTest(t *testing.T) {
 	t.Parallel()
 
@@ -1774,7 +2009,7 @@ func TestTest(t *testing.T) {
 				defer out.Close()
 
 				opts := targ.opts
-				passed, err := Test("github.com/tinygo-org/tinygo/tests/testing/pass", out, out, &opts, "")
+				passed, err := Test("github.com/tinygo-org/tinygo/tests/testing/pass", false, out, out, &opts, "")
 				if err != nil {
 					t.Errorf("test error: %v", err)
 				}
@@ -1795,7 +2030,7 @@ func TestTest(t *testing.T) {
 				defer out.Close()
 
 				opts := targ.opts
-				passed, err := Test("github.com/tinygo-org/tinygo/tests/testing/fail", out, out, &opts, "")
+				passed, err := Test("github.com/tinygo-org/tinygo/tests/testing/fail", false, out, out, &opts, "")
 				if err != nil {
 					t.Errorf("test error: %v", err)
 				}
@@ -1822,7 +2057,7 @@ func TestTest(t *testing.T) {
 
 				var output bytes.Buffer
 				opts := targ.opts
-				passed, err := Test("github.com/tinygo-org/tinygo/tests/testing/nothing", io.MultiWriter(&output, out), out, &opts, "")
+				passed, err := Test("github.com/tinygo-org/tinygo/tests/testing/nothing", false, io.MultiWriter(&output, out), out, &opts, "")
 				if err != nil {
 					t.Errorf("test error: %v", err)
 				}
@@ -1846,7 +2081,7 @@ func TestTest(t *testing.T) {
 				defer out.Close()
 
 				opts := targ.opts
-				passed, err := Test("github.com/tinygo-org/tinygo/tests/testing/builderr", out, out, &opts, "")
+				passed, err := Test("github.com/tinygo-org/tinygo/tests/testing/builderr", false, out, out, &opts, "")
 				if err == nil {
 					t.Error("test did not error")
 				}
@@ -1895,19 +2130,33 @@ func TestGetListOfPackages(t *testing.T) {
 			},
 		},
 		{
+			pkgs: []string{"fmt", "./tests/testing/pass"},
+			expectedPkgs: []string{
+				"fmt",
+				"github.com/tinygo-org/tinygo/tests/testing/pass",
+			},
+		},
+		{
 			pkgs:          []string{"./tests/testing"},
 			expectesError: true,
 		},
 	}
 
 	for _, test := range tests {
-		actualPkgs, err := getListOfPackages(test.pkgs, &opts)
+		packages, err := getListOfPackages(test.pkgs, &opts)
 		if err != nil && !test.expectesError {
 			t.Errorf("unexpected error: %v", err)
 		} else if err == nil && test.expectesError {
 			t.Error("expected error, but got none")
 		}
 
+		var actualPkgs []string
+		for _, pkg := range packages {
+			actualPkgs = append(actualPkgs, pkg.ImportPath)
+			if pkg.Standard != (pkg.ImportPath == "fmt") {
+				t.Errorf("package %s: unexpected Standard value %v", pkg.ImportPath, pkg.Standard)
+			}
+		}
 		if !reflect.DeepEqual(test.expectedPkgs, actualPkgs) {
 			t.Errorf("expected two slices to be equal, expected %v got %v", test.expectedPkgs, actualPkgs)
 		}
