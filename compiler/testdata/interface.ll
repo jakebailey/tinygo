@@ -12,6 +12,8 @@ target triple = "wasm32-unknown-wasi"
 @"reflect/types.type:pointer:named:error" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:named:error" }, align 4
 @"reflect/types.type:named:error" = linkonce_odr constant { i8, i16, ptr, ptr, ptr, { i32, [1 x ptr], [1 x ptr], [1 x ptr] }, [7 x i8] } { i8 116, i16 -32767, ptr @"reflect/types.type:pointer:named:error", ptr @"reflect/types.type:interface:{Error:func:{}{basic:string}}", ptr @"reflect/types.type.pkgpath.empty", { i32, [1 x ptr], [1 x ptr], [1 x ptr] } { i32 1, [1 x ptr] [ptr @"reflect/types.signature:Error:func:{}{basic:string}"], [1 x ptr] [ptr @"reflect/types.methodname:Error:func:{}{basic:string}"], [1 x ptr] [ptr @"reflect/types.type:func:{}{basic:string}"] }, [7 x i8] c".error\00" }, align 4
 @"reflect/types.signature:Error:func:{}{basic:string}" = linkonce_odr constant i8 0, align 1
+@"reflect/call.link:func:{}{basic:string}" = weak_odr constant ptr @"reflect/call:func:{}{basic:string}"
+@"reflect/makefunc.link:func:{}{basic:string}" = weak_odr constant ptr @"reflect/makefunc:func:{}{basic:string}"
 @"reflect/types.type:func:{}{basic:string}" = linkonce_odr constant { i8, i8, i16, ptr, [1 x ptr] } { i8 24, i8 0, i16 1, ptr @"reflect/types.type:pointer:func:{}{basic:string}", [1 x ptr] [ptr @"reflect/types.type:basic:string"] }, align 4
 @"reflect/types.type:basic:string" = linkonce_odr constant { i8, ptr } { i8 81, ptr @"reflect/types.type:pointer:basic:string" }, align 4
 @"reflect/types.type:pointer:basic:string" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:basic:string" }, align 4
@@ -76,6 +78,35 @@ entry:
   call void @runtime.trackPointer(ptr null, ptr nonnull %stackalloc, ptr undef) #7
   ret %runtime._interface { ptr @"reflect/types.type:pointer:named:error", ptr null }
 }
+
+define weak_odr void @"reflect/call:func:{}{basic:string}"(i32 %0, ptr %1, ptr %2, ptr %3, ptr %4) {
+entry:
+  %5 = inttoptr i32 %0 to ptr
+  %6 = call %runtime._string %5(ptr %1)
+  %7 = load ptr, ptr %3, align 4
+  %.elt = extractvalue %runtime._string %6, 0
+  store ptr %.elt, ptr %7, align 4
+  %.repack1 = getelementptr inbounds nuw i8, ptr %7, i32 4
+  %.elt2 = extractvalue %runtime._string %6, 1
+  store i32 %.elt2, ptr %.repack1, align 4
+  ret void
+}
+
+define weak_odr %runtime._string @"reflect/makefunc:func:{}{basic:string}"(ptr %0) {
+entry:
+  %result = alloca %runtime._string, align 8
+  %results = alloca [1 x ptr], align 4
+  store ptr %result, ptr %results, align 4
+  call void @"internal/reflectlite.makeFuncCall"(ptr %0, ptr null, ptr nonnull %results, ptr undef)
+  %.unpack = load ptr, ptr %result, align 4
+  %1 = insertvalue %runtime._string poison, ptr %.unpack, 0
+  %.elt1 = getelementptr inbounds nuw i8, ptr %result, i32 4
+  %.unpack2 = load i32, ptr %.elt1, align 4
+  %2 = insertvalue %runtime._string %1, i32 %.unpack2, 1
+  ret %runtime._string %2
+}
+
+declare void @"internal/reflectlite.makeFuncCall"(ptr, ptr, ptr, ptr)
 
 ; Function Attrs: nounwind
 define hidden %runtime._interface @main.anonymousInterfaceType(ptr %context) unnamed_addr #1 {

@@ -2220,9 +2220,6 @@ func fmtSelect(info []caseInfo) string {
 	return buf.String()
 }
 
-/*
-// TODO(tinygo): missing func/method/call support
-
 type two [2]uintptr
 
 // Difficult test for function call because of
@@ -2313,6 +2310,8 @@ func TestCallWithStruct(t *testing.T) {
 	}
 }
 
+/*
+
 func TestCallReturnsEmpty(t *testing.T) {
 	// Issue 21717: past-the-end pointer write in Call with
 	// nonzero-sized frame and zero-sized return value.
@@ -2337,7 +2336,9 @@ func TestCallReturnsEmpty(t *testing.T) {
 	runtime.KeepAlive(v)
 }
 
-func TestMakeFunc(t *testing.T) {
+*/
+
+func TestMakeFuncUpstream(t *testing.T) {
 	f := dummy
 	fv := MakeFunc(TypeOf(f), func(in []Value) []Value { return in })
 	ValueOf(&f).Elem().Set(fv)
@@ -2373,7 +2374,7 @@ func TestMakeFuncInterface(t *testing.T) {
 	}
 }
 
-func TestMakeFuncVariadic(t *testing.T) {
+func TestMakeFuncVariadicUpstream(t *testing.T) {
 	// Test that variadic arguments are packed into a slice and passed as last arg
 	fn := func(_ int, is ...int) []int { return nil }
 	fv := MakeFunc(TypeOf(fn), func(in []Value) []Value { return in[1:2] })
@@ -2495,8 +2496,6 @@ func TestMakeFuncInvalidReturnAssignments(t *testing.T) {
 		f()
 	})
 }
-
-*/
 
 type Point struct {
 	x, y int
@@ -3778,8 +3777,6 @@ func TestSetLenCap(t *testing.T) {
 	shouldPanic("SetCap", func() { va.SetCap(8) })
 }
 
-/*
-
 func TestVariadic(t *testing.T) {
 	var b strings.Builder
 	V := ValueOf
@@ -3825,8 +3822,6 @@ func TestStructArg(t *testing.T) {
 		t.Errorf("function called with (%v, %v), want (%v, %v)", gotA, gotB, wantA, wantB)
 	}
 }
-
-*/
 
 var tagGetTests = []struct {
 	Tag   StructTag
@@ -6619,12 +6614,12 @@ func GCFunc(args []Value) []Value {
 	return []Value{}
 }
 
-/*
-
 func TestReflectFuncTraceback(t *testing.T) {
 	f := MakeFunc(TypeOf(func() {}), GCFunc)
 	f.Call([]Value{})
 }
+
+/*
 
 func TestReflectMethodTraceback(t *testing.T) {
 	p := Point{3, 4}
@@ -6806,6 +6801,8 @@ func TestCallArgLive(t *testing.T) {
 	*CallGC = false
 }
 
+*/
+
 func TestMakeFuncStackCopy(t *testing.T) {
 	target := func(in []Value) []Value {
 		runtime.GC()
@@ -6830,6 +6827,8 @@ func useStack(n int) {
 	var b [1024]byte // makes frame about 1KB
 	useStack(n - 1 + int(b[99]))
 }
+
+/*
 
 type Impl struct{}
 
