@@ -532,29 +532,6 @@ func (p *lowerInterfacesPass) run() error {
 	return nil
 }
 
-// isBoxable reports whether the program can put a value with this typecode
-// into an interface. This is true when the typecode has a use outside other
-// typecodes. A typecode that is only the element of a different typecode (for
-// example chan T or *T) is not boxable.
-func isBoxable(value llvm.Value) bool {
-	for _, use := range getUses(value) {
-		if !use.IsAGlobalVariable().IsNil() {
-			if !strings.HasPrefix(use.Name(), "reflect/types.type:") {
-				return true
-			}
-			continue
-		}
-		if !use.IsAConstant().IsNil() {
-			if isBoxable(use) {
-				return true
-			}
-			continue
-		}
-		return true
-	}
-	return false
-}
-
 func (p *lowerInterfacesPass) usesReflectMethods() bool {
 	for fn := p.mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
 		attr := fn.GetStringAttributeAtIndex(-1, "tinygo-reflect-method")
@@ -829,6 +806,29 @@ func (p *lowerInterfacesPass) internalizeFunctionsWithPrefix(prefix string) {
 			fn.SetLinkage(llvm.InternalLinkage)
 		}
 	}
+}
+
+// isBoxable reports whether the program can put a value with this typecode
+// into an interface. This is true when the typecode has a use outside other
+// typecodes. A typecode that is only the element of a different typecode (for
+// example chan T or *T) is not boxable.
+func isBoxable(value llvm.Value) bool {
+	for _, use := range getUses(value) {
+		if !use.IsAGlobalVariable().IsNil() {
+			if !strings.HasPrefix(use.Name(), "reflect/types.type:") {
+				return true
+			}
+			continue
+		}
+		if !use.IsAConstant().IsNil() {
+			if isBoxable(use) {
+				return true
+			}
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // addTypeMethods reads the method set of the given type info struct. It
