@@ -5897,6 +5897,8 @@ func TestStructOfDirectIface(t *testing.T) {
 	}
 }
 
+*/
+
 type StructI int
 
 func (i StructI) Get() int { return int(i) }
@@ -6097,12 +6099,12 @@ func TestStructOfWithInterface(t *testing.T) {
 			Type:      StructOf(nil),
 		},
 	}
-	// With the current implementation this is expected to panic.
-	// Ideally it should work and we should be able to call the
-	// Set and Get methods.
-	shouldPanic("", func() {
-		StructOf(fields)
-	})
+	// Go rejects this layout because of its direct-interface representation.
+	// See https://go.dev/src/reflect/type.go.
+	rt = StructOf(fields)
+	if rt.NumField() != len(fields) || rt.Field(0).Type != fields[0].Type {
+		t.Errorf("StructOf returned incorrect fields: %v", rt)
+	}
 }
 
 func TestStructOfTooManyFields(t *testing.T) {
@@ -6115,8 +6117,6 @@ func TestStructOfTooManyFields(t *testing.T) {
 		t.Errorf("Expected method `After` to be found")
 	}
 }
-
-*/
 
 func TestStructOfDifferentPkgPath(t *testing.T) {
 	fields := []StructField{

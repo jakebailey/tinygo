@@ -9,6 +9,9 @@ target triple = "wasm32-unknown-wasi"
 
 @"reflect/types.type:named:main.genericMethod" = linkonce_odr constant { ptr, i8, i16, ptr, ptr, ptr, { i32, [1 x ptr], [1 x ptr], [1 x ptr], [1 x i32] }, [19 x i8] } { ptr @"named:main.genericMethod$methodset", i8 122, i16 -32767, ptr getelementptr ({ ptr, i8, i16, ptr, { i32, [1 x ptr], [1 x ptr], [1 x ptr], [1 x i32] } }, ptr @"reflect/types.type:pointer:named:main.genericMethod", i32 0, i32 1), ptr @"reflect/types.type:struct:{}", ptr @"reflect/types.type.pkgpath:main", { i32, [1 x ptr], [1 x ptr], [1 x ptr], [1 x i32] } { i32 1, [1 x ptr] [ptr @"reflect/types.signature:Regular:func:{basic:int}{basic:int}"], [1 x ptr] [ptr @"reflect/types.methodname:Regular:func:{basic:int}{basic:int}"], [1 x ptr] [ptr @"reflect/types.type:func:{named:main.genericMethod,basic:int}{basic:int}"], [1 x i32] [i32 ptrtoint (ptr @"(main.genericMethod).Regular" to i32)] }, [19 x i8] c"main.genericMethod\00" }, align 4
 @"reflect/types.signature:Regular:func:{basic:int}{basic:int}" = linkonce_odr constant i8 0, align 1
+@"reflect/makefunc.link:func:{basic:int}{basic:int}" = weak_odr constant ptr @"reflect/makefunc:func:{basic:int}{basic:int}"
+@"reflect/dynamicmethod.link:internal/reflectlite.dynamicMethodContext" = weak_odr constant ptr @"internal/reflectlite.dynamicMethodContext"
+@"reflect/dynamicmethod.link:internal/reflectlite.dynamicTypeHasMethod" = weak_odr constant ptr @"internal/reflectlite.dynamicTypeHasMethod"
 @"reflect/call.link:func:{named:main.genericMethod,basic:int}{basic:int}" = weak_odr constant ptr @"reflect/call:func:{named:main.genericMethod,basic:int}{basic:int}"
 @"reflect/makefunc.link:func:{named:main.genericMethod,basic:int}{basic:int}" = weak_odr constant ptr @"reflect/makefunc:func:{named:main.genericMethod,basic:int}{basic:int}"
 @"reflect/types.type:func:{named:main.genericMethod,basic:int}{basic:int}" = linkonce_odr constant { i8, i8, i16, ptr, [3 x ptr] } { i8 24, i8 2, i16 1, ptr @"reflect/types.type:pointer:func:{named:main.genericMethod,basic:int}{basic:int}", [3 x ptr] [ptr getelementptr ({ ptr, i8, i16, ptr, ptr, ptr, { i32, [1 x ptr], [1 x ptr], [1 x ptr], [1 x i32] }, [19 x i8] }, ptr @"reflect/types.type:named:main.genericMethod", i32 0, i32 1), ptr @"reflect/types.type:basic:int", ptr @"reflect/types.type:basic:int"] }, align 4
@@ -58,6 +61,26 @@ entry:
   ret { %runtime._interface, %runtime._interface } { %runtime._interface { ptr getelementptr ({ ptr, i8, i16, ptr, ptr, ptr, { i32, [1 x ptr], [1 x ptr], [1 x ptr], [1 x i32] }, [19 x i8] }, ptr @"reflect/types.type:named:main.genericMethod", i32 0, i32 1), ptr null }, %runtime._interface { ptr @"reflect/types.type:named:main.onlyGenericMethod", ptr null } }
 }
 
+define weak_odr i32 @"reflect/makefunc:func:{basic:int}{basic:int}"(i32 %0, ptr %1) {
+entry:
+  %arg = alloca i32, align 4
+  store i32 %0, ptr %arg, align 4
+  %result = alloca i32, align 4
+  %args = alloca [1 x ptr], align 4
+  store ptr %arg, ptr %args, align 4
+  %results = alloca [1 x ptr], align 4
+  store ptr %result, ptr %results, align 4
+  call void @"internal/reflectlite.makeFuncCall"(ptr %1, ptr nonnull %args, ptr nonnull %results, ptr undef)
+  %2 = load i32, ptr %result, align 4
+  ret i32 %2
+}
+
+declare void @"internal/reflectlite.makeFuncCall"(ptr, ptr, ptr, ptr)
+
+declare ptr @"internal/reflectlite.dynamicMethodContext"(ptr, ptr, ptr, ptr)
+
+declare i1 @"internal/reflectlite.dynamicTypeHasMethod"(ptr, ptr, ptr)
+
 define weak_odr void @"reflect/call:func:{named:main.genericMethod,basic:int}{basic:int}"(i32 %0, ptr %1, ptr %2, ptr %3, ptr %4) {
 entry:
   %5 = inttoptr i32 %0 to ptr
@@ -86,8 +109,6 @@ entry:
   %3 = load i32, ptr %result, align 4
   ret i32 %3
 }
-
-declare void @"internal/reflectlite.makeFuncCall"(ptr, ptr, ptr, ptr)
 
 define weak_odr void @"reflect/call:func:{pointer:named:main.genericMethod,basic:int}{basic:int}"(i32 %0, ptr %1, ptr %2, ptr %3, ptr %4) {
 entry:

@@ -14,6 +14,8 @@ target triple = "wasm32-unknown-wasi"
 @"reflect/types.signature:Error:func:{}{basic:string}" = linkonce_odr constant i8 0, align 1
 @"reflect/call.link:func:{}{basic:string}" = weak_odr constant ptr @"reflect/call:func:{}{basic:string}"
 @"reflect/makefunc.link:func:{}{basic:string}" = weak_odr constant ptr @"reflect/makefunc:func:{}{basic:string}"
+@"reflect/dynamicmethod.link:internal/reflectlite.dynamicMethodContext" = weak_odr constant ptr @"internal/reflectlite.dynamicMethodContext"
+@"reflect/dynamicmethod.link:internal/reflectlite.dynamicTypeHasMethod" = weak_odr constant ptr @"internal/reflectlite.dynamicTypeHasMethod"
 @"reflect/types.type:func:{}{basic:string}" = linkonce_odr constant { i8, i8, i16, ptr, [1 x ptr] } { i8 24, i8 0, i16 1, ptr @"reflect/types.type:pointer:func:{}{basic:string}", [1 x ptr] [ptr @"reflect/types.type:basic:string"] }, align 4
 @"reflect/types.type:basic:string" = linkonce_odr constant { i8, ptr } { i8 81, ptr @"reflect/types.type:pointer:basic:string" }, align 4
 @"reflect/types.type:pointer:basic:string" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:basic:string" }, align 4
@@ -107,6 +109,10 @@ entry:
 }
 
 declare void @"internal/reflectlite.makeFuncCall"(ptr, ptr, ptr, ptr)
+
+declare ptr @"internal/reflectlite.dynamicMethodContext"(ptr, ptr, ptr, ptr)
+
+declare i1 @"internal/reflectlite.dynamicTypeHasMethod"(ptr, ptr, ptr)
 
 ; Function Attrs: nounwind
 define hidden %runtime._interface @main.anonymousInterfaceType(ptr %context) unnamed_addr #1 {

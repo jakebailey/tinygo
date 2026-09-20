@@ -106,6 +106,7 @@ type lowerInterfacesPass struct {
 	interfaces      map[string]*interfaceInfo
 	keepMethodNames bool
 	methodFuncNames map[string]struct{} // nil keeps all exported method functions
+	dynamicMethods  bool
 }
 
 // LowerInterfaces lowers all intermediate interface calls and globals that are
@@ -211,6 +212,14 @@ func (p *lowerInterfacesPass) run() error {
 			// Interface invoke.
 			interfaceInvokeFunctions = append(interfaceInvokeFunctions, fn)
 		}
+	}
+
+	keepAllMethods := p.usesReflectMethods()
+	p.keepMethodNames = keepAllMethods
+	p.dynamicMethods = p.usesReflectStructOf()
+	p.methodFuncNames = p.reflectMethodNames()
+	if p.dynamicMethods {
+		p.methodFuncNames = nil
 	}
 
 	// Find all the interfaces that are implemented per type.
@@ -367,12 +376,9 @@ func (p *lowerInterfacesPass) run() error {
 		stripMethodSets = true
 	}
 
-	keepAllMethods := p.usesReflectMethods()
 	if keepAllMethods {
 		stripMethodSets = false
 	}
-	p.keepMethodNames = keepAllMethods
-	p.methodFuncNames = p.reflectMethodNames()
 
 	// Collect all method signatures that appear in any interface type
 	// descriptor. When reflect is imported and method sets are kept,
@@ -546,6 +552,16 @@ func (p *lowerInterfacesPass) reflectMethodNames() map[string]struct{} {
 	return names
 }
 
+func (p *lowerInterfacesPass) usesReflectStructOf() bool {
+	for fn := p.mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		attr := fn.GetStringAttributeAtIndex(-1, "tinygo-reflect-structof")
+		if !attr.IsNil() && (fn.Linkage() != llvm.InternalLinkage || hasUses(fn)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *lowerInterfacesPass) createReflectTypeLinks(typeNames []string) {
 	for _, spec := range []struct {
 		prefix string
@@ -681,6 +697,7 @@ func pruneUnusedReflectMakeFunc(mod llvm.Module) {
 	}
 
 	p.eraseGlobalsWithPrefix("reflect/makefunc.link:")
+	p.eraseGlobalsWithPrefix("reflect/dynamicmethod.link:")
 	p.internalizeFunctionsWithPrefix("reflect/makefunc:")
 }
 
@@ -692,6 +709,7 @@ func (p *lowerInterfacesPass) createReflectMakeFuncLinks(typeNames []string) {
 	lengthGlobal := p.mod.NamedGlobal("internal/reflectlite.makeFuncLinksLen")
 	if typesGlobal.IsNil() && adaptersGlobal.IsNil() && lengthGlobal.IsNil() {
 		p.eraseGlobalsWithPrefix("reflect/makefunc.link:")
+		p.eraseGlobalsWithPrefix("reflect/dynamicmethod.link:")
 		p.internalizeFunctionsWithPrefix("reflect/makefunc:")
 		return
 	}
@@ -700,6 +718,7 @@ func (p *lowerInterfacesPass) createReflectMakeFuncLinks(typeNames []string) {
 	}
 	if !used {
 		p.eraseGlobalsWithPrefix("reflect/makefunc.link:")
+		p.eraseGlobalsWithPrefix("reflect/dynamicmethod.link:")
 		p.internalizeFunctionsWithPrefix("reflect/makefunc:")
 		lengthGlobal.SetInitializer(llvm.ConstInt(p.uintptrType, 0, false))
 		lengthGlobal.SetGlobalConstant(true)
@@ -729,6 +748,7 @@ func (p *lowerInterfacesPass) createReflectMakeFuncLinks(typeNames []string) {
 		link.EraseFromParentAsGlobal()
 	}
 	p.eraseGlobalsWithPrefix("reflect/makefunc.link:")
+	p.eraseGlobalsWithPrefix("reflect/dynamicmethod.link:")
 	p.internalizeFunctionsWithPrefix("reflect/makefunc:")
 
 	lengthGlobal.SetInitializer(llvm.ConstInt(p.uintptrType, uint64(len(typeCodes)), false))
@@ -928,6 +948,36 @@ func (p *lowerInterfacesPass) defineInterfaceMethodFunc(fn llvm.Value, itf *inte
 		p.builder.SetInsertPointAtEnd(next)
 	}
 
+	if p.dynamicMethods {
+		adapter := p.dynamicMethodAdapter(signature)
+		helper := p.mod.NamedFunction("internal/reflectlite.dynamicMethodContext")
+		signatureGlobal := p.dynamicMethodSignature(signature)
+		if !adapter.IsNil() && !helper.IsNil() && !signatureGlobal.IsNil() {
+			receiver := fn.Param(resultOffset)
+			dynamicContext := p.builder.CreateCall(helper.GlobalValueType(), helper, []llvm.Value{
+				actualType,
+				receiver,
+				signatureGlobal,
+				llvm.Undef(p.ptrType),
+			}, "")
+			callParams := make([]llvm.Value, 0, fn.ParamsCount()-2)
+			if resultOffset != 0 {
+				callParams = append(callParams, fn.FirstParam())
+			}
+			for i := 1 + resultOffset; i < fn.ParamsCount()-2; i++ {
+				callParams = append(callParams, fn.Param(i))
+			}
+			callParams = append(callParams, dynamicContext)
+			retval := p.builder.CreateCall(adapter.GlobalValueType(), adapter, callParams, "")
+			if retval.Type().TypeKind() == llvm.VoidTypeKind {
+				p.builder.CreateRetVoid()
+			} else {
+				p.builder.CreateRet(retval)
+			}
+			return
+		}
+	}
+
 	// The builder now points to the last *.then block, after all types have
 	// been checked. Call runtime.nilPanic here.
 	// The only other possible value remaining is nil for nil interfaces. We
@@ -993,7 +1043,52 @@ func (p *lowerInterfacesPass) defineInterfaceAssertFunc(fn llvm.Value, itf *inte
 		cmp := p.builder.CreateICmp(llvm.IntEQ, actualType, typ.typecodeGEP, typ.name+".icmp")
 		result = p.builder.CreateOr(result, cmp, "")
 	}
+	helper := p.mod.NamedFunction("internal/reflectlite.dynamicTypeHasMethod")
+	if p.dynamicMethods && !helper.IsNil() && len(itf.signatures) != 0 {
+		dynamicResult := llvm.ConstInt(p.ctx.Int1Type(), 1, false)
+		signatureNames := make([]string, 0, len(itf.signatures))
+		for name := range itf.signatures {
+			signatureNames = append(signatureNames, name)
+		}
+		sort.Strings(signatureNames)
+		for _, name := range signatureNames {
+			signature := itf.signatures[name]
+			adapter := p.dynamicMethodAdapter(signature)
+			signatureGlobal := p.dynamicMethodSignature(signature)
+			if adapter.IsNil() {
+				dynamicResult = llvm.ConstInt(p.ctx.Int1Type(), 0, false)
+				break
+			}
+			if signatureGlobal.IsNil() {
+				dynamicResult = llvm.ConstInt(p.ctx.Int1Type(), 0, false)
+				break
+			}
+			hasMethod := p.builder.CreateCall(helper.GlobalValueType(), helper, []llvm.Value{
+				actualType,
+				signatureGlobal,
+				llvm.Undef(p.ptrType),
+			}, "")
+			dynamicResult = p.builder.CreateAnd(dynamicResult, hasMethod, "")
+		}
+		result = p.builder.CreateOr(result, dynamicResult, "")
+	}
 	p.builder.CreateRet(result)
+}
+
+func (p *lowerInterfacesPass) dynamicMethodAdapter(signature *signatureInfo) llvm.Value {
+	index := strings.Index(signature.name, ":func:")
+	if index < 0 {
+		return llvm.Value{}
+	}
+	return p.mod.NamedFunction("reflect/makefunc:" + signature.name[index+1:])
+}
+
+func (p *lowerInterfacesPass) dynamicMethodSignature(signature *signatureInfo) llvm.Value {
+	const prefix = "reflect/methods."
+	if !strings.HasPrefix(signature.name, prefix) {
+		return llvm.Value{}
+	}
+	return p.mod.NamedGlobal("reflect/types.signature:" + strings.TrimPrefix(signature.name, prefix))
 }
 
 // isMethodSetType reports whether ty has the shape of a method-set struct:
