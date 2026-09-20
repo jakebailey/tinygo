@@ -1,7 +1,7 @@
 target                   package                                  opt     code   rodata     data      bss
 hifive1b                 examples/echo                            z       4542      402        0     2276
 microbit                 examples/serial                          z       2999      441        8     2272
-wioterminal              examples/pininterrupt                    z       7830     1690      136     7280
+wioterminal              examples/pininterrupt                    z       7766     1690      136     7280
 pico                     examples/serial                          z       7737     1071      112     5616
 pico                     examples/serial                          2      16378      862      108     5616
 pico2                    examples/serial                          z       6512     1176      112     5608
@@ -23,8 +23,8 @@ riscv-qemu               ./testdata/size-corpus                   z      16116  
 riscv-qemu               ./testdata/size-corpus                   2      23097      935       80    16652
 cortex-m-qemu            ./testdata/size-init-recover             z       2559      761        4     4168
 cortex-m-qemu            ./testdata/size-init-recover             2       6499      309        4     4168
-pico2                    ./testdata/size-init-regexp              z      12545    10895      908     5736
-pico2                    ./testdata/size-init-regexp              2      24072    10712      904     5724
+pico2                    ./testdata/size-init-regexp              z      12529    10895      908     5736
+pico2                    ./testdata/size-init-regexp              2      24056    10712      904     5724
 cortex-m-qemu            ./testdata/size-init-crc                 z       3738      766        4     4424
 cortex-m-qemu            ./testdata/size-init-crc                 2       8035      309        4     4424
 cortex-m-qemu            ./testdata/size-init-map                 z       2812      812      148     4168
