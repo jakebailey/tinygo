@@ -1666,36 +1666,6 @@ func (b *builder) createInstruction(instr ssa.Instruction) {
 	}
 }
 
-func (b *builder) markReflectMethodUse(call *ssa.CallCommon) {
-	pkg := b.fn.Pkg
-	if pkg == nil && b.fn.Origin() != nil {
-		pkg = b.fn.Origin().Pkg
-	}
-	if pkg != nil {
-		switch pkg.Pkg.Path() {
-		case "reflect", "internal/reflectlite":
-			return
-		}
-	}
-
-	var method *types.Func
-	if call.IsInvoke() {
-		method = call.Method
-	} else if callee := call.StaticCallee(); callee != nil {
-		if object := callee.Object(); object != nil {
-			method, _ = object.(*types.Func)
-		}
-	}
-	if method == nil || method.Pkg() == nil || method.Pkg().Path() != "reflect" {
-		return
-	}
-	switch method.Name() {
-	case "Method", "MethodByName", "Methods":
-		attr := b.ctx.CreateStringAttribute("tinygo-reflect-method", "")
-		b.llvmFn.AddFunctionAttr(attr)
-	}
-}
-
 func (b *builder) setValue(value ssa.Value, llvmValue llvm.Value) {
 	if b.isAggregateValue(value.Type()) && !llvmValue.IsNil() && llvmValue.Type().TypeKind() == llvm.PointerTypeKind {
 		b.indirectValues[value] = llvmValue
@@ -2393,12 +2363,73 @@ func (b *builder) createBuiltin(argTypes []types.Type, argValues []llvm.Value, c
 	}
 }
 
+func (b *builder) markReflectMethodUse(call *ssa.CallCommon) {
+	pkg := b.fn.Pkg
+	if pkg == nil && b.fn.Origin() != nil {
+		pkg = b.fn.Origin().Pkg
+	}
+	if pkg != nil {
+		switch pkg.Pkg.Path() {
+		case "reflect", "internal/reflectlite":
+			return
+		}
+	}
+
+	var method *types.Func
+	if call.IsInvoke() {
+		method = call.Method
+	} else if callee := call.StaticCallee(); callee != nil {
+		if object := callee.Object(); object != nil {
+			method, _ = object.(*types.Func)
+		}
+	}
+	if method == nil || method.Pkg() == nil || method.Pkg().Path() != "reflect" {
+		return
+	}
+	switch method.Name() {
+	case "Method", "MethodByName", "Methods":
+		attr := b.ctx.CreateStringAttribute("tinygo-reflect-method", "")
+		b.llvmFn.AddFunctionAttr(attr)
+	}
+}
+
+func (b *builder) markReflectMakeFuncUse(call *ssa.CallCommon) {
+	pkg := b.fn.Pkg
+	if pkg == nil && b.fn.Origin() != nil {
+		pkg = b.fn.Origin().Pkg
+	}
+	if pkg != nil {
+		switch pkg.Pkg.Path() {
+		case "reflect", "internal/reflectlite":
+			return
+		}
+	}
+
+	var function *types.Func
+	if call.IsInvoke() {
+		function = call.Method
+	} else if callee := call.StaticCallee(); callee != nil {
+		if object := callee.Object(); object != nil {
+			function, _ = object.(*types.Func)
+		}
+	}
+	if function == nil || function.Pkg() == nil || function.Pkg().Path() != "reflect" {
+		return
+	}
+	if function.Name() == "MakeFunc" {
+		attr := b.ctx.CreateStringAttribute("tinygo-reflect-makefunc", "")
+		b.llvmFn.AddFunctionAttr(attr)
+	}
+}
+
 // createFunctionCall lowers a Go SSA call instruction (to a simple function,
 // closure, function pointer, builtin, method, etc.) to LLVM IR, usually a call
 // instruction.
 //
 // This is also where compiler intrinsics are implemented.
 func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) {
+	b.markReflectMakeFuncUse(instr)
+
 	// See if this is an intrinsic function that is handled specially.
 	if fn := instr.StaticCallee(); fn != nil {
 		// Direct function call, either to a named or anonymous (directly
