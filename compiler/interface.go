@@ -317,6 +317,7 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 		case *types.Signature:
 			numIn := typ.Params().Len()
 			numOut := typ.Results().Len()
+			c.getReflectCallWrapper(typ)
 			typeFieldTypes = append(typeFieldTypes,
 				types.NewVar(token.NoPos, nil, "numIn", types.Typ[types.Uint8]),
 				types.NewVar(token.NoPos, nil, "numOut", types.Typ[types.Uint8]), // high bit = variadic
@@ -589,6 +590,92 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 	})
 }
 
+func (c *compilerContext) getReflectCallWrapper(sig *types.Signature) llvm.Value {
+	typeName, _ := c.getTypeCodeName(sig)
+	name := "reflect/call:" + typeName
+	if wrapper := c.mod.NamedFunction(name); !wrapper.IsNil() {
+		return wrapper
+	}
+
+	wrapperType := llvm.FunctionType(c.ctx.VoidType(), []llvm.Type{
+		c.uintptrType,
+		c.dataPtrType,
+		c.dataPtrType,
+		c.dataPtrType,
+		c.dataPtrType,
+	}, false)
+	wrapper := llvm.AddFunction(c.mod, name, wrapperType)
+	wrapper.SetLinkage(llvm.WeakODRLinkage)
+
+	irbuilder := c.ctx.NewBuilder()
+	defer irbuilder.Dispose()
+	b := &builder{compilerContext: c, Builder: irbuilder}
+	entry := c.ctx.AddBasicBlock(wrapper, "entry")
+	b.SetInsertPointAtEnd(entry)
+
+	fn := b.CreateIntToPtr(wrapper.Param(0), c.funcPtrType, "")
+	context := wrapper.Param(1)
+	args := wrapper.Param(2)
+	results := wrapper.Param(3)
+	abi := c.getFunctionABI(sig, false)
+
+	var callArgs []llvm.Value
+	var indirectResult llvm.Value
+	if abi.indirectResult {
+		indirectResult = b.CreateAlloca(abi.resultType, "result")
+		callArgs = append(callArgs, indirectResult)
+	}
+	for i, param := range abi.params {
+		slot := b.CreateInBoundsGEP(c.dataPtrType, args, []llvm.Value{
+			llvm.ConstInt(c.ctx.Int32Type(), uint64(i), false),
+		}, "")
+		valuePtr := b.CreateLoad(c.dataPtrType, slot, "")
+		if param.indirect {
+			callArgs = append(callArgs, valuePtr)
+			continue
+		}
+		var value llvm.Value
+		if c.targetData.TypeAllocSize(param.llvmType) == 0 {
+			value = llvm.ConstNull(param.llvmType)
+		} else {
+			value = b.CreateLoad(param.llvmType, valuePtr, "")
+		}
+		callArgs = append(callArgs, b.expandFormalParam(value)...)
+	}
+	callArgs = append(callArgs, context)
+
+	call := b.CreateCall(c.getLLVMFunctionType(sig), fn, callArgs, "")
+	var result llvm.Value
+	if abi.indirectResult {
+		result = b.CreateLoad(abi.resultType, indirectResult, "")
+	} else {
+		result = call
+	}
+
+	for i := 0; i < sig.Results().Len(); i++ {
+		resultType := c.getLLVMType(sig.Results().At(i).Type())
+		if c.targetData.TypeAllocSize(resultType) == 0 {
+			continue
+		}
+		slot := b.CreateInBoundsGEP(c.dataPtrType, results, []llvm.Value{
+			llvm.ConstInt(c.ctx.Int32Type(), uint64(i), false),
+		}, "")
+		resultPtr := b.CreateLoad(c.dataPtrType, slot, "")
+		value := result
+		if sig.Results().Len() != 1 {
+			value = b.CreateExtractValue(result, i, "")
+		}
+		b.CreateStore(value, resultPtr)
+	}
+	b.CreateRetVoid()
+
+	link := llvm.AddGlobal(c.mod, c.dataPtrType, "reflect/call.link:"+typeName)
+	link.SetInitializer(llvm.ConstPointerCast(wrapper, c.dataPtrType))
+	link.SetLinkage(llvm.WeakODRLinkage)
+	link.SetGlobalConstant(true)
+	return wrapper
+}
+
 // getTypeKind returns the type kind for the given type, as defined by
 // reflect.Kind.
 func getTypeKind(t types.Type) uint8 {
@@ -748,7 +835,11 @@ func (c *compilerContext) getTypeCodeName(t types.Type) (name string, isLocal bo
 			}
 			results[i] = s
 		}
-		return "func:" + "{" + strings.Join(params, ",") + "}{" + strings.Join(results, ",") + "}", isLocal
+		prefix := "func:"
+		if t.Variadic() {
+			prefix = "func:variadic:"
+		}
+		return prefix + "{" + strings.Join(params, ",") + "}{" + strings.Join(results, ",") + "}", isLocal
 	case *types.Slice:
 		s, isLocal := c.getTypeCodeName(t.Elem())
 		return "slice:" + s, isLocal
