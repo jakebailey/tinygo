@@ -91,9 +91,10 @@ type compilerContext struct {
 	callProperties      map[*ssa.Function]functionCallProperties
 	asyncifyCatchers    map[llvm.Type]llvm.Value
 	directCatchers      map[llvm.Value]llvm.Value
-	indirectCatchers map[llvm.Type]llvm.Value
-	asyncifyReplays  map[llvm.Type]llvm.Value
-	functionABIs     map[functionABIKey]functionABI
+	indirectCatchers    map[llvm.Type]llvm.Value
+	asyncifyReplays     map[llvm.Type]llvm.Value
+	functionABIs        map[functionABIKey]functionABI
+	usesReflectStructOf bool
 	astComments         map[string]*ast.CommentGroup
 	cgoImportDynamic    map[string]string // //go:cgo_import_dynamic local name -> remote symbol
 	embedGlobals        map[string][]*loader.EmbedFile
@@ -328,6 +329,7 @@ func CompilePackage(moduleName string, pkg *loader.Package, ssaPkg *ssa.Package,
 	c.loaderPkg = pkg
 	c.runtimePkg = ssaPkg.Prog.ImportedPackage("runtime").Pkg
 	c.program = ssaPkg.Prog
+	c.usesReflectStructOf = programUsesReflectStructOf(ssaPkg.Prog)
 
 	// Assign names to function-local named types before compiling the
 	// package, so that types declared in different functions (or in
@@ -1671,7 +1673,7 @@ func (b *builder) markReflectMethodUse(call *ssa.CallCommon) {
 		return
 	}
 	switch method.Name() {
-	case "Method", "MethodByName", "Methods":
+	case "Method", "MethodByName", "Methods", "StructOf":
 		attr := b.ctx.CreateStringAttribute("tinygo-reflect-method", "")
 		b.llvmFn.AddFunctionAttr(attr)
 	}
@@ -2303,7 +2305,7 @@ func (b *builder) markReflectMakeFuncUse(call *ssa.CallCommon) {
 		return
 	}
 	switch function.Name() {
-	case "MakeFunc", "Method", "MethodByName":
+	case "MakeFunc", "Method", "MethodByName", "StructOf":
 		attr := b.ctx.CreateStringAttribute("tinygo-reflect-makefunc", "")
 		b.llvmFn.AddFunctionAttr(attr)
 	}

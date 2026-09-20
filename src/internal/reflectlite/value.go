@@ -2755,6 +2755,72 @@ func makeFuncCall(context unsafe.Pointer, argPointers, resultPointers *unsafe.Po
 	runtimeKeepAlive(out)
 }
 
+//go:linkname dynamicMethodContext internal/reflectlite.dynamicMethodContext
+func dynamicMethodContext(actualType, receiver, signature unsafe.Pointer) unsafe.Pointer {
+	typ := (*RawType)(actualType)
+	var methods []dynamicMethod
+	switch typ.Kind() {
+	case Struct:
+		methods = (*dynamicStructType)(actualType).dynamicMethods
+	case Pointer:
+		methods = dynamicPointerMethods(typ)
+	default:
+		panic("reflect: invalid dynamic method receiver")
+	}
+	for _, method := range methods {
+		if method.signature != signature {
+			continue
+		}
+		receiverValue := Value{
+			typecode: typ,
+			value:    receiver,
+			flags:    valueFlagExported,
+		}
+		methodValue := method.entry.value
+		callback := func(args []Value) []Value {
+			args = append([]Value{receiverValue}, args...)
+			if method.callType.IsVariadic() {
+				return methodValue.CallSlice(args)
+			}
+			return methodValue.Call(args)
+		}
+		header := (*funcHeader)(unsafe.Pointer(&callback))
+		return unsafe.Pointer(&makeFuncContext{
+			typ:             method.callType,
+			callbackContext: header.Context,
+			callbackCode:    header.Code,
+		})
+	}
+	panic("reflect: dynamic method is unavailable")
+}
+
+//go:linkname dynamicTypeHasMethod internal/reflectlite.dynamicTypeHasMethod
+func dynamicTypeHasMethod(actualType, signature unsafe.Pointer) bool {
+	if actualType == nil {
+		return false
+	}
+	typ := (*RawType)(actualType)
+	var methods []dynamicMethod
+	switch typ.Kind() {
+	case Struct:
+		structType := (*structType)(actualType)
+		if !isDynamicStructType(structType) {
+			return false
+		}
+		methods = (*dynamicStructType)(actualType).dynamicMethods
+	case Pointer:
+		methods = dynamicPointerMethods(typ)
+	default:
+		return false
+	}
+	for _, method := range methods {
+		if method.signature == signature {
+			return true
+		}
+	}
+	return false
+}
+
 func (v Value) Method(i int) Value {
 	if !v.IsValid() {
 		panic(&ValueError{Method: "Method", Kind: Invalid})
