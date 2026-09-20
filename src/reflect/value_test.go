@@ -756,6 +756,71 @@ func TestConvertToEmptyInterface(t *testing.T) {
 	_ = v.Interface().(interface{}).(map[string]string)
 }
 
+type conversionInt int
+
+type conversionStructA struct {
+	Value int `json:"a"`
+}
+
+type conversionStructB struct {
+	Value int `json:"b"`
+}
+
+type conversionChan chan int
+
+type conversionInterface interface {
+	Value() int
+}
+
+type conversionExtendedInterface interface {
+	conversionInterface
+	Extra()
+}
+
+type conversionMethods int
+
+func (v conversionMethods) Value() int {
+	return int(v)
+}
+
+func (conversionMethods) Extra() {
+}
+
+func TestConvertCompositeTypes(t *testing.T) {
+	n := 42
+	pointer := ValueOf(&n).Convert(TypeOf((*conversionInt)(nil))).Interface().(*conversionInt)
+	if got := int(*pointer); got != n {
+		t.Fatalf("converted pointer value = %d, want %d", got, n)
+	}
+
+	structValue := conversionStructA{Value: 23}
+	convertedStruct := ValueOf(structValue).Convert(TypeOf(conversionStructB{})).Interface().(conversionStructB)
+	if convertedStruct.Value != structValue.Value {
+		t.Fatalf("converted struct value = %d, want %d", convertedStruct.Value, structValue.Value)
+	}
+
+	channel := make(conversionChan)
+	recv := ValueOf(channel).Convert(TypeOf((<-chan int)(nil))).Interface().(<-chan int)
+	send := ValueOf(channel).Convert(TypeOf((chan<- int)(nil))).Interface().(chan<- int)
+	go func() {
+		send <- 7
+	}()
+	if got := <-recv; got != 7 {
+		t.Fatalf("converted channel received %d, want 7", got)
+	}
+
+	concrete := ValueOf(conversionMethods(9)).Convert(TypeFor[conversionInterface]())
+	if got := concrete.Interface().(conversionInterface).Value(); got != 9 {
+		t.Fatalf("converted concrete interface value = %d, want 9", got)
+	}
+
+	var extended conversionExtendedInterface = conversionMethods(11)
+	convertedInterface := ValueOf(&extended).Elem().Convert(TypeFor[conversionInterface]())
+	if got := convertedInterface.Interface().(conversionInterface).Value(); got != 11 {
+		t.Fatalf("converted interface value = %d, want 11", got)
+	}
+}
+
 func TestClearSlice(t *testing.T) {
 	type stringSlice []string
 	for _, test := range []struct {

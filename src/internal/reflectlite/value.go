@@ -2,6 +2,7 @@ package reflectlite
 
 import (
 	"internal/gclayout"
+	"internal/itoa"
 	"math"
 	"unsafe"
 )
@@ -1451,6 +1452,20 @@ func (v Value) Convert(t Type) Value {
 		return v
 	}
 
+	target := t.(*RawType)
+	if v.Kind() == Slice {
+		array := target
+		targetName := "array"
+		if target.Kind() == Pointer {
+			array = target.elem()
+			targetName = "pointer to array"
+		}
+		if array.Kind() == Array && v.typecode.elem() == array.elem() && v.Len() < array.Len() {
+			panic("reflect: cannot convert slice with length " + itoa.Itoa(v.Len()) +
+				" to " + targetName + " with length " + itoa.Itoa(array.Len()))
+		}
+	}
+
 	panic("reflect.Value.Convert: value of type " + v.typecode.String() + " cannot be converted to type " + t.String())
 }
 
@@ -1465,12 +1480,21 @@ func convertOp(src Value, typ Type) (Value, bool) {
 		}, true
 	}
 
-	if rtype := typ.(*RawType); rtype.Kind() == Interface && rtype.NumMethod() == 0 {
-		iface := composeInterface(unsafe.Pointer(src.typecode), src.value)
+	if rtype := typ.(*RawType); rtype.Kind() == Interface && src.typecode.Implements(rtype) {
+		var iface interface{}
+		if src.Kind() == Interface {
+			iface = *(*interface{})(src.value)
+		} else {
+			value := src.value
+			if src.isIndirect() && src.typecode.Size() <= unsafe.Sizeof(uintptr(0)) {
+				value = loadSmallValue(src.value, src.typecode.Size())
+			}
+			iface = composeInterface(unsafe.Pointer(src.typecode), value)
+		}
 		return Value{
 			typecode: rtype,
 			value:    unsafe.Pointer(&iface),
-			flags:    valueFlagExported,
+			flags:    src.flags & (valueFlagExported | valueFlagRO),
 		}, true
 	}
 
@@ -1515,10 +1539,18 @@ func convertOp(src Value, typ Type) (Value, bool) {
 		switch rtype := typ.(*RawType); rtype.Kind() {
 		case Array:
 			if src.typecode.elem() == rtype.elem() && rtype.Len() <= src.Len() {
+				size := rtype.Size()
+				var value unsafe.Pointer
+				if size <= unsafe.Sizeof(uintptr(0)) {
+					value = loadSmallValue((*sliceHeader)(src.value).data, size)
+				} else {
+					value = alloc(size, rtype.gcLayout())
+					memcpy(value, (*sliceHeader)(src.value).data, size)
+				}
 				return Value{
 					typecode: rtype,
-					value:    (*sliceHeader)(src.value).data,
-					flags:    src.flags | valueFlagIndirect,
+					value:    value,
+					flags:    src.flags & (valueFlagExported | valueFlagRO),
 				}, true
 			}
 		case Pointer:
@@ -1555,15 +1587,22 @@ func convertOp(src Value, typ Type) (Value, bool) {
 
 	case Pointer:
 		rtype := typ.(*RawType)
-		if rtype.Kind() == Pointer && !src.typecode.isNamed() && !rtype.isNamed() && src.typecode.elem().underlying() == rtype.elem().underlying() {
+		if rtype.Kind() == Pointer && !src.typecode.isNamed() && !rtype.isNamed() &&
+			haveIdenticalUnderlyingType(src.typecode.elem(), rtype.elem(), false) {
+			return cvtDirect(src, rtype), true
+		}
+
+	case Chan:
+		rtype := typ.(*RawType)
+		if rtype.Kind() == Chan && src.typecode.underlying().ChanDir() == BothDir &&
+			(!src.typecode.isNamed() || !rtype.isNamed()) && src.typecode.elem() == rtype.elem() {
 			return cvtDirect(src, rtype), true
 		}
 	}
 
-	// TODO(dgryski): Unimplemented:
-	// Chan
-	// Non-defined pointers types with same underlying base type
-	// Interface <-> Type conversions
+	if haveIdenticalUnderlyingType(src.typecode, typ.(*RawType), false) {
+		return cvtDirect(src, typ.(*RawType)), true
+	}
 
 	return Value{}, false
 }
