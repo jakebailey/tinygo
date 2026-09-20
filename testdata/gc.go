@@ -3,6 +3,8 @@ package main
 import (
 	"reflect"
 	"runtime"
+	"sync/atomic"
+	"unsafe"
 )
 
 var xorshift32State uint32 = 1
@@ -26,10 +28,69 @@ func main() {
 	testGlobalChannelRoots()
 	testReflectRoots()
 	testKeepAlive()
+	testMemStatsAllocations()
+	testMemStatsFrees()
+}
+
+var memStatsObject *[16]byte
+
+func testMemStatsAllocations() {
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	memStatsObject = new([16]byte)
+	memStatsObject[0] = 42
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(memStatsObject)
+	if after.Mallocs <= before.Mallocs {
+		panic("MemStats did not count a heap allocation")
+	}
 }
 
 var scalarSlices [4][]byte
 var randSeeds [4]uint32
+
+var memStatsGarbage [128]*[32]byte
+
+//go:noinline
+func allocateMemStatsGarbage() {
+	for i := range memStatsGarbage {
+		memStatsGarbage[i] = new([32]byte)
+		memStatsGarbage[i][0] = byte(i)
+	}
+}
+
+//go:noinline
+func discardMemStatsGarbage() {
+	for i := range memStatsGarbage {
+		atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&memStatsGarbage[i])), nil)
+	}
+}
+
+func testMemStatsFrees() {
+	var before, live, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	allocateMemStatsGarbage()
+	runtime.GC()
+	runtime.ReadMemStats(&live)
+	if live.Mallocs-before.Mallocs < uint64(len(memStatsGarbage)) {
+		panic("MemStats missed retained allocations")
+	}
+	discardMemStatsGarbage()
+	for i := 0; i < 3; i++ {
+		runtime.GC()
+	}
+	runtime.ReadMemStats(&after)
+	if after.NumGC == before.NumGC {
+		return
+	}
+	if after.Frees < before.Frees+64 {
+		panic("MemStats missed collected objects")
+	}
+	if after.Frees > after.Mallocs || after.HeapObjects != after.Mallocs-after.Frees {
+		panic("MemStats object counts are inconsistent")
+	}
+}
 
 func testNonPointerHeap() {
 	maxSliceSize := uint32(1024)

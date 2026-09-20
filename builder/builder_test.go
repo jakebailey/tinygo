@@ -291,3 +291,142 @@ func TestMain(m *testing.M) {
 	// Run normal tests.
 	os.Exit(m.Run())
 }
+
+func TestLibrarySourcePatch(t *testing.T) {
+	patch := "--- a/source.c\n+++ b/source.c\n@@ -1,3 +1,4 @@\n first\n-old\n+new\n+extra\n last\n"
+	for _, tc := range []struct {
+		name  string
+		patch string
+		want  string
+	}{
+		{"replace", patch, "first\nnew\nextra\nlast\n"},
+		{"insert", "--- a/source.c\n+++ b/source.c\n@@ -0,0 +1 @@\n+start\n", "start\nfirst\nold\nlast\n"},
+		{"delete", "--- a/source.c\n+++ b/source.c\n@@ -2 +1,0 @@\n-old\n", "first\nlast\n"},
+		{"multiple", "--- a/source.c\n+++ b/source.c\n@@ -1 +1 @@\n-first\n+begin\n@@ -3 +3 @@\n-last\n+end\n", "begin\nold\nend\n"},
+		{"context", strings.Replace(patch, "-old", "-wrong", 1), ""},
+		{"path", strings.ReplaceAll(patch, "source.c", "../outside.c"), ""},
+		{"absolute", strings.ReplaceAll(patch, "source.c", "/outside.c"), ""},
+		{"rename", strings.Replace(patch, "+++ b/source.c", "+++ b/other.c", 1), ""},
+		{"count", strings.Replace(patch, "-1,3 +1,4", "-1,2 +1,4", 1), ""},
+		{"position", strings.Replace(patch, "-1,3 +1,4", "-1,3 +2,4", 1), ""},
+		{"truncated", strings.TrimSuffix(patch, " last\n"), ""},
+		{"no-files", "diff --git a/source.c b/source.c\n", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "source.c")
+			if err := os.WriteFile(path, []byte("first\nold\nlast\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := applyLibraryPatch(dir, []byte(tc.patch))
+			if tc.want == "" {
+				if err == nil {
+					t.Fatal("invalid patch accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("private-copy", func(t *testing.T) {
+		source := t.TempDir()
+		if err := os.Mkdir(filepath.Join(source, "include"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, contents := range map[string]string{
+			"source.c":         "first\nold\nlast\n",
+			"include/header.h": "original header\n",
+			".git":             "not source\n",
+		} {
+			if err := os.WriteFile(filepath.Join(source, name), []byte(contents), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Chmod(filepath.Join(source, "include/header.h"), 0o444); err != nil {
+			t.Fatal(err)
+		}
+		destination := filepath.Join(t.TempDir(), "sources")
+		fullPatch := patch + "--- a/include/header.h\n+++ b/include/header.h\n@@ -1 +1 @@\n-original header\n+patched header\n"
+		if err := prepareLibrarySources(source, destination, []byte(fullPatch)); err != nil {
+			t.Fatal(err)
+		}
+		for path, want := range map[string]string{
+			filepath.Join(source, "source.c"):              "first\nold\nlast\n",
+			filepath.Join(source, "include/header.h"):      "original header\n",
+			filepath.Join(destination, "source.c"):         "first\nnew\nextra\nlast\n",
+			filepath.Join(destination, "include/header.h"): "patched header\n",
+		} {
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != want {
+				t.Fatalf("%s: got %q, want %q", path, got, want)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(destination, ".git")); !os.IsNotExist(err) {
+			t.Fatalf("copied repository metadata: %v", err)
+		}
+	})
+}
+
+func TestLibraryPatchCacheKey(t *testing.T) {
+	config := &compileopts.Config{
+		Options: &compileopts.Options{},
+		Target:  &compileopts.TargetSpec{Triple: "x86_64-unknown-linux-musl", Libc: "musl"},
+	}
+	library := Library{name: "bdwgc"}
+	original := library.cachePath(config)
+	if original != config.LibraryPath("bdwgc") {
+		t.Fatal("unpatched library cache changed")
+	}
+	library.sourcePatch = []byte("first patch")
+	first := library.cachePath(config)
+	if first == original || first != library.cachePath(config) {
+		t.Fatal("patch cache key is missing or unstable")
+	}
+	library.sourcePatch = []byte("second patch")
+	if library.cachePath(config) == first {
+		t.Fatal("patch change did not invalidate the archive")
+	}
+}
+
+func TestBoehmSourcePatch(t *testing.T) {
+	source := BoehmGC.sourceDir()
+	path := filepath.Join(source, "include/private/gc_priv.h")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "bdwgc")
+	if err := prepareLibrarySources(source, destination, BoehmGC.sourcePatch); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("collector source changed")
+	}
+	patched, err := os.ReadFile(filepath.Join(destination, "include/private/gc_priv.h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(patched), "hb_alloc_bits") {
+		t.Fatal("allocation bitmap header was not patched")
+	}
+	if err := applyLibraryPatch(destination, BoehmGC.sourcePatch); err == nil {
+		t.Fatal("patch applied twice instead of rejecting mismatched sources")
+	}
+}
