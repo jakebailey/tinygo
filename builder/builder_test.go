@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tinygo-org/tinygo/compileopts"
+	"github.com/tinygo-org/tinygo/interp"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -156,6 +159,71 @@ func TestBuildSharesSemaphore(t *testing.T) {
 	}
 	if config.Options.Semaphore != semaphore {
 		t.Fatal("Build changed the semaphore")
+	}
+}
+
+func TestBuildPreservesSharedConfig(t *testing.T) {
+	config, err := NewConfig(&compileopts.Options{
+		Target: "cortex-m-qemu", GC: "leaking", Opt: "z",
+		Semaphore: make(chan struct{}, 2),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Target.Libc = ""
+	config.Target.RTLib = ""
+	keys := map[string]string{"existing": "key"}
+	config.LibraryKeys = keys
+	start := make(chan struct{})
+	results := make(chan error, 4)
+	for range cap(results) {
+		dir := t.TempDir()
+		go func() {
+			<-start
+			_, err := Build("does/not/exist", filepath.Join(dir, "out.ll"), dir, config)
+			results <- err
+		}()
+	}
+	close(start)
+	for range cap(results) {
+		if err := <-results; err == nil || !strings.Contains(err.Error(), "does/not/exist") {
+			t.Errorf("Build() error = %v, want invalid package error", err)
+		}
+	}
+	if !reflect.DeepEqual(config.LibraryKeys, keys) {
+		t.Fatalf("Build changed caller's library keys: %v", config.LibraryKeys)
+	}
+}
+
+func TestBuildNonLinkingWithoutCompilerRT(t *testing.T) {
+	saved := libCompilerRT
+	t.Cleanup(func() { libCompilerRT = saved })
+	missing := filepath.Join(t.TempDir(), "missing-compiler-rt")
+	libCompilerRT.sourceDir = func() string { return missing }
+	config, err := NewConfig(&compileopts.Options{
+		Target: "cortex-m-qemu", GC: "leaking", Opt: "z", Semaphore: sema,
+		InterpTimeout: time.Minute, InterpMaxLoopIterations: interp.DefaultMaxInterpBlockEntries,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Target.Libc = ""
+	source := filepath.Join(t.TempDir(), "main.go")
+	if err := os.WriteFile(source, []byte("package main\nfunc main() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, extension := range []string{".o", ".bc", ".ll", ".elf"} {
+		t.Run(extension, func(t *testing.T) {
+			dir := t.TempDir()
+			_, err := Build(source, filepath.Join(dir, "out"+extension), dir, config)
+			if extension == ".elf" {
+				if err == nil || !strings.Contains(err.Error(), missing) {
+					t.Fatalf("linked build error = %v, want missing compiler-rt", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -439,4 +507,159 @@ func TestMain(m *testing.M) {
 
 	// Run normal tests.
 	os.Exit(m.Run())
+}
+
+func TestLibrarySourcePatch(t *testing.T) {
+	patch := "--- a/source.c\n+++ b/source.c\n@@ -1,3 +1,4 @@\n first\n-old\n+new\n+extra\n last\n"
+	for _, tc := range []struct {
+		name  string
+		patch string
+		want  string
+	}{
+		{"replace", patch, "first\nnew\nextra\nlast\n"},
+		{"insert", "--- a/source.c\n+++ b/source.c\n@@ -0,0 +1 @@\n+start\n", "start\nfirst\nold\nlast\n"},
+		{"delete", "--- a/source.c\n+++ b/source.c\n@@ -2 +1,0 @@\n-old\n", "first\nlast\n"},
+		{"multiple", "--- a/source.c\n+++ b/source.c\n@@ -1 +1 @@\n-first\n+begin\n@@ -3 +3 @@\n-last\n+end\n", "begin\nold\nend\n"},
+		{"context", strings.Replace(patch, "-old", "-wrong", 1), ""},
+		{"path", strings.ReplaceAll(patch, "source.c", "../outside.c"), ""},
+		{"absolute", strings.ReplaceAll(patch, "source.c", "/outside.c"), ""},
+		{"rename", strings.Replace(patch, "+++ b/source.c", "+++ b/other.c", 1), ""},
+		{"count", strings.Replace(patch, "-1,3 +1,4", "-1,2 +1,4", 1), ""},
+		{"position", strings.Replace(patch, "-1,3 +1,4", "-1,3 +2,4", 1), ""},
+		{"truncated", strings.TrimSuffix(patch, " last\n"), ""},
+		{"no-files", "diff --git a/source.c b/source.c\n", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "source.c")
+			if err := os.WriteFile(path, []byte("first\nold\nlast\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := applyLibraryPatch(dir, []byte(tc.patch))
+			if tc.want == "" {
+				if err == nil {
+					t.Fatal("invalid patch accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("private-copy", func(t *testing.T) {
+		source := t.TempDir()
+		if err := os.Mkdir(filepath.Join(source, "include"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, contents := range map[string]string{
+			"source.c":         "first\nold\nlast\n",
+			"include/header.h": "original header\n",
+			".git":             "not source\n",
+		} {
+			if err := os.WriteFile(filepath.Join(source, name), []byte(contents), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Chmod(filepath.Join(source, "include/header.h"), 0o444); err != nil {
+			t.Fatal(err)
+		}
+		destination := filepath.Join(t.TempDir(), "sources")
+		fullPatch := patch + "--- a/include/header.h\n+++ b/include/header.h\n@@ -1 +1 @@\n-original header\n+patched header\n"
+		if err := prepareLibrarySources(source, destination, []byte(fullPatch)); err != nil {
+			t.Fatal(err)
+		}
+		for path, want := range map[string]string{
+			filepath.Join(source, "source.c"):              "first\nold\nlast\n",
+			filepath.Join(source, "include/header.h"):      "original header\n",
+			filepath.Join(destination, "source.c"):         "first\nnew\nextra\nlast\n",
+			filepath.Join(destination, "include/header.h"): "patched header\n",
+		} {
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != want {
+				t.Fatalf("%s: got %q, want %q", path, got, want)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(destination, ".git")); !os.IsNotExist(err) {
+			t.Fatalf("copied repository metadata: %v", err)
+		}
+	})
+}
+
+func TestLibraryPatchCacheKey(t *testing.T) {
+	config := &compileopts.Config{
+		Options: &compileopts.Options{},
+		Target:  &compileopts.TargetSpec{Triple: "x86_64-unknown-linux-musl", Libc: "musl"},
+	}
+	dir := t.TempDir()
+	library := Library{
+		name:      "bdwgc",
+		sourceDir: func() string { return dir },
+		librarySources: func(string, bool) ([]string, error) {
+			return nil, nil
+		},
+		cflags: func(string, string) []string { return nil },
+	}
+	cacheInput := func() *libraryCacheInput {
+		input, err := library.cacheInput(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return input
+	}
+	original := cacheInput().key()
+	library.sourcePatch = []byte("first patch")
+	input := cacheInput()
+	first := input.key()
+	if first == original || first != cacheInput().key() {
+		t.Fatal("patch cache key is missing or unstable")
+	}
+	copy(library.sourcePatch, "other patch")
+	if input.key() != first {
+		t.Fatal("changing the patch changed previously captured cache inputs")
+	}
+	if cacheInput().key() == first {
+		t.Fatal("patch change did not invalidate the archive")
+	}
+}
+
+func TestBoehmSourcePatch(t *testing.T) {
+	source := BoehmGC.sourceDir()
+	path := filepath.Join(source, "include/private/gc_priv.h")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "bdwgc")
+	if err := prepareLibrarySources(source, destination, BoehmGC.sourcePatch); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("collector source changed")
+	}
+	patched, err := os.ReadFile(filepath.Join(destination, "include/private/gc_priv.h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(patched), "hb_alloc_bits") {
+		t.Fatal("allocation bitmap header was not patched")
+	}
+	if err := applyLibraryPatch(destination, BoehmGC.sourcePatch); err == nil {
+		t.Fatal("patch applied twice instead of rejecting mismatched sources")
+	}
 }

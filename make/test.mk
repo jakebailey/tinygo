@@ -246,7 +246,7 @@ TEST_OPTIONS_strings := -skip='^(TestBuilderAllocs|TestBuilderGrow|TestBuilderGr
 TEST_OPTIONS_crypto/mldsa := -short -stack-size=1MB -skip='^TestAllocations$$'
 TEST_OPTIONS_encoding/gob := -skip='^(TestIgnoreDepthLimit|TestCountEncodeMallocs|TestCountDecodeMallocs)$$'
 
-tinygo-test tinygo-test-fast: TEST_OPTIONS_time := -skip='^TestTimerGC$$'
+tinygo-test tinygo-test-fast: TEST_OPTIONS_time :=
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/printer := -stack-size=1MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/json := -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^\#05$$|^TestTokenStringAllocations$$'
 tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/json/jsontext := -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^\#05$$|^TestTokenStringAllocations$$'
