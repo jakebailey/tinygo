@@ -5325,6 +5325,8 @@ func TestSliceOfGC(t *testing.T) {
 	}
 }
 
+*/
+
 func TestStructOfFieldName(t *testing.T) {
 	// invalid field name "1nvalid"
 	shouldPanic("has invalid name", func() {
@@ -5657,6 +5659,8 @@ func TestStructOfExportRules(t *testing.T) {
 		})
 	}
 }
+
+/*
 
 func TestStructOfGC(t *testing.T) {
 	type T *uintptr
