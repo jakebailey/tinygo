@@ -927,3 +927,75 @@ func testCompilePackageWithDebug(t *testing.T, options *compileopts.Options, fil
 	ssaPkg.Build()
 	return CompilePackage(file, pkg, ssaPkg, machine, compilerConfig, false)
 }
+
+func TestReflectMethodRetentionMarkers(t *testing.T) {
+	mod, errs := testCompilePackage(t, &compileopts.Options{Target: "wasm"}, "reflect-method-dce.go")
+	if len(errs) != 0 {
+		for _, err := range errs {
+			t.Error(err)
+		}
+		return
+	}
+	defer mod.Dispose()
+
+	for _, tc := range []struct {
+		name  string
+		names string
+		all   bool
+	}{
+		{"constantValue", "Keep", false},
+		{"constantType", "Keep", false},
+		{"multipleNames", "Keep Other", false},
+		{"invalidName", "", false},
+		{"unexportedName", "", false},
+		{"dynamicValue", "", true},
+		{"dynamicType", "", true},
+		{"indexedValue", "", true},
+		{"indexedType", "", true},
+		{"boundValue", "", true},
+		{"escapedValue", "", true},
+		{"escapedType", "", true},
+		{"methodExpression", "", true},
+		{"iterateValue", "", true},
+		{"iterateType", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := mod.NamedFunction("main." + tc.name)
+			if fn.IsNil() {
+				t.Fatal("missing lookup function")
+			}
+			all := fn.GetStringAttributeAtIndex(-1, "tinygo-reflect-method")
+			names := fn.GetStringAttributeAtIndex(-1, "tinygo-reflect-method-names")
+			if got := !all.IsNil(); got != tc.all {
+				t.Errorf("all-method marker = %v, want %v", got, tc.all)
+			}
+			if !tc.all && names.IsNil() {
+				t.Fatal("missing constant-name marker")
+			}
+			if fn.GetStringAttributeAtIndex(-1, "tinygo-reflect-makefunc").IsNil() {
+				t.Error("missing bound-method adapter marker")
+			}
+			if !names.IsNil() {
+				if got := names.GetStringValue(); got != tc.names {
+					t.Errorf("method names = %q, want %q", got, tc.names)
+				}
+			}
+		})
+	}
+
+	wrappers := 0
+	for fn := mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		if !strings.HasPrefix(fn.Name(), "(*reflect.Value).") || fn.BasicBlocksCount() == 0 {
+			continue
+		}
+		wrappers++
+		for _, kind := range []string{"tinygo-reflect-method", "tinygo-reflect-method-names", "tinygo-reflect-makefunc"} {
+			if !fn.GetStringAttributeAtIndex(-1, kind).IsNil() {
+				t.Errorf("reflection wrapper %s has %s", fn.Name(), kind)
+			}
+		}
+	}
+	if wrappers == 0 {
+		t.Fatal("no reflection wrappers were compiled")
+	}
+}

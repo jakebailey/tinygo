@@ -11,6 +11,7 @@ import (
 	"math/bits"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1659,16 +1660,27 @@ func (b *builder) createInstruction(instr ssa.Instruction) {
 	}
 }
 
-func (b *builder) markReflectMethodUse(call *ssa.CallCommon) {
+func (b *builder) inReflectPackage() bool {
 	pkg := b.fn.Pkg
 	if pkg == nil && b.fn.Origin() != nil {
 		pkg = b.fn.Origin().Pkg
 	}
+	var path string
 	if pkg != nil {
-		switch pkg.Pkg.Path() {
-		case "reflect", "internal/reflectlite":
-			return
-		}
+		path = pkg.Pkg.Path()
+	} else if object := b.fn.Object(); object != nil && object.Pkg() != nil {
+		path = object.Pkg().Path()
+	}
+	return path == "reflect" || path == "internal/reflectlite"
+}
+
+func (b *builder) markReflectMethodUse(call *ssa.CallCommon) {
+	b.markReflectMethodUseFor(call, b.llvmFn)
+}
+
+func (b *builder) markReflectMethodUseFor(call *ssa.CallCommon, target llvm.Value) {
+	if b.inReflectPackage() {
+		return
 	}
 
 	var method *types.Func
@@ -1683,10 +1695,37 @@ func (b *builder) markReflectMethodUse(call *ssa.CallCommon) {
 		return
 	}
 	switch method.Name() {
-	case "Method", "MethodByName", "Methods":
-		attr := b.ctx.CreateStringAttribute("tinygo-reflect-method", "")
-		b.llvmFn.AddFunctionAttr(attr)
+	case "MethodByName":
+		if len(call.Args) == 0 {
+			break
+		}
+		if name, ok := call.Args[len(call.Args)-1].(*ssa.Const); ok && name.Value.Kind() == constant.String {
+			var names []string
+			if attr := target.GetStringAttributeAtIndex(-1, "tinygo-reflect-method-names"); !attr.IsNil() {
+				names = strings.Fields(attr.GetStringValue())
+			}
+			methodName := constant.StringVal(name.Value)
+			if token.IsIdentifier(methodName) && token.IsExported(methodName) {
+				names = append(names, methodName)
+			}
+			sort.Strings(names)
+			names = slices.Compact(names)
+			target.AddFunctionAttr(b.ctx.CreateStringAttribute("tinygo-reflect-method-names", strings.Join(names, " ")))
+			return
+		}
+	case "Method", "Methods":
+	default:
+		return
 	}
+	target.AddFunctionAttr(b.ctx.CreateStringAttribute("tinygo-reflect-method", ""))
+}
+
+func (b *builder) markReflectFunctionValue(fn *ssa.Function, value llvm.Value) {
+	call := &ssa.CallCommon{Value: fn}
+	b.markReflectMethodUse(call)
+	b.markReflectMakeFuncUse(call)
+	b.markReflectMethodUseFor(call, value)
+	b.markReflectMakeFuncUseFor(call, value)
 }
 
 func (b *builder) setValue(value ssa.Value, llvmValue llvm.Value) {
@@ -2363,15 +2402,12 @@ func (b *builder) createBuiltin(argTypes []types.Type, argValues []llvm.Value, c
 }
 
 func (b *builder) markReflectMakeFuncUse(call *ssa.CallCommon) {
-	pkg := b.fn.Pkg
-	if pkg == nil && b.fn.Origin() != nil {
-		pkg = b.fn.Origin().Pkg
-	}
-	if pkg != nil {
-		switch pkg.Pkg.Path() {
-		case "reflect", "internal/reflectlite":
-			return
-		}
+	b.markReflectMakeFuncUseFor(call, b.llvmFn)
+}
+
+func (b *builder) markReflectMakeFuncUseFor(call *ssa.CallCommon, target llvm.Value) {
+	if b.inReflectPackage() {
+		return
 	}
 
 	var function *types.Func
@@ -2385,9 +2421,10 @@ func (b *builder) markReflectMakeFuncUse(call *ssa.CallCommon) {
 	if function == nil || function.Pkg() == nil || function.Pkg().Path() != "reflect" {
 		return
 	}
-	if function.Name() == "MakeFunc" {
+	switch function.Name() {
+	case "MakeFunc", "Method", "MethodByName", "Methods":
 		attr := b.ctx.CreateStringAttribute("tinygo-reflect-makefunc", "")
-		b.llvmFn.AddFunctionAttr(attr)
+		target.AddFunctionAttr(attr)
 	}
 }
 
@@ -2565,6 +2602,7 @@ func (b *builder) getValue(expr ssa.Value, pos token.Pos) llvm.Value {
 			return llvm.Undef(b.getLLVMType(expr.Type()))
 		}
 		_, fn := b.getFunction(expr)
+		b.markReflectFunctionValue(expr, fn)
 		return b.createFuncValue(fn, llvm.Undef(b.dataPtrType), expr.Signature)
 	case *ssa.Global:
 		value := b.getGlobal(expr)
