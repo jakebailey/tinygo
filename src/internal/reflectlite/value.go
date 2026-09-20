@@ -1808,6 +1808,29 @@ func MakeSlice(typ Type, len, cap int) Value {
 	}
 }
 
+func SliceAt(typ Type, p unsafe.Pointer, n int) Value {
+	un := uint(n)
+	maxSize := (^uintptr(0)) / 2
+	elementSize := typ.Size()
+	if elementSize > 1 {
+		maxSize /= elementSize
+	}
+	if un > uint(maxSize) || p == nil && n != 0 {
+		slicePanic()
+	}
+
+	slice := sliceHeader{
+		data: p,
+		len:  uintptr(un),
+		cap:  uintptr(un),
+	}
+	return Value{
+		typecode: SliceOf(typ).(*RawType),
+		value:    unsafe.Pointer(&slice),
+		flags:    valueFlagExported,
+	}
+}
+
 var zerobuffer unsafe.Pointer
 
 const zerobufferLen = 32

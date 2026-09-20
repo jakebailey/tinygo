@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 func TestTinyIndirectPointers(t *testing.T) {
@@ -364,6 +365,45 @@ func TestTinySlice(t *testing.T) {
 	if len(s) != refs.Len() || cap(s) != refs.Cap() {
 		t.Errorf("len(s)=%v refs.Len()=%v cap(s)=%v refs.Cap()=%v", len(s), refs.Len(), cap(s), refs.Cap())
 	}
+}
+
+func TestSliceAt(t *testing.T) {
+	array := [3]int{1, 2, 3}
+	value := SliceAt(TypeOf(0), unsafe.Pointer(&array[0]), len(array))
+	if got, want := value.Type(), TypeOf([]int{}); got != want {
+		t.Fatalf("SliceAt type = %v, want %v", got, want)
+	}
+	if got, want := value.Len(), len(array); got != want {
+		t.Fatalf("SliceAt len = %d, want %d", got, want)
+	}
+	if got, want := value.Cap(), len(array); got != want {
+		t.Fatalf("SliceAt cap = %d, want %d", got, want)
+	}
+	value.Index(1).SetInt(4)
+	if array[1] != 4 {
+		t.Fatalf("SliceAt update = %d, want 4", array[1])
+	}
+
+	empty := SliceAt(TypeOf(0), nil, 0)
+	if !empty.IsNil() || empty.Len() != 0 || empty.Cap() != 0 {
+		t.Fatalf("empty SliceAt = %v with len %d and cap %d", empty, empty.Len(), empty.Cap())
+	}
+
+	checkPanic := func(name string, fn func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Errorf("%s did not panic", name)
+			}
+		}()
+		fn()
+	}
+	checkPanic("negative length", func() {
+		SliceAt(TypeOf(0), unsafe.Pointer(&array[0]), -1)
+	})
+	checkPanic("nil pointer", func() {
+		SliceAt(TypeOf(0), nil, 1)
+	})
 }
 
 func TestTinyBytes(t *testing.T) {
