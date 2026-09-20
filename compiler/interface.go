@@ -179,15 +179,21 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 	// Short-circuit all the global pointer logic here for pointers to pointers.
 	if typ, ok := typ.(*types.Pointer); ok {
 		if _, ok := typ.Elem().(*types.Pointer); ok {
-			// For a pointer to a pointer, we just increase the pointer by 1
-			ptr := c.getTypeCode(typ.Elem())
-			// if the type is already *****T or higher, we can't make it.
-			if typstr := typ.String(); strings.HasPrefix(typstr, "*****") {
-				c.addError(token.NoPos, fmt.Sprintf("too many levels of pointers for typecode: %s", typstr))
+			depth := 1
+			for elem := typ.Elem(); ; depth++ {
+				pointer, ok := types.Unalias(elem).(*types.Pointer)
+				if !ok {
+					break
+				}
+				elem = pointer.Elem()
 			}
-			return llvm.ConstGEP(c.ctx.Int8Type(), ptr, []llvm.Value{
-				llvm.ConstInt(c.ctx.Int32Type(), 1, false),
-			})
+			if depth < 5 {
+				// For shallow pointers to pointers, increase the pointer by 1.
+				ptr := c.getTypeCode(typ.Elem())
+				return llvm.ConstGEP(c.ctx.Int8Type(), ptr, []llvm.Value{
+					llvm.ConstInt(c.ctx.Int32Type(), 1, false),
+				})
+			}
 		}
 	}
 
