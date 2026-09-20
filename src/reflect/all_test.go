@@ -6244,6 +6244,8 @@ func TestChanOf(t *testing.T) {
 	}
 }
 
+*/
+
 func TestChanOfDir(t *testing.T) {
 	// check construction and use of type not in binary
 	type T string
@@ -6311,8 +6313,6 @@ func TestChanOfGC(t *testing.T) {
 		}
 	}
 }
-
-*/
 
 func TestMapOf(t *testing.T) {
 	// check construction and use of type not in binary
