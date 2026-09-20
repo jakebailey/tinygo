@@ -241,8 +241,8 @@ TEST_OPTIONS_crypto/mldsa := -short -stack-size=1MB -skip='^TestAllocations$$'
 TEST_OPTIONS_encoding/gob := -skip='^(TestIgnoreDepthLimit|TestCountEncodeMallocs|TestCountDecodeMallocs)$$'
 
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/printer := -stack-size=1MB
-tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/gob := -stack-size=1MB -skip='^(TestCountDecodeMallocs|TestCountEncodeMallocs)$$'
 tinygo-test tinygo-test-fast: TEST_OPTIONS_testing/quick := -stack-size=1MB
+tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/gob := -stack-size=1MB -skip='^(TestCountDecodeMallocs|TestCountEncodeMallocs)$$'
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/build/constraint = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=1MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_regexp = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=1MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_path/filepath = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=4MB
