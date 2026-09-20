@@ -106,6 +106,37 @@ func TestFuncOfResultCount(t *testing.T) {
 	}
 }
 
+func TestFuncOfStructOfType(t *testing.T) {
+	structType := reflect.StructOf([]reflect.StructField{{
+		Name: "Generated",
+		Type: reflect.TypeOf(uint64(0)),
+	}})
+	pointerType := reflect.PointerTo(structType)
+	sliceType := reflect.SliceOf(reflect.TypeOf(""))
+	typ := reflect.FuncOf(
+		[]reflect.Type{pointerType, sliceType},
+		[]reflect.Type{structType, reflect.TypeOf(false)},
+		true,
+	)
+	if typ.In(0) != pointerType || typ.In(1) != sliceType || typ.Out(0) != structType || !typ.IsVariadic() {
+		t.Fatalf("FuncOf returned incorrect constructed types: %v", typ)
+	}
+	if again := reflect.FuncOf([]reflect.Type{pointerType, sliceType}, []reflect.Type{structType, reflect.TypeOf(false)}, true); again != typ {
+		t.Fatal("FuncOf did not preserve constructed type identity")
+	}
+	fn := reflect.MakeFunc(typ, func(args []reflect.Value) []reflect.Value {
+		value := args[0].Elem()
+		value.Field(0).SetUint(value.Field(0).Uint() + uint64(args[1].Len()))
+		return []reflect.Value{value, reflect.ValueOf(true)}
+	})
+	value := reflect.New(structType)
+	value.Elem().Field(0).SetUint(40)
+	out := fn.Call([]reflect.Value{value, reflect.ValueOf("first"), reflect.ValueOf("second")})
+	if len(out) != 2 || out[0].Type() != structType || out[0].Field(0).Uint() != 42 || !out[1].Bool() {
+		t.Fatalf("Call returned incorrect constructed result: %v", out)
+	}
+}
+
 func TestFuncOfPanics(t *testing.T) {
 	assertPanic := func(name string, fn func()) {
 		t.Helper()
