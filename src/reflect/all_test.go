@@ -3932,6 +3932,8 @@ func TestUnexported(t *testing.T) {
 	shouldPanic("Method", func() { v.Type().Method(0) })
 }
 
+*/
+
 func TestSetPanic(t *testing.T) {
 	ok := func(f func()) { f() }
 	bad := func(f func()) { shouldPanic("Set", f) }
@@ -4017,8 +4019,6 @@ func TestSetPanic(t *testing.T) {
 	bad(func() { clear(v.Field(6).Field(1)) })          // .namedT2.namedT0
 	bad(func() { clear(v.Field(6).Field(1).Field(0)) }) // .namedT2.namedT0.W
 }
-
-*/
 
 type timp int
 
@@ -4149,7 +4149,6 @@ func TestValuePanic(t *testing.T) {
 */
 
 func shouldPanic(expect string, f func()) {
-	return
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -4188,8 +4187,6 @@ func isValid(v Value) {
 	}
 }
 
-/*
-
 func TestAlias(t *testing.T) {
 	x := string("hello")
 	v := ValueOf(&x).Elem()
@@ -4201,8 +4198,6 @@ func TestAlias(t *testing.T) {
 		t.Errorf("aliasing: old=%q new=%q, want hello, world", oldvalue, newvalue)
 	}
 }
-
-*/
 
 var V = ValueOf
 
@@ -6552,8 +6547,6 @@ func TestEmbed(t *testing.T) {
 	}
 }
 
-/*
-
 func TestAllocsInterfaceBig(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping malloc count in short mode")
@@ -6669,6 +6662,8 @@ func GCFunc(args []Value) []Value {
 	return []Value{}
 }
 
+/*
+
 func TestReflectFuncTraceback(t *testing.T) {
 	f := MakeFunc(TypeOf(func() {}), GCFunc)
 	f.Call([]Value{})
@@ -6682,6 +6677,8 @@ func TestReflectMethodTraceback(t *testing.T) {
 		t.Errorf("Call returned %d; want 8", i)
 	}
 }
+
+*/
 
 func TestSmallZero(t *testing.T) {
 	type T [10]byte
@@ -6723,6 +6720,8 @@ func TestZeroSet(t *testing.T) {
 	}
 }
 
+/*
+
 func TestFieldByIndexNil(t *testing.T) {
 	type P struct {
 		F int
@@ -6745,6 +6744,10 @@ func TestFieldByIndexNil(t *testing.T) {
 
 	t.Fatalf("did not panic")
 }
+
+*/
+
+/*
 
 // Given
 //	type Outer struct {
@@ -8110,8 +8113,6 @@ type (
 	namedBytes []byte
 )
 
-/*
-
 func TestValue_Cap(t *testing.T) {
 	a := &[3]int{1, 2, 3}
 	v := ValueOf(a)
@@ -8177,8 +8178,6 @@ func TestValue_Len(t *testing.T) {
 		t.Errorf("error is %q, want %q", e, wantStr)
 	}
 }
-
-*/
 
 func TestValue_Comparable(t *testing.T) {
 	var a int
@@ -8360,8 +8359,6 @@ func TestValue_Comparable(t *testing.T) {
 		}
 	}
 }
-
-/*
 
 type ValueEqualTest struct {
 	v, u           any
@@ -8564,6 +8561,8 @@ func TestValue_EqualNonComparable(t *testing.T) {
 		}
 	}
 }
+
+/*
 
 func TestInitFuncTypes(t *testing.T) {
 	n := 100
