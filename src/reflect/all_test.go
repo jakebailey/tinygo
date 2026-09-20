@@ -7764,8 +7764,6 @@ func TestIssue22073(t *testing.T) {
 	m.Call(nil)
 }
 
-*/
-
 func TestMapIterNonEmptyMap(t *testing.T) {
 	m := map[string]int{"one": 1, "two": 2, "three": 3}
 	iter := ValueOf(m).MapRange()
@@ -7781,8 +7779,6 @@ func TestMapIterNilMap(t *testing.T) {
 		t.Errorf("non-empty result iteratoring nil map: %s", got)
 	}
 }
-
-/*
 
 func TestMapIterReset(t *testing.T) {
 	iter := new(MapIter)
@@ -7903,8 +7899,6 @@ func TestMapIterSafety(t *testing.T) {
 		t.Fatal("Next did not panic")
 	}()
 }
-
-*/
 
 func TestMapIterNext(t *testing.T) {
 	// The first call to Next should reflect any
