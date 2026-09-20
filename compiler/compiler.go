@@ -1714,6 +1714,8 @@ func (b *builder) markReflectMethodUseFor(call *ssa.CallCommon, target llvm.Valu
 			return
 		}
 	case "Method", "Methods":
+	case "StructOf":
+		target.AddFunctionAttr(b.ctx.CreateStringAttribute("tinygo-reflect-structof", ""))
 	default:
 		return
 	}
@@ -2422,7 +2424,7 @@ func (b *builder) markReflectMakeFuncUseFor(call *ssa.CallCommon, target llvm.Va
 		return
 	}
 	switch function.Name() {
-	case "MakeFunc", "Method", "MethodByName", "Methods":
+	case "MakeFunc", "Method", "MethodByName", "Methods", "StructOf":
 		attr := b.ctx.CreateStringAttribute("tinygo-reflect-makefunc", "")
 		target.AddFunctionAttr(attr)
 	}
