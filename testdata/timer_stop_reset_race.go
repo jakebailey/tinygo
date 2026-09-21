@@ -7,9 +7,27 @@ import (
 )
 
 func main() {
+	testRealTimerInBubble()
 	testStopWhileFiring()
 	testResetWhileFiring()
 	println("timer stop/reset race tests done")
+}
+
+func testRealTimerInBubble() {
+	timer := time.NewTimer(time.Millisecond)
+	synctestRun(func() {
+		<-timer.C
+	})
+	if timer.Stop() {
+		panic("bubble returned before real timer fired")
+	}
+	before := time.Now().Add(-time.Second)
+	timer = time.NewTimer(-time.Nanosecond)
+	synctestRun(func() {
+		if value := <-timer.C; value.Before(before) {
+			panic("real timer used bubble clock")
+		}
+	})
 }
 
 func testStopWhileFiring() {
@@ -81,3 +99,6 @@ func resetTimer(tim *time.Timer, when, period int64) bool
 
 //go:linkname runtimeNano time.runtimeNano
 func runtimeNano() int64
+
+//go:linkname synctestRun internal/synctest.Run
+func synctestRun(func())
