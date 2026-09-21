@@ -157,10 +157,14 @@ func addTimer(tim *timerNode) {
 // reAddTimer finishes firing a timer. The cooperative scheduler runs timer
 // callbacks to completion, so periodic timers can be re-added directly.
 func reAddTimer(tn *timerNode, delta int64) {
-	if tn.timer.period == 0 {
+	if tn.timer.period == 0 || tn.timer.stopped {
 		return
 	}
 	tn.timer.when = tn.timer.nextWhen(delta)
+	if tn.timer.isChan && timerChanHasValue(tn.timer.c) {
+		tn.timer.pausedNode = tn
+		return
+	}
 	addTimer(tn)
 }
 

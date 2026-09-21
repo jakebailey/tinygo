@@ -16,9 +16,14 @@ type timer struct {
 	f   func(arg any, seq uintptr, delta int64)
 	arg any
 
-	synctest           *synctestBubble
-	node               *timerNode
+	synctest *synctestBubble
+	node     *timerNode
+	// Keep a full channel ticker out of the queue. Without weak pointers, the
+	// queue would retain and continuously run an otherwise unreachable ticker.
+	pausedNode         *timerNode
+	c                  unsafe.Pointer
 	isChan             bool
+	stopped            bool
 	suppressedCallback bool
 }
 
@@ -55,11 +60,12 @@ func newTimer(when, period int64, f func(arg any, seq uintptr, delta int64), arg
 			f:        f,
 			arg:      arg,
 			synctest: bubble,
+			c:        c,
 			isChan:   c != nil,
 		},
 	}
 	if c != nil {
-		(*channel)(c).timer = true
+		(*channel)(c).timer = &tim.timer
 	}
 	scheduleLog("new timer")
 	node := &timerNode{
@@ -81,11 +87,16 @@ func stopTimer(tim *timeTimer) bool {
 	}
 	tim.timer.lock.Lock()
 	tim.timer.suppressedCallback = false
+	tim.timer.stopped = true
 	var removed bool
 	if tim.timer.synctest != nil {
 		removed = tim.timer.synctest.removeTimer(&tim.timer) != nil
 	} else {
 		removed = removeTimer(&tim.timer) != nil
+	}
+	if tim.timer.pausedNode != nil {
+		tim.timer.pausedNode = nil
+		removed = true
 	}
 	drained := timerChanDrain(tim.c)
 	suppressed := tim.timer.suppressedCallback
@@ -105,6 +116,10 @@ func resetTimer(t *timeTimer, when, period int64) bool {
 		n = t.timer.synctest.removeTimer(&t.timer)
 	} else {
 		n = removeTimer(&t.timer)
+	}
+	if n == nil && t.timer.pausedNode != nil {
+		n = t.timer.pausedNode
+		t.timer.pausedNode = nil
 	}
 	removed := n != nil
 	drained := timerChanDrain(t.c)
@@ -128,6 +143,7 @@ func resetTimer(t *timeTimer, when, period int64) bool {
 	}
 	t.timer.when = when
 	t.timer.period = period
+	t.timer.stopped = false
 	n.timer = &t.timer
 	n.callback = timerCallback
 	var runNow bool
@@ -141,6 +157,24 @@ func resetTimer(t *timeTimer, when, period int64) bool {
 		n.callback(n, 0)
 	}
 	return removed || drained || suppressed
+}
+
+func timerChanRearm(tim *timer) {
+	if tim == nil {
+		return
+	}
+	tim.lock.Lock()
+	tn := tim.pausedNode
+	if tn == nil || tim.stopped {
+		tim.lock.Unlock()
+		return
+	}
+	tim.pausedNode = nil
+	if now := nanotime(); now > tim.when {
+		tim.when = tim.nextWhen(now - tim.when)
+	}
+	addTimer(tn)
+	tim.lock.Unlock()
 }
 
 //go:linkname time_runtimeNano time.runtimeNano
