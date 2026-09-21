@@ -97,7 +97,11 @@ TEST_PACKAGES_LINUX := \
 	crypto/ecdh \
 	debug/dwarf \
 	debug/plan9obj \
+	encoding/gob \
 	encoding/xml \
+	fmt \
+	go/build/constraint \
+	go/parser \
 	go/printer \
 	io/ioutil \
 	iter \
@@ -108,7 +112,10 @@ TEST_PACKAGES_LINUX := \
 	net/mail \
 	net/textproto \
 	os/user \
+	path/filepath \
+	regexp \
 	testing/fstest \
+	testing/quick \
 	$(nil)
 
 TEST_PACKAGES_DARWIN := $(TEST_PACKAGES_LINUX)
@@ -214,6 +221,9 @@ TEST_PACKAGES_SHORT = \
 
 TEST_PACKAGES_SHORT_HOST := $(filter $(TEST_PACKAGES_SHORT),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
 TEST_PACKAGES_PRINTER_HOST := $(filter go/printer,$(TEST_PACKAGES_HOST))
+TEST_PACKAGES_LARGE_STACK_HOST := $(filter encoding/gob fmt go/build/constraint regexp testing/quick,$(TEST_PACKAGES_HOST))
+TEST_PACKAGES_DEEP_STACK_HOST := $(filter path/filepath,$(TEST_PACKAGES_HOST))
+TEST_PACKAGES_HUGE_STACK_HOST := $(filter go/parser,$(TEST_PACKAGES_HOST))
 
 # Test known-working standard library packages.
 # TODO: parallelize, and only show failing tests (no implied -v flag).
@@ -221,12 +231,21 @@ TEST_PACKAGES_PRINTER_HOST := $(filter go/printer,$(TEST_PACKAGES_HOST))
 tinygo-test:
 	@# TestUnmarshalNestingLimit{Slice,Struct}: encoding/asn1 nesting limit added in
 	@# https://github.com/golang/go/commit/6a6d115f9a7422b2fa081ba6f567eefb4a099462
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_LARGE_STACK_HOST) $(TEST_PACKAGES_DEEP_STACK_HOST) $(TEST_PACKAGES_HUGE_STACK_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
 ifneq ($(TEST_PACKAGES_SHORT_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short $(TEST_PACKAGES_SHORT_HOST)
 endif
 ifneq ($(TEST_PACKAGES_PRINTER_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=1MB $(TEST_PACKAGES_PRINTER_HOST)
+endif
+ifneq ($(TEST_PACKAGES_LARGE_STACK_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=1MB -skip='^(TestCountDecodeMallocs|TestCountMallocs)$$' $(TEST_PACKAGES_LARGE_STACK_HOST)
+endif
+ifneq ($(TEST_PACKAGES_DEEP_STACK_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=4MB $(TEST_PACKAGES_DEEP_STACK_HOST)
+endif
+ifneq ($(TEST_PACKAGES_HUGE_STACK_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=256MB $(TEST_PACKAGES_HUGE_STACK_HOST)
 endif
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestReflectFuncOf|TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount)$$' internal/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$$' testing/synctest
