@@ -230,9 +230,7 @@ func scheduler(_ bool) {
 			if timerQueue != nil && now >= timerQueue.whenTicks() {
 				delay := ticksToNanoseconds(now - timerQueue.whenTicks())
 				// Pop timer from queue.
-				tn := timerQueue
-				timerQueue = tn.next
-				tn.next = nil
+				tn := timerQueuePop()
 
 				// Mark the timer as firing, so that a concurrent Stop or Reset
 				// (via removeTimer) can prevent a periodic timer from re-adding

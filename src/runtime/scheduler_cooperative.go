@@ -210,9 +210,7 @@ func scheduler(returnAtDeadlock bool) {
 			scheduleLog("--- timer awoke")
 			delay := ticksToNanoseconds(now - timerQueue.whenTicks())
 			// Pop timer from queue.
-			tn := timerQueue
-			timerQueue = tn.next
-			tn.next = nil
+			tn := timerQueuePop()
 			// Run the callback stored in this timer node.
 			tn.callback(tn, delay)
 		}
