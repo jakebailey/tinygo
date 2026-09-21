@@ -96,6 +96,7 @@ TEST_PACKAGES_LINUX := \
 	crypto/aes \
 	crypto/ecdh \
 	debug/dwarf \
+	debug/gosym \
 	debug/plan9obj \
 	encoding/xml \
 	go/printer \
