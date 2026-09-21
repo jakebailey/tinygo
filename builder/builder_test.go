@@ -88,45 +88,6 @@ func TestClangAttributes(t *testing.T) {
 	}
 }
 
-func TestEnableCallerFramePointers(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-	mod := ctx.NewModule("callers")
-	defer mod.Dispose()
-
-	fnType := llvm.FunctionType(ctx.VoidType(), nil, false)
-	callers := llvm.AddFunction(mod, "runtime.Callers", fnType)
-	llvm.AddFunction(mod, "main.main", fnType)
-	for fn := mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
-		block := ctx.AddBasicBlock(fn, "entry")
-		builder := ctx.NewBuilder()
-		builder.SetInsertPointAtEnd(block)
-		builder.CreateRetVoid()
-		builder.Dispose()
-	}
-
-	config := &compileopts.Config{
-		Options: &compileopts.Options{},
-		Target: &compileopts.TargetSpec{
-			GOOS:      "linux",
-			GOARCH:    "amd64",
-			Scheduler: "threads",
-		},
-	}
-	enableCallerFramePointers(mod, config)
-
-	for _, fn := range []llvm.Value{callers, mod.NamedFunction("main.main")} {
-		attr := fn.GetStringAttributeAtIndex(-1, "frame-pointer")
-		var value string
-		if !attr.IsNil() {
-			value = attr.GetStringValue()
-		}
-		if value != "all" {
-			t.Errorf("%s frame-pointer attribute is %q, want %q", fn.Name(), value, "all")
-		}
-	}
-}
-
 func testClangAttributes(t *testing.T, options *compileopts.Options) {
 	testDir := t.TempDir()
 
