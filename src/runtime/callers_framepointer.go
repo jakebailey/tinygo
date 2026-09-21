@@ -19,7 +19,8 @@ func Callers(skip int, pc []uintptr) int {
 	n := 0
 	if skip <= 0 {
 		fn := Callers
-		pc[n] = (*[2]uintptr)(unsafe.Pointer(&fn))[1]
+		// Use a synthetic return PC that adjusts back to the function entry.
+		pc[n] = (*[2]uintptr)(unsafe.Pointer(&fn))[1] + 1
 		n++
 		if n == len(pc) {
 			return n
@@ -34,14 +35,20 @@ func Callers(skip int, pc []uintptr) int {
 		words := (*[2]uintptr)(unsafe.Pointer(frame))
 		next := words[0]
 		returnPC := words[1]
-		if skip == 0 {
-			pc[n] = returnPC
-			n++
-			if n == len(pc) {
-				return n
+		callPC := returnPC
+		if callPC != 0 {
+			callPC--
+		}
+		if !isCallWrapperPC(callPC) {
+			if skip == 0 {
+				pc[n] = returnPC
+				n++
+				if n == len(pc) {
+					return n
+				}
+			} else {
+				skip--
 			}
-		} else {
-			skip--
 		}
 		if next <= frame || next > stackTop || next%unsafe.Alignof(frame) != 0 {
 			break

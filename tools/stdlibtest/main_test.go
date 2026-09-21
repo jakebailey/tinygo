@@ -106,6 +106,26 @@ func TestSuiteSelection(t *testing.T) {
 	}
 }
 
+func TestSupportsCallerLocations(t *testing.T) {
+	threads := []string{"scheduler.threads"}
+	for _, tc := range []struct {
+		target targetInfo
+		want   bool
+	}{
+		{targetInfo{GOOS: "linux", GOARCH: "amd64", BuildTags: threads}, true},
+		{targetInfo{GOOS: "linux", GOARCH: "386", BuildTags: threads}, true},
+		{targetInfo{GOOS: "linux", GOARCH: "arm64", BuildTags: threads}, true},
+		{targetInfo{GOOS: "darwin", GOARCH: "arm64", BuildTags: threads}, true},
+		{targetInfo{GOOS: "linux", GOARCH: "arm", BuildTags: threads}, false},
+		{targetInfo{GOOS: "windows", GOARCH: "amd64", BuildTags: threads}, false},
+		{targetInfo{GOOS: "linux", GOARCH: "amd64", BuildTags: []string{"scheduler.none"}}, false},
+	} {
+		if got := supportsCallerLocations(tc.target); got != tc.want {
+			t.Errorf("caller locations for %+v = %t, want %t", tc.target, got, tc.want)
+		}
+	}
+}
+
 func TestWASIHostExclusion(t *testing.T) {
 	target := targetInfo{GOOS: "wasip1", GOARCH: "wasm", BuildTags: []string{"tinygo.wasm", "tinygo.wasi"}}
 	opts := options{mode: modeFull}

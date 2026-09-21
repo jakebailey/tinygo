@@ -635,6 +635,9 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (*BuildR
 		}
 	}()
 	var stackSizeLoads []string
+	var callerMetadataAnchor string
+	var callerFunctions []callerFunction
+	var relinkCallers bool
 	programJob := &compileJob{
 		description:  "link+optimize packages (LTO)",
 		dependencies: packageJobs,
@@ -729,7 +732,8 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (*BuildR
 			if err != nil {
 				return err
 			}
-			enableCallerFramePointers(mod, config)
+			callerMetadataAnchor, callerFunctions = createCallerMetadata(mod)
+			relinkCallers = len(callerFunctions) != 0 && (config.GOOS() == "linux" || config.GOOS() == "darwin") && !strings.HasPrefix(config.Triple(), "wasm")
 			if strings.HasPrefix(config.Triple(), "wasm") {
 				if err := compiler.ValidateWasmFunctionParameters(mod); err != nil {
 					return err
@@ -805,9 +809,8 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (*BuildR
 			llvmBuf := llvm.WriteThinLTOBitcodeToMemoryBuffer(mod)
 			err := os.WriteFile(objfile, llvmBuf.Bytes(), 0666)
 			llvmBuf.Dispose()
-			// Only the stack size analysis in the link job reads the module
-			// after this point, so free it when that analysis will not run.
-			if !config.Options.PrintStacks && !config.AutomaticStackSize() {
+			// Caller relinking and stack size analysis need the module.
+			if !relinkCallers && !config.Options.PrintStacks && !config.AutomaticStackSize() {
 				ctx := mod.Context()
 				mod.Dispose()
 				ctx.Dispose()
@@ -1019,9 +1022,67 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (*BuildR
 			if config.TrimPath() && config.LinkerFlavor() == "darwin" {
 				linkEnv = append(linkEnv, "ZERO_AR_DATE=1")
 			}
-			err = link(config.Target.Linker, ldflags, linkEnv...)
-			if err != nil {
-				return err
+			if relinkCallers {
+				unstrippedFlags := make([]string, 0, len(ldflags))
+				for _, flag := range ldflags {
+					if callerMetadataAnchor == "" || flag != "--strip-debug" {
+						unstrippedFlags = append(unstrippedFlags, flag)
+					}
+				}
+				if err := link(config.Target.Linker, unstrippedFlags, linkEnv...); err != nil {
+					return err
+				}
+
+				var previous []callerLine
+				var previousFunctions []callerFunction
+				stable := false
+				for generation := 0; generation < 4; generation++ {
+					orderedFunctions, err := orderCallerFunctions(result.Executable, callerFunctions)
+					if err != nil {
+						return fmt.Errorf("could not order caller function table: %w", err)
+					}
+					var lines []callerLine
+					if callerMetadataAnchor != "" {
+						lines, err = readCallerLines(result.Executable, callerMetadataAnchor)
+						if err != nil {
+							return fmt.Errorf("could not create caller line table: %w", err)
+						}
+					}
+					if generation != 0 &&
+						callerFunctionsEqual(orderedFunctions, previousFunctions) &&
+						callerLinesEqual(lines, previous) {
+						stable = true
+						break
+					}
+					setCallerFunctions(mod, orderedFunctions, generation+1)
+					if err := setCallerLines(mod, lines, generation); err != nil {
+						return err
+					}
+					llvmBuf := llvm.WriteThinLTOBitcodeToMemoryBuffer(mod)
+					err = os.WriteFile(objfile, llvmBuf.Bytes(), 0666)
+					llvmBuf.Dispose()
+					if err != nil {
+						return err
+					}
+					if err := link(config.Target.Linker, unstrippedFlags, linkEnv...); err != nil {
+						return err
+					}
+					previous = lines
+					previousFunctions = orderedFunctions
+				}
+				if !stable {
+					return errors.New("caller line table did not stabilize")
+				}
+				if len(unstrippedFlags) != len(ldflags) {
+					if err := link(config.Target.Linker, ldflags, linkEnv...); err != nil {
+						return err
+					}
+				}
+			} else {
+				err = link(config.Target.Linker, ldflags, linkEnv...)
+				if err != nil {
+					return err
+				}
 			}
 
 			var calculatedStacks []string
@@ -1494,32 +1555,71 @@ func addInitAllDebugInfo(mod llvm.Module, fn llvm.Value, irbuilder llvm.Builder,
 	dibuilder.Finalize()
 }
 
-func enableCallerFramePointers(mod llvm.Module, config *compileopts.Config) {
-	if config.Scheduler() != "threads" {
-		return
+func createCallerMetadata(mod llvm.Module) (string, []callerFunction) {
+	tableGlobal := mod.NamedGlobal("runtime.funcTable")
+	lengthGlobal := mod.NamedGlobal("runtime.funcTableLen")
+	sortedGlobal := mod.NamedGlobal("runtime.funcTableSorted")
+	if tableGlobal.IsNil() && lengthGlobal.IsNil() && sortedGlobal.IsNil() {
+		return "", nil
 	}
-	switch config.GOOS() {
-	case "linux", "darwin":
-	default:
-		return
-	}
-	switch config.GOARCH() {
-	case "386", "amd64", "arm64":
-	default:
-		return
+	if tableGlobal.IsNil() || lengthGlobal.IsNil() || sortedGlobal.IsNil() {
+		panic("runtime function table globals must be defined together")
 	}
 
-	callers := mod.NamedFunction("runtime.Callers")
-	if callers.IsNil() || callers.IsDeclaration() {
-		return
-	}
-
-	ctx := mod.Context()
+	var functions []callerFunction
 	for fn := mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
-		if !fn.IsDeclaration() {
-			fn.AddFunctionAttr(ctx.CreateStringAttribute("frame-pointer", "all"))
+		if fn.IsDeclaration() || strings.HasPrefix(fn.Name(), "llvm.") {
+			continue
 		}
+		name := fn.Name()
+		if index := strings.LastIndex(name, ".llvm."); index >= 0 {
+			name = name[:index]
+		}
+		functions = append(functions, callerFunction{name: name, fn: fn})
 	}
+	sort.Slice(functions, func(i, j int) bool {
+		return functions[i].name < functions[j].name
+	})
+
+	setCallerFunctions(mod, functions, 0)
+	if len(functions) == 0 {
+		return "", nil
+	}
+
+	anchor := mod.NamedFunction("runtime.Callers")
+	if anchor.IsNil() || anchor.IsDeclaration() {
+		anchor = mod.NamedFunction("runtime.FuncForPC")
+	}
+	if anchor.IsNil() || anchor.IsDeclaration() {
+		anchor = functions[0].fn
+	}
+
+	lineTableGlobal := mod.NamedGlobal("runtime.lineTable")
+	lineLengthGlobal := mod.NamedGlobal("runtime.lineTableLen")
+	lineBaseGlobal := mod.NamedGlobal("runtime.lineTableBase")
+	lineFilesGlobal := mod.NamedGlobal("runtime.lineFiles")
+	lineFilesLengthGlobal := mod.NamedGlobal("runtime.lineFilesLen")
+	if lineTableGlobal.IsNil() && lineLengthGlobal.IsNil() && lineBaseGlobal.IsNil() &&
+		lineFilesGlobal.IsNil() && lineFilesLengthGlobal.IsNil() {
+		return "", functions
+	}
+	if lineTableGlobal.IsNil() || lineLengthGlobal.IsNil() || lineBaseGlobal.IsNil() ||
+		lineFilesGlobal.IsNil() || lineFilesLengthGlobal.IsNil() {
+		panic("runtime line table globals must be defined together")
+	}
+	ptrType := tableGlobal.GlobalValueType()
+	uintptrType := lengthGlobal.GlobalValueType()
+	lineTableGlobal.SetInitializer(llvm.ConstPointerNull(ptrType))
+	lineTableGlobal.SetGlobalConstant(true)
+	lineLengthGlobal.SetInitializer(llvm.ConstInt(uintptrType, 0, false))
+	lineLengthGlobal.SetGlobalConstant(true)
+	lineFilesGlobal.SetInitializer(llvm.ConstPointerNull(ptrType))
+	lineFilesGlobal.SetGlobalConstant(true)
+	lineFilesLengthGlobal.SetInitializer(llvm.ConstInt(uintptrType, 0, false))
+	lineFilesLengthGlobal.SetGlobalConstant(true)
+	lineBaseGlobal.SetInitializer(llvm.ConstPtrToInt(anchor, uintptrType))
+	lineBaseGlobal.SetGlobalConstant(true)
+	return anchor.Name(), functions
 }
 
 func makeGlobalsModule(ctx llvm.Context, globals map[string]map[string]string, machine llvm.TargetMachine) llvm.Module {
