@@ -152,6 +152,8 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 		fn.SetLinkage(llvm.InternalLinkage)
 	}
 
+	preserveCallerFrames(mod, config)
+
 	// Run the ThinLTO pre-link passes, meant to be run on each individual
 	// module. This saves compilation time compared to "default<#>" and is meant
 	// to better match the optimization passes that are happening during

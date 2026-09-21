@@ -119,6 +119,7 @@ type addressLine struct {
 	Length     uint64 // length of this chunk
 	Align      uint64 // (maximum) alignment of this line
 	File       string // file path as stored in DWARF
+	Line       uint64 // source line, or zero when not applicable
 	IsVariable bool   // true if this is a variable (or constant), false if it is code
 }
 
@@ -252,6 +253,7 @@ func readProgramSizeFromDWARF(data *dwarf.Data, codeOffset, codeAlignment uint64
 						Length:  lineEntry.Address - prevLineEntry.Address,
 						Align:   codeAlignment,
 						File:    path,
+						Line:    uint64(prevLineEntry.Line),
 					}
 					if line.Length != 0 {
 						addresses = append(addresses, line)
