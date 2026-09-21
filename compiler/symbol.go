@@ -811,7 +811,10 @@ func (c *compilerContext) loadASTComments(pkg *loader.Package) {
 						case *ast.ValueSpec: // decl.Tok == token.VAR
 							for _, name := range spec.Names {
 								id := pkg.Pkg.Path() + "." + name.Name
-								c.astComments[id] = decl.Doc
+								c.astComments[id] = astGlobalInfo{
+									doc:            decl.Doc,
+									hasInitializer: len(spec.Values) != 0,
+								}
 							}
 						}
 					}
@@ -868,17 +871,22 @@ func (c *compilerContext) getGlobalInfo(g *ssa.Global) globalInfo {
 		linkName: g.RelString(nil),
 	}
 	// Check for //go: pragmas, which may change the link name (among others).
-	doc := c.astComments[info.linkName]
-	if doc != nil {
-		info.parsePragmas(doc, c, g)
+	astInfo := c.astComments[info.linkName]
+	if astInfo.doc != nil {
+		info.parsePragmas(astInfo, c, g)
 	}
 	return info
 }
 
+type astGlobalInfo struct {
+	doc            *ast.CommentGroup
+	hasInitializer bool
+}
+
 // Parse //go: pragma comments from the source. In particular, it parses the
 // //go:extern and //go:linkname pragmas on globals.
-func (info *globalInfo) parsePragmas(doc *ast.CommentGroup, c *compilerContext, g *ssa.Global) {
-	for _, comment := range doc.List {
+func (info *globalInfo) parsePragmas(astInfo astGlobalInfo, c *compilerContext, g *ssa.Global) {
+	for _, comment := range astInfo.doc.List {
 		if !strings.HasPrefix(comment.Text, "//go:") {
 			continue
 		}
@@ -908,6 +916,9 @@ func (info *globalInfo) parsePragmas(doc *ast.CommentGroup, c *compilerContext, 
 			// whole.
 			if slices.Contains(g.Pkg.Pkg.Imports(), types.Unsafe) {
 				info.linkName = parts[2]
+				if strings.Contains(parts[2], ".") && !astInfo.hasInitializer {
+					info.extern = true
+				}
 			}
 		}
 	}
