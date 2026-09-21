@@ -652,6 +652,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 			if err != nil {
 				return err
 			}
+			enableCallerFramePointers(mod, config)
 			if strings.HasPrefix(config.Triple(), "wasm") {
 				if err := compiler.ValidateWasmFunctionParameters(mod); err != nil {
 					return err
@@ -1249,6 +1250,34 @@ func optimizeProgram(mod llvm.Module, config *compileopts.Config) error {
 	}
 
 	return nil
+}
+
+func enableCallerFramePointers(mod llvm.Module, config *compileopts.Config) {
+	if config.Scheduler() != "threads" {
+		return
+	}
+	switch config.GOOS() {
+	case "linux", "darwin":
+	default:
+		return
+	}
+	switch config.GOARCH() {
+	case "386", "amd64", "arm64":
+	default:
+		return
+	}
+
+	callers := mod.NamedFunction("runtime.Callers")
+	if callers.IsNil() || callers.IsDeclaration() {
+		return
+	}
+
+	ctx := mod.Context()
+	for fn := mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		if !fn.IsDeclaration() {
+			fn.AddFunctionAttr(ctx.CreateStringAttribute("frame-pointer", "all"))
+		}
+	}
 }
 
 func makeGlobalsModule(ctx llvm.Context, globals map[string]map[string]string, machine llvm.TargetMachine) llvm.Module {
