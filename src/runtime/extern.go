@@ -1,9 +1,5 @@
 package runtime
 
-func Callers(skip int, pc []uintptr) int {
-	return 0
-}
-
 // buildVersion is the Tinygo tree's version string at build time.
 //
 // This is set by the linker.
