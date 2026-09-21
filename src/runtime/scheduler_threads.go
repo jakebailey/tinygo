@@ -139,7 +139,7 @@ func reAddTimer(tn *timerNode, delta int64) {
 	// firing list a second time (which would corrupt the list).
 	firingTimersRemove(tn)
 
-	if tn.stopped {
+	if tn.stopped || tn.timer.stopped {
 		// The timer was stopped or reset while its callback was running. Don't
 		// re-add it: a stopped ticker must stay stopped, and a reset ticker has
 		// already been re-added by resetTimer.
@@ -152,6 +152,11 @@ func reAddTimer(tn *timerNode, delta int64) {
 	}
 
 	tn.timer.when = tn.timer.nextWhen(delta)
+	if tn.timer.isChan && timerChanHasValue(tn.timer.c) {
+		tn.timer.pausedNode = tn
+		timerQueueLock.Unlock()
+		return
+	}
 	timerQueueAdd(tn)
 
 	timerFutex.Add(1)
