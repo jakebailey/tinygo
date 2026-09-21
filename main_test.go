@@ -643,6 +643,20 @@ func TestTimerStopResetRace(t *testing.T) {
 	runTest("timer_stop_reset_race.go", optionsFromTarget("", sema), t, nil, nil)
 }
 
+func TestTimerChannelGC(t *testing.T) {
+	t.Parallel()
+	switch runtime.GOOS {
+	case "darwin", "linux":
+	default:
+		t.Skipf("host GOOS %s does not use the Boehm GC", runtime.GOOS)
+	}
+	options := optionsFromTarget("", sema)
+	// Enumeration must not race runtime allocations.
+	// BDWGC is built without GC_THREADS in builder/bdwgc.go.
+	options.Scheduler = "tasks"
+	runTest("timer_gc.go", options, t, nil, nil)
+}
+
 func TestESP32QEMU(t *testing.T) {
 	t.Parallel()
 
