@@ -97,6 +97,9 @@ TEST_PACKAGES_LINUX := \
 	crypto/ecdh \
 	debug/dwarf \
 	debug/plan9obj \
+	encoding/json \
+	encoding/json/jsontext \
+	encoding/json/v2 \
 	encoding/xml \
 	go/printer \
 	io/ioutil \
@@ -177,11 +180,11 @@ TEST_PACKAGES_NOBOUNDARYSLICES = \
 # Report platforms on which each standard library package is known to pass tests
 report-stdlib-tests-pass:
 	$(eval jointmp := $(shell echo /tmp/join.$$$$))
-	@for t in $(TEST_PACKAGES_DARWIN); do echo "$$t darwin"; done | sort > $(jointmp).darwin
-	@for t in $(TEST_PACKAGES_LINUX); do echo "$$t linux"; done | sort > $(jointmp).linux
-	@for t in $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW); do echo "$$t darwin linux wasi windows"; done | sort > $(jointmp).portable
-	@join -a1 -a2 $(jointmp).darwin $(jointmp).linux | \
-	join -a1 -a2 - $(jointmp).portable
+	@for t in $(TEST_PACKAGES_DARWIN); do echo "$$t darwin"; done | LC_ALL=C sort > $(jointmp).darwin
+	@for t in $(TEST_PACKAGES_LINUX); do echo "$$t linux"; done | LC_ALL=C sort > $(jointmp).linux
+	@for t in $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW); do echo "$$t darwin linux wasi windows"; done | LC_ALL=C sort > $(jointmp).portable
+	@LC_ALL=C join -a1 -a2 $(jointmp).darwin $(jointmp).linux | \
+	LC_ALL=C join -a1 -a2 - $(jointmp).portable
 	@rm $(jointmp).*
 
 # Standard library packages that pass tests quickly on the current platform
@@ -214,6 +217,7 @@ TEST_PACKAGES_SHORT = \
 
 TEST_PACKAGES_SHORT_HOST := $(filter $(TEST_PACKAGES_SHORT),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
 TEST_PACKAGES_PRINTER_HOST := $(filter go/printer,$(TEST_PACKAGES_HOST))
+TEST_PACKAGES_JSON_HOST := $(filter encoding/json encoding/json/jsontext encoding/json/v2,$(TEST_PACKAGES_HOST))
 
 # Test known-working standard library packages.
 # TODO: parallelize, and only show failing tests (no implied -v flag).
@@ -221,12 +225,15 @@ TEST_PACKAGES_PRINTER_HOST := $(filter go/printer,$(TEST_PACKAGES_HOST))
 tinygo-test:
 	@# TestUnmarshalNestingLimit{Slice,Struct}: encoding/asn1 nesting limit added in
 	@# https://github.com/golang/go/commit/6a6d115f9a7422b2fa081ba6f567eefb4a099462
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_JSON_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
 ifneq ($(TEST_PACKAGES_SHORT_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short $(TEST_PACKAGES_SHORT_HOST)
 endif
 ifneq ($(TEST_PACKAGES_PRINTER_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=1MB $(TEST_PACKAGES_PRINTER_HOST)
+endif
+ifneq ($(TEST_PACKAGES_JSON_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=20MB -skip='^TestHTTPDecoding$$' $(TEST_PACKAGES_JSON_HOST)
 endif
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestReflectFuncOf|TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount)$$' internal/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$$' testing/synctest
