@@ -57,6 +57,7 @@ func init() {
 	if value := startupEnv("GOROOT"); value != "" {
 		goroot = value
 	}
+	godebugSetEnv(startupEnv("GODEBUG"))
 }
 
 func startupEnv(key string) string {
