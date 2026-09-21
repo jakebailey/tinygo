@@ -4,7 +4,12 @@ import "internal/task"
 
 const schedulerDebug = false
 
-var timerQueue *timerNode
+var (
+	timerQueue         *timerNode
+	timerQueueTail     *timerNode
+	timerQueueRoot     *timerNode
+	timerQueueSequence uint64
+)
 
 // Simple logging, for debugging.
 func scheduleLog(msg string) {
@@ -28,28 +33,176 @@ func scheduleLogChan(msg string, ch *channel, t *task.Task) {
 }
 
 func timerQueueAdd(tn *timerNode) {
-	q := &timerQueue
-	for ; *q != nil; q = &(*q).next {
-		if tn.whenTicks() < (*q).whenTicks() {
-			// this will finish earlier than the next - insert here
-			break
+	timerQueueSequence++
+	tn.queueSequence = timerQueueSequence
+	tn.queuePriority = timerQueuePriority(timerQueueSequence)
+
+	if timerQueueRoot == nil {
+		timerQueue = tn
+		timerQueueTail = tn
+		timerQueueRoot = tn
+		tn.timer.node = tn
+		return
+	}
+
+	node := timerQueueRoot
+	for {
+		if timerQueueLess(tn, node) {
+			if node.treeLeft != nil {
+				node = node.treeLeft
+				continue
+			}
+			node.treeLeft = tn
+			tn.treeParent = node
+			tn.next = node
+			tn.previous = node.previous
+			if node.previous == nil {
+				timerQueue = tn
+			} else {
+				node.previous.next = tn
+			}
+			node.previous = tn
+		} else {
+			if node.treeRight != nil {
+				node = node.treeRight
+				continue
+			}
+			node.treeRight = tn
+			tn.treeParent = node
+			tn.previous = node
+			tn.next = node.next
+			if node.next == nil {
+				timerQueueTail = tn
+			} else {
+				node.next.previous = tn
+			}
+			node.next = tn
+		}
+		break
+	}
+
+	for tn.treeParent != nil && tn.queuePriority < tn.treeParent.queuePriority {
+		if tn == tn.treeParent.treeLeft {
+			timerQueueRotateRight(tn.treeParent)
+		} else {
+			timerQueueRotateLeft(tn.treeParent)
 		}
 	}
-	tn.next = *q
-	*q = tn
+	tn.timer.node = tn
+}
+
+func timerQueuePop() *timerNode {
+	tn := timerQueue
+	timerQueueRemoveNode(tn)
+	return tn
 }
 
 func timerQueueRemove(t *timer) *timerNode {
-	for q := &timerQueue; *q != nil; q = &(*q).next {
-		if (*q).timer == t {
-			scheduleLog("removed timer")
-			n := *q
-			*q = (*q).next
-			return n
-		}
+	n := t.node
+	if n == nil {
+		scheduleLog("did not remove timer")
+		return nil
 	}
-	scheduleLog("did not remove timer")
-	return nil
+	scheduleLog("removed timer")
+	timerQueueRemoveNode(n)
+	return n
+}
+
+func timerQueueRemoveNode(n *timerNode) {
+	replacement := timerQueueMerge(n.treeLeft, n.treeRight)
+	if replacement != nil {
+		replacement.treeParent = n.treeParent
+	}
+	if n.treeParent == nil {
+		timerQueueRoot = replacement
+	} else if n == n.treeParent.treeLeft {
+		n.treeParent.treeLeft = replacement
+	} else {
+		n.treeParent.treeRight = replacement
+	}
+
+	if n.previous == nil {
+		timerQueue = n.next
+	} else {
+		n.previous.next = n.next
+	}
+	if n.next == nil {
+		timerQueueTail = n.previous
+	} else {
+		n.next.previous = n.previous
+	}
+	n.next = nil
+	n.previous = nil
+	n.treeLeft = nil
+	n.treeRight = nil
+	n.treeParent = nil
+	n.timer.node = nil
+}
+
+func timerQueueMerge(left, right *timerNode) *timerNode {
+	if left == nil {
+		return right
+	}
+	if right == nil {
+		return left
+	}
+	if left.queuePriority < right.queuePriority {
+		left.treeRight = timerQueueMerge(left.treeRight, right)
+		left.treeRight.treeParent = left
+		return left
+	}
+	right.treeLeft = timerQueueMerge(left, right.treeLeft)
+	right.treeLeft.treeParent = right
+	return right
+}
+
+func timerQueueRotateLeft(node *timerNode) {
+	child := node.treeRight
+	node.treeRight = child.treeLeft
+	if node.treeRight != nil {
+		node.treeRight.treeParent = node
+	}
+	timerQueueReplaceTreeNode(node, child)
+	child.treeLeft = node
+	node.treeParent = child
+}
+
+func timerQueueRotateRight(node *timerNode) {
+	child := node.treeLeft
+	node.treeLeft = child.treeRight
+	if node.treeLeft != nil {
+		node.treeLeft.treeParent = node
+	}
+	timerQueueReplaceTreeNode(node, child)
+	child.treeRight = node
+	node.treeParent = child
+}
+
+func timerQueueReplaceTreeNode(node, replacement *timerNode) {
+	replacement.treeParent = node.treeParent
+	if node.treeParent == nil {
+		timerQueueRoot = replacement
+	} else if node == node.treeParent.treeLeft {
+		node.treeParent.treeLeft = replacement
+	} else {
+		node.treeParent.treeRight = replacement
+	}
+}
+
+func timerQueueLess(left, right *timerNode) bool {
+	leftWhen := left.whenTicks()
+	rightWhen := right.whenTicks()
+	if leftWhen != rightWhen {
+		return leftWhen < rightWhen
+	}
+	return left.queueSequence < right.queueSequence
+}
+
+func timerQueuePriority(sequence uint64) uint64 {
+	value := sequence + 0x9e3779b97f4a7c15
+	value = (value ^ value>>30) * 0xbf58476d1ce4e5b9
+	value = (value ^ value>>27) * 0x94d049bb133111eb
+	return value ^ value>>31
 }
 
 // firingTimers is a list of timer nodes whose callback is currently running.
