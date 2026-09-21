@@ -17,6 +17,7 @@ type timer struct {
 	arg any
 
 	synctest *synctestBubble
+	node     *timerNode
 }
 
 func (tim *timer) callCallback(delta int64) {
@@ -139,11 +140,17 @@ func time_runtimeNow() (sec int64, nsec int32, mono int64) {
 	return now()
 }
 
-// timerNode is an element in a linked list of timers.
+// timerNode is an element in the timer queue's treap and ordered list.
 type timerNode struct {
-	next     *timerNode
-	timer    *timer
-	callback func(node *timerNode, delta int64)
+	next          *timerNode
+	previous      *timerNode
+	treeLeft      *timerNode
+	treeRight     *timerNode
+	treeParent    *timerNode
+	queueSequence uint64
+	queuePriority uint64
+	timer         *timer
+	callback      func(node *timerNode, delta int64)
 
 	// The following fields are only used by schedulers that run timer
 	// callbacks concurrently with user goroutines (the threads and cores
