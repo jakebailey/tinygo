@@ -40,12 +40,6 @@ func TestTinyIndirectPointers(t *testing.T) {
 	}
 }
 
-func TestTinyInvalidValueString(t *testing.T) {
-	if got := (Value{}).String(); got != "<invalid Value>" {
-		t.Errorf("Value{}.String() = %q, want %q", got, "<invalid Value>")
-	}
-}
-
 func TestNewAt(t *testing.T) {
 	value := 42
 	v := NewAt(TypeOf(value), unsafe.Pointer(&value))
@@ -89,6 +83,12 @@ func TestNewAt(t *testing.T) {
 	}
 	if nilValue.Elem().IsValid() {
 		t.Fatal("Elem of NewAt with nil pointer is valid")
+	}
+}
+
+func TestTinyInvalidValueString(t *testing.T) {
+	if got := (Value{}).String(); got != "<invalid Value>" {
+		t.Errorf("Value{}.String() = %q, want %q", got, "<invalid Value>")
 	}
 }
 
