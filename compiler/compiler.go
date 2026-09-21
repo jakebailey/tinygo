@@ -4,7 +4,6 @@ import (
 	"debug/dwarf"
 	"errors"
 	"fmt"
-	"go/ast"
 	"go/constant"
 	"go/token"
 	"go/types"
@@ -94,7 +93,7 @@ type compilerContext struct {
 	indirectCatchers map[llvm.Type]llvm.Value
 	asyncifyReplays  map[llvm.Type]llvm.Value
 	functionABIs     map[functionABIKey]functionABI
-	astComments      map[string]*ast.CommentGroup
+	astComments      map[string]astGlobalInfo
 	cgoImportDynamic map[string]string // //go:cgo_import_dynamic local name -> remote symbol
 	embedGlobals     map[string][]*loader.EmbedFile
 	pkg              *types.Package
@@ -121,7 +120,7 @@ func newCompilerContext(moduleName string, machine llvm.TargetMachine, config *C
 		indirectCatchers: map[llvm.Type]llvm.Value{},
 		asyncifyReplays:  map[llvm.Type]llvm.Value{},
 		functionABIs:     map[functionABIKey]functionABI{},
-		astComments:      map[string]*ast.CommentGroup{},
+		astComments:      map[string]astGlobalInfo{},
 		cgoImportDynamic: map[string]string{},
 	}
 
