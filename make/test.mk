@@ -100,6 +100,9 @@ TEST_PACKAGES_LINUX := \
 	debug/gosym \
 	debug/plan9obj \
 	encoding/gob \
+	encoding/json \
+	encoding/json/jsontext \
+	encoding/json/v2 \
 	encoding/xml \
 	fmt \
 	go/build/constraint \
@@ -190,11 +193,11 @@ TEST_PACKAGES_NOBOUNDARYSLICES = \
 # Report platforms on which each standard library package is known to pass tests
 report-stdlib-tests-pass:
 	$(eval jointmp := $(shell echo /tmp/join.$$$$))
-	@for t in $(TEST_PACKAGES_DARWIN); do echo "$$t darwin"; done | sort > $(jointmp).darwin
-	@for t in $(TEST_PACKAGES_LINUX); do echo "$$t linux"; done | sort > $(jointmp).linux
-	@for t in $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW); do echo "$$t darwin linux wasi windows"; done | sort > $(jointmp).portable
-	@join -a1 -a2 $(jointmp).darwin $(jointmp).linux | \
-	join -a1 -a2 - $(jointmp).portable
+	@for t in $(TEST_PACKAGES_DARWIN); do echo "$$t darwin"; done | LC_ALL=C sort > $(jointmp).darwin
+	@for t in $(TEST_PACKAGES_LINUX); do echo "$$t linux"; done | LC_ALL=C sort > $(jointmp).linux
+	@for t in $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW); do echo "$$t darwin linux wasi windows"; done | LC_ALL=C sort > $(jointmp).portable
+	@LC_ALL=C join -a1 -a2 $(jointmp).darwin $(jointmp).linux | \
+	LC_ALL=C join -a1 -a2 - $(jointmp).portable
 	@rm $(jointmp).*
 
 # Standard library packages that pass tests quickly on the current platform
@@ -230,6 +233,9 @@ TEST_OPTIONS_strings := -skip='^(TestBuilderAllocs|TestBuilderGrow|TestBuilderGr
 TEST_OPTIONS_crypto/mldsa := -short -stack-size=1MB -skip='^TestAllocations$$'
 
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/printer := -stack-size=1MB
+tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/json := -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^\#05$$|^TestTokenStringAllocations$$'
+tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/json/jsontext := -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^\#05$$|^TestTokenStringAllocations$$'
+tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/json/v2 := -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^\#05$$|^TestTokenStringAllocations$$'
 tinygo-test tinygo-test-fast: TEST_OPTIONS_testing/quick := -stack-size=1MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/gob := -stack-size=1MB -skip='^(TestCountDecodeMallocs|TestCountEncodeMallocs)$$'
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/build/constraint = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=1MB
