@@ -166,3 +166,17 @@ func TestStdin(t *testing.T) {
 	}
 	checkOutput(t, TESTDATA+"/stdin.txt", output.Bytes())
 }
+
+func TestTimerChannelGC(t *testing.T) {
+	t.Parallel()
+	switch runtime.GOOS {
+	case "darwin", "linux":
+	default:
+		t.Skipf("host GOOS %s does not use the Boehm GC", runtime.GOOS)
+	}
+	options := optionsFromTarget("", sema)
+	// Enumeration must not race runtime allocations.
+	// BDWGC is built without GC_THREADS in builder/bdwgc.go.
+	options.Scheduler = "tasks"
+	runTest("timer_gc.go", options, t, nil, nil)
+}
