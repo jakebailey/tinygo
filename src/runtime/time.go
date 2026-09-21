@@ -16,8 +16,10 @@ type timer struct {
 	f   func(arg any, seq uintptr, delta int64)
 	arg any
 
-	synctest *synctestBubble
-	node     *timerNode
+	synctest           *synctestBubble
+	node               *timerNode
+	isChan             bool
+	suppressedCallback bool
 }
 
 func (tim *timer) callCallback(delta int64) {
@@ -53,7 +55,11 @@ func newTimer(when, period int64, f func(arg any, seq uintptr, delta int64), arg
 			f:        f,
 			arg:      arg,
 			synctest: bubble,
+			isChan:   c != nil,
 		},
+	}
+	if c != nil {
+		(*channel)(c).timer = true
 	}
 	scheduleLog("new timer")
 	node := &timerNode{
@@ -74,14 +80,17 @@ func stopTimer(tim *timeTimer) bool {
 		tim.timer.synctest.checkTimerAccess("stop")
 	}
 	tim.timer.lock.Lock()
+	tim.timer.suppressedCallback = false
 	var removed bool
 	if tim.timer.synctest != nil {
 		removed = tim.timer.synctest.removeTimer(&tim.timer) != nil
 	} else {
 		removed = removeTimer(&tim.timer) != nil
 	}
+	drained := timerChanDrain(tim.c)
+	suppressed := tim.timer.suppressedCallback
 	tim.timer.lock.Unlock()
-	return removed
+	return removed || drained || suppressed
 }
 
 //go:linkname resetTimer time.resetTimer
@@ -90,6 +99,7 @@ func resetTimer(t *timeTimer, when, period int64) bool {
 		t.timer.synctest.checkTimerAccess("reset")
 	}
 	t.timer.lock.Lock()
+	t.timer.suppressedCallback = false
 	var n *timerNode
 	if t.timer.synctest != nil {
 		n = t.timer.synctest.removeTimer(&t.timer)
@@ -97,6 +107,8 @@ func resetTimer(t *timeTimer, when, period int64) bool {
 		n = removeTimer(&t.timer)
 	}
 	removed := n != nil
+	drained := timerChanDrain(t.c)
+	suppressed := t.timer.suppressedCallback
 	if n == nil {
 		// Allocation can start GC, so do not hold the cores spin lock.
 		t.timer.lock.Unlock()
@@ -128,7 +140,7 @@ func resetTimer(t *timeTimer, when, period int64) bool {
 	if runNow {
 		n.callback(n, 0)
 	}
-	return removed
+	return removed || drained || suppressed
 }
 
 //go:linkname time_runtimeNano time.runtimeNano
@@ -189,13 +201,16 @@ func (t *timerNode) whenTicks() timeUnit {
 // If timerQueue doesn't get optimized away, small programs (that don't call
 // time.NewTimer etc) would still pay the cost of these timers.
 func timerCallback(tn *timerNode, delta int64) {
+	tn.timer.lock.Lock()
+
 	// Run timer function (implemented in the time package).
 	// The seq parameter to the f function is not used in the time
 	// package so is left zero.
-	tn.timer.callCallback(delta)
+	if !tn.stopped || !tn.timer.isChan {
+		tn.timer.callCallback(delta)
+	}
 
 	// Finish firing the timer and re-add it if it is periodic.
-	tn.timer.lock.Lock()
 	if tn.timer.synctest != nil {
 		tn.timer.synctest.finishTimer(tn)
 	} else {
