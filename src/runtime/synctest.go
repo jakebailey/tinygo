@@ -130,7 +130,7 @@ func (bubble *synctestBubble) queueTimer(tn *timerNode) bool {
 func (bubble *synctestBubble) finishTimer(tn *timerNode) {
 	bubble.lock.Lock()
 	bubble.removeFiringTimerLocked(tn)
-	if tn.stopped {
+	if tn.stopped || tn.timer.stopped {
 		bubble.lock.Unlock()
 		return
 	}
@@ -143,6 +143,11 @@ func (bubble *synctestBubble) finishTimer(tn *timerNode) {
 		next = 1<<63 - 1
 	}
 	tn.timer.when = next
+	if tn.timer.isChan && tn.timer.blocked == 0 {
+		tn.timer.pausedNode = tn
+		bubble.lock.Unlock()
+		return
+	}
 	bubble.addTimerLocked(tn)
 	bubble.lock.Unlock()
 }
@@ -164,18 +169,21 @@ func (bubble *synctestBubble) addTimerLocked(tn *timerNode) {
 	*queue = tn
 }
 
-func (bubble *synctestBubble) removeTimer(tim *timer) *timerNode {
+func (bubble *synctestBubble) removeTimer(tim *timer, stopFiring bool) *timerNode {
 	bubble.lock.Lock()
-	defer bubble.lock.Unlock()
 	for queue := &bubble.timers; *queue != nil; queue = &(*queue).next {
 		if (*queue).timer == tim {
 			node := *queue
 			*queue = node.next
 			node.next = nil
+			bubble.lock.Unlock()
 			return node
 		}
 	}
-	bubble.stopFiringTimerLocked(tim)
+	if stopFiring {
+		bubble.stopFiringTimerLocked(tim)
+	}
+	bubble.lock.Unlock()
 	return nil
 }
 
