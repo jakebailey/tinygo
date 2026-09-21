@@ -98,9 +98,7 @@ func timerRunner() {
 		}
 
 		// Pop timer from queue.
-		tn := timerQueue
-		timerQueue = tn.next
-		tn.next = nil
+		tn := timerQueuePop()
 		delay := ticksToNanoseconds(now - tn.whenTicks())
 
 		// Mark the timer as firing, so that a concurrent Stop or Reset (via
