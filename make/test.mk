@@ -99,6 +99,9 @@ TEST_PACKAGES_LINUX := \
 	debug/gosym \
 	debug/plan9obj \
 	encoding/gob \
+	encoding/json \
+	encoding/json/jsontext \
+	encoding/json/v2 \
 	encoding/xml \
 	fmt \
 	go/printer \
@@ -184,11 +187,11 @@ TEST_PACKAGES_NOBOUNDARYSLICES = \
 # Report platforms on which each standard library package is known to pass tests
 report-stdlib-tests-pass:
 	$(eval jointmp := $(shell echo /tmp/join.$$$$))
-	@for t in $(TEST_PACKAGES_DARWIN); do echo "$$t darwin"; done | sort > $(jointmp).darwin
-	@for t in $(TEST_PACKAGES_LINUX); do echo "$$t linux"; done | sort > $(jointmp).linux
-	@for t in $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW); do echo "$$t darwin linux wasi windows"; done | sort > $(jointmp).portable
-	@join -a1 -a2 $(jointmp).darwin $(jointmp).linux | \
-	join -a1 -a2 - $(jointmp).portable
+	@for t in $(TEST_PACKAGES_DARWIN); do echo "$$t darwin"; done | LC_ALL=C sort > $(jointmp).darwin
+	@for t in $(TEST_PACKAGES_LINUX); do echo "$$t linux"; done | LC_ALL=C sort > $(jointmp).linux
+	@for t in $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW); do echo "$$t darwin linux wasi windows"; done | LC_ALL=C sort > $(jointmp).portable
+	@LC_ALL=C join -a1 -a2 $(jointmp).darwin $(jointmp).linux | \
+	LC_ALL=C join -a1 -a2 - $(jointmp).portable
 	@rm $(jointmp).*
 
 # Standard library packages that pass tests quickly on the current platform
@@ -270,6 +273,7 @@ $(if $(filter $(TEST_PACKAGES_ALLOC_SLICES),$(1)),$(3) $(TINYGO) test $(2) $(TES
 $(if $(filter $(TEST_PACKAGES_ALLOC_STRINGS),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_STRINGS_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_STRINGS),$(1)))
 endef
 TEST_PACKAGES_NETIP_HOST := $(filter net/netip,$(TEST_PACKAGES_HOST))
+TEST_PACKAGES_JSON_HOST := $(filter encoding/json encoding/json/jsontext encoding/json/v2,$(TEST_PACKAGES_HOST))
 
 # https://go.dev/src/internal/synctest/synctest_test.go creates 100 x 100
 # goroutines, which can exceed macOS's thread limit with the threads scheduler.
@@ -285,7 +289,7 @@ TEST_PACKAGES_GOB_HOST := $(filter encoding/gob,$(TEST_PACKAGES_HOST))
 tinygo-test:
 	@# TestUnmarshalNestingLimit{Slice,Struct}: encoding/asn1 nesting limit added in
 	@# https://github.com/golang/go/commit/6a6d115f9a7422b2fa081ba6f567eefb4a099462
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/gob encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_NETIP_HOST) $(TEST_PACKAGES_QUICK_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/gob encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_NETIP_HOST) $(TEST_PACKAGES_QUICK_HOST) $(TEST_PACKAGES_JSON_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
 ifneq ($(TEST_PACKAGES_SHORT_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short $(TEST_PACKAGES_SHORT_HOST)
 endif
@@ -302,6 +306,9 @@ endif
 ifneq ($(TEST_PACKAGES_GOB_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=1MB -skip='^(TestCountDecodeMallocs|TestCountMallocs)$$' $(TEST_PACKAGES_GOB_HOST)
 endif
+ifneq ($(TEST_PACKAGES_JSON_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^#05$$|^TestTokenStringAllocations$$' $(TEST_PACKAGES_JSON_HOST)
+endif
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestReflectFuncOf|TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount$(TEST_SYNCTEST_THREAD_LIMIT_SKIP))$$' internal/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$$' testing/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -run='^TestSynctestMarshal$$' encoding/json
@@ -315,13 +322,16 @@ ifeq ($(TEST_IOFS),true)
 	$(TINYGO) test -stack-size=6MB io/fs
 endif
 tinygo-test-fast:
-	$(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_HOST))
+	$(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_JSON_HOST),$(TEST_PACKAGES_HOST))
 ifneq ($(TEST_PACKAGES_PRINTER_HOST),)
 	$(TINYGO) test -stack-size=1MB $(TEST_PACKAGES_PRINTER_HOST)
 endif
 	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_HOST))
 ifeq ($(TEST_ENCODING_XML),true)
 	$(TINYGO) test $(TEST_SKIP_FLAG) -short -stack-size=16MB encoding/xml
+endif
+ifneq ($(TEST_PACKAGES_JSON_HOST),)
+	$(TINYGO) test -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^#05$$|^TestTokenStringAllocations$$' $(TEST_PACKAGES_JSON_HOST)
 endif
 tinygo-bench:
 	$(TINYGO) test -bench . $(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW)
