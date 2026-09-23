@@ -5,7 +5,9 @@ target triple = "x86_64--linux"
 @bar.knownAtRuntime = local_unnamed_addr global i64 0
 @baz.someGlobal = external local_unnamed_addr global [3 x { i64, i32 }]
 @baz.someInt = local_unnamed_addr global i32 0
-@x.atomicNum = local_unnamed_addr global i32 0
+@x.atomicNum = local_unnamed_addr global i32 7
+@x.atomicOld = local_unnamed_addr global i32 1
+@x.atomicSwapped = local_unnamed_addr global i1 true
 @x.volatileNum = global i32 0
 @y.ready = local_unnamed_addr global i32 0
 @z.bloom = global i64 0
@@ -22,9 +24,6 @@ entry:
   %val = load i64, ptr @foo.knownAtRuntime, align 8
   store i64 %val, ptr @bar.knownAtRuntime, align 8
   call void @externalCall(i64 3)
-  store atomic i32 1, ptr @x.atomicNum seq_cst, align 4
-  %x = load atomic i32, ptr @x.atomicNum seq_cst, align 4
-  store i32 %x, ptr @x.atomicNum, align 4
   %y = load volatile i32, ptr @x.volatileNum, align 4
   store volatile i32 %y, ptr @x.volatileNum, align 4
   call fastcc void @y.init(ptr undef)

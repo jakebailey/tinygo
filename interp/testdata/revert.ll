@@ -10,6 +10,8 @@ declare i64 @ptrHash(ptr nocapture)
 @baz.someGlobal = external global [3 x {i64, i32}]
 @baz.someInt = global i32 0
 @x.atomicNum = global i32 0
+@x.atomicOld = global i32 0
+@x.atomicSwapped = global i1 false
 @x.volatileNum = global i32 0
 @y.ready = global i32 0
 @z.bloom = global i64 0
@@ -54,10 +56,15 @@ entry:
 
 
 define internal void @x.init(ptr %context) unnamed_addr {
-  ; Test atomic and volatile memory accesses.
+  ; Atomic accesses can run at compile time while volatile accesses cannot.
   store atomic i32 1, ptr @x.atomicNum seq_cst, align 4
   %x = load atomic i32, ptr @x.atomicNum seq_cst, align 4
   store i32 %x, ptr @x.atomicNum
+  %old = atomicrmw add ptr @x.atomicNum, i32 2 seq_cst
+  store i32 %old, ptr @x.atomicOld
+  %swap = cmpxchg ptr @x.atomicNum, i32 3, i32 7 seq_cst seq_cst
+  %swapped = extractvalue { i32, i1 } %swap, 1
+  store i1 %swapped, ptr @x.atomicSwapped
   %y = load volatile i32, ptr @x.volatileNum
   store volatile i32 %y, ptr @x.volatileNum
   ret void

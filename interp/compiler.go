@@ -9,6 +9,11 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+const (
+	atomicRMWOpcode llvm.Opcode = 1000 + iota
+	atomicCmpXchgOpcode
+)
+
 // A function is a compiled LLVM function, which means that interpreting it
 // avoids most CGo calls necessary. This is done in a separate step so the
 // result can be cached.
@@ -368,6 +373,25 @@ func (r *runner) compileFunction(llvmFn llvm.Value) *function {
 				// is detectable.
 				// This error is handled when actually trying to interpret this
 				// instruction (to not trigger on code that won't be executed).
+				switch {
+				case strings.Contains(llvmInst.String(), " atomicrmw "):
+					inst.opcode = atomicRMWOpcode
+					inst.name = atomicRMWOperation(llvmInst)
+					inst.operands = []value{
+						r.getValue(llvmInst.Operand(0)),
+						r.getValue(llvmInst.Operand(1)),
+					}
+				case strings.Contains(llvmInst.String(), " cmpxchg "):
+					inst.opcode = atomicCmpXchgOpcode
+					resultType := llvmInst.Type()
+					inst.operands = []value{
+						r.getValue(llvmInst.Operand(0)),
+						r.getValue(llvmInst.Operand(1)),
+						r.getValue(llvmInst.Operand(2)),
+						literalValue{r.targetData.TypeAllocSize(resultType)},
+						literalValue{r.targetData.ElementOffset(resultType, 1)},
+					}
+				}
 			}
 			if inst.opcode == llvm.PHI {
 				// PHI nodes need to be treated specially, see the comment in
@@ -379,6 +403,22 @@ func (r *runner) compileFunction(llvmFn llvm.Value) *function {
 		}
 	}
 	return fn
+}
+
+func atomicRMWOperation(inst llvm.Value) string {
+	// TODO: Use LLVMGetAtomicRMWBinOp after go-llvm exposes it.
+	// See https://llvm.org/doxygen/group__LLVMCCoreValueInstructionAtomicRMW.html.
+	ir := inst.String()
+	const prefix = "atomicrmw "
+	start := strings.Index(ir, prefix)
+	if start < 0 {
+		panic("invalid atomicrmw instruction: " + ir)
+	}
+	operation := ir[start+len(prefix):]
+	if end := strings.IndexByte(operation, ' '); end >= 0 {
+		operation = operation[:end]
+	}
+	return operation
 }
 
 // instructionNameMap maps from instruction opcodes to instruction names. This
