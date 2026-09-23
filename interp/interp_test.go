@@ -31,6 +31,36 @@ func TestInterp(t *testing.T) {
 	}
 }
 
+func TestExternalOperandsCache(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	buf, err := llvm.NewMemoryBufferFromFile("testdata/revert.ll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod, err := ctx.ParseIR(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mod.Dispose()
+
+	r := newRunner(mod, time.Minute, DefaultMaxInterpBlockEntries, false)
+	defer r.dispose()
+	fn := mod.NamedFunction("z.setArr")
+	first := r.getExternalOperands(fn)
+	second := r.getExternalOperands(fn)
+	if len(first) == 0 || &first[0] != &second[0] {
+		t.Fatal("function operands were not cached")
+	}
+	seen := make(map[llvm.Value]struct{}, len(first))
+	for _, operand := range first {
+		if _, ok := seen[operand]; ok {
+			t.Fatal("cached function operands contain duplicates")
+		}
+		seen[operand] = struct{}{}
+	}
+}
+
 func runTest(t *testing.T, pathPrefix string) {
 	// Read the input IR.
 	ctx := llvm.NewContext()

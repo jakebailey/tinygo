@@ -154,32 +154,12 @@ func (mv *memoryView) markExternal(llvmValue llvm.Value, mark uint8) error {
 			} else {
 				// This is a function. Go through all instructions and mark all
 				// objects in there.
-				for bb := llvmValue.FirstBasicBlock(); !bb.IsNil(); bb = llvm.NextBasicBlock(bb) {
-					for inst := bb.FirstInstruction(); !inst.IsNil(); inst = llvm.NextInstruction(inst) {
-						opcode := inst.InstructionOpcode()
-						if opcode == llvm.Call {
-							calledValue := inst.CalledValue()
-							if !calledValue.IsAFunction().IsNil() {
-								functionName := calledValue.Name()
-								if functionName == "llvm.dbg.value" || strings.HasPrefix(functionName, "llvm.lifetime.") {
-									continue
-								}
-							}
-						}
-						if opcode == llvm.Br || opcode == llvm.Switch {
-							// These don't affect memory. Skipped here because
-							// they also have a label as operand.
-							continue
-						}
-						numOperands := inst.OperandsCount()
-						for i := range numOperands {
-							// Using mark '2' (which means read/write access)
-							// because this might be a store instruction.
-							err := mv.markExternal(inst.Operand(i), 2)
-							if err != nil {
-								return err
-							}
-						}
+				for _, operand := range mv.r.getExternalOperands(llvmValue) {
+					// Using mark '2' (which means read/write access) because
+					// this might be a store instruction.
+					err := mv.markExternal(operand, 2)
+					if err != nil {
+						return err
 					}
 				}
 			}
@@ -236,6 +216,48 @@ func (mv *memoryView) markExternal(llvmValue llvm.Value, mark uint8) error {
 		}
 	}
 	return nil
+}
+
+func (r *runner) getExternalOperands(fn llvm.Value) []llvm.Value {
+	cacheable := fn.Name() != "runtime.initAll" && !strings.HasSuffix(fn.Name(), ".init.tmp")
+	if cacheable {
+		if operands, ok := r.externalOperands[fn]; ok {
+			return operands
+		}
+	}
+
+	var operands []llvm.Value
+	seen := make(map[llvm.Value]struct{})
+	for bb := fn.FirstBasicBlock(); !bb.IsNil(); bb = llvm.NextBasicBlock(bb) {
+		for inst := bb.FirstInstruction(); !inst.IsNil(); inst = llvm.NextInstruction(inst) {
+			opcode := inst.InstructionOpcode()
+			if opcode == llvm.Call {
+				calledValue := inst.CalledValue()
+				if !calledValue.IsAFunction().IsNil() {
+					functionName := calledValue.Name()
+					if functionName == "llvm.dbg.value" || strings.HasPrefix(functionName, "llvm.lifetime.") {
+						continue
+					}
+				}
+			}
+			if opcode == llvm.Br || opcode == llvm.Switch {
+				continue
+			}
+			for i := range inst.OperandsCount() {
+				operand := inst.Operand(i)
+				if _, ok := seen[operand]; ok {
+					continue
+				}
+				seen[operand] = struct{}{}
+				operands = append(operands, operand)
+			}
+		}
+	}
+
+	if cacheable {
+		r.externalOperands[fn] = operands
+	}
+	return operands
 }
 
 // hasExternalLoadOrStore returns true if this object has an external load or

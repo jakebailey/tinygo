@@ -22,16 +22,17 @@ type runner struct {
 	mod               llvm.Module
 	targetData        llvm.TargetData
 	builder           llvm.Builder
-	pointerSize       uint32                   // cached pointer size from the TargetData
-	dataPtrType       llvm.Type                // often used type so created in advance
-	uintptrType       llvm.Type                // equivalent to uintptr in Go
-	maxAlign          int                      // maximum alignment of an object, alignment of runtime.alloc() result
-	byteOrder         binary.ByteOrder         // big-endian or little-endian
-	debug             bool                     // log debug messages
-	pkgName           string                   // package name of the currently executing package
-	functionCache     map[llvm.Value]*function // cache of compiled functions
-	objects           []object                 // slice of objects in memory
-	globals           map[llvm.Value]int       // map from global to index in objects slice
+	pointerSize       uint32                      // cached pointer size from the TargetData
+	dataPtrType       llvm.Type                   // often used type so created in advance
+	uintptrType       llvm.Type                   // equivalent to uintptr in Go
+	maxAlign          int                         // maximum alignment of an object, alignment of runtime.alloc() result
+	byteOrder         binary.ByteOrder            // big-endian or little-endian
+	debug             bool                        // log debug messages
+	pkgName           string                      // package name of the currently executing package
+	functionCache     map[llvm.Value]*function    // cache of compiled functions
+	externalOperands  map[llvm.Value][]llvm.Value // cached operands of immutable functions
+	objects           []object                    // slice of objects in memory
+	globals           map[llvm.Value]int          // map from global to index in objects slice
 	start             time.Time
 	timeout           time.Duration
 	maxLoopIterations int
@@ -46,6 +47,7 @@ func newRunner(mod llvm.Module, timeout time.Duration, maxLoopIterations int, de
 		byteOrder:         llvmutil.ByteOrder(mod.Target()),
 		debug:             debug,
 		functionCache:     make(map[llvm.Value]*function),
+		externalOperands:  make(map[llvm.Value][]llvm.Value),
 		objects:           []object{{}},
 		globals:           make(map[llvm.Value]int),
 		start:             time.Now(),
