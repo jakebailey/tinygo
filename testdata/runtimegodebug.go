@@ -25,6 +25,11 @@ func main() {
 	printState()
 	syscall.Setenv("GODEBUG", "tarinsecurepath=1")
 	printState()
+	syscall.Unsetenv("GODEBUG")
+	printState()
+	syscall.Setenv("GODEBUG", "tarinsecurepath=1")
+	syscall.Clearenv()
+	printState()
 }
 
 func printState() {
