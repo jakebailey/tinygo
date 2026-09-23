@@ -565,13 +565,15 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 
 	// Add job that links and optimizes all packages together.
 	var mod llvm.Module
-	defer func() {
+	disposeModule := func() {
 		if !mod.IsNil() {
 			ctx := mod.Context()
 			mod.Dispose()
 			ctx.Dispose()
+			mod = llvm.Module{}
 		}
-	}()
+	}
+	defer disposeModule()
 	var stackSizeLoads []string
 	programJob := &compileJob{
 		description:  "link+optimize packages (LTO)",
@@ -736,8 +738,15 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 		result:       objfile,
 		run: func(*compileJob) error {
 			llvmBuf := llvm.WriteThinLTOBitcodeToMemoryBuffer(mod)
-			defer llvmBuf.Dispose()
-			return os.WriteFile(objfile, llvmBuf.Bytes(), 0666)
+			err := os.WriteFile(objfile, llvmBuf.Bytes(), 0666)
+			llvmBuf.Dispose()
+			if err != nil {
+				return err
+			}
+			if !config.Options.PrintStacks && !config.AutomaticStackSize() {
+				disposeModule()
+			}
+			return nil
 		},
 	}
 
