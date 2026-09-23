@@ -1332,6 +1332,39 @@ func TestRuntimeFatal(t *testing.T) {
 	}
 }
 
+func TestRuntimeGOROOT(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		environment []string
+		want        string
+	}{
+		{"startup environment", []string{"GOROOT=/startup"}, "/startup"},
+		{"empty startup environment", []string{"GOROOT="}, goenv.Get("GOROOT")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := optionsFromTarget(*testTarget, sema)
+			config, err := builder.NewConfig(&options)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			output := &bytes.Buffer{}
+			_, err = buildAndRun("testdata/runtimegoroot.go", config, output, nil, test.environment, time.Minute, func(cmd *exec.Cmd, _ builder.BuildResult) error {
+				return cmd.Run()
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := test.want + "\n" + test.want + "\n"
+			if output.String() != want {
+				t.Fatalf("unexpected output:\n%s\nwant:\n%s", output.String(), want)
+			}
+		})
+	}
+}
+
 // Test that the program can read stdin when the caller supplies it.
 func TestStdin(t *testing.T) {
 	t.Parallel()
