@@ -69,6 +69,27 @@ type BuildResult struct {
 	PackagePathMap map[string]string
 }
 
+const packageLinkGroupSize = 32
+
+func linkModules(dst, src llvm.Module) error {
+	// Keep the earlier definition when the standard library and runtime both
+	// provide a body for the same symbol.
+	for fn := src.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		if fn.IsDeclaration() {
+			continue
+		}
+		existing := dst.NamedFunction(fn.Name())
+		if existing.IsNil() || existing.IsDeclaration() {
+			continue
+		}
+		fn.SetLinkage(llvm.LinkOnceODRLinkage)
+	}
+	if err := llvm.LinkModules(dst, src); err != nil {
+		return fmt.Errorf("failed to link module: %w", err)
+	}
+	return nil
+}
+
 // packageAction is the struct that is serialized to JSON and hashed, to work as
 // a cache key of compiled packages. It should contain all the information that
 // goes into a compiled package to avoid using stale data.
@@ -560,31 +581,31 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 			// anything, it only links the bitcode files together.
 			ctx := llvm.NewContext()
 			mod = ctx.NewModule("main")
+			var group llvm.Module
+			groupSize := 0
 			for _, pkgJob := range packageJobs {
+				if group.IsNil() {
+					group = ctx.NewModule("packages")
+				}
 				pkgMod, err := ctx.ParseBitcodeFile(pkgJob.result)
 				if err != nil {
 					return fmt.Errorf("failed to load bitcode file: %w", err)
 				}
-				// Resolve duplicate function definitions before linking.
-				// This can happen when a newer Go version adds a function
-				// body in a standard library package that was previously
-				// just a declaration provided by //go:linkname from the
-				// runtime. In that case, keep the existing (runtime)
-				// definition by weakening the new one's linkage so the
-				// LLVM linker discards it in favor of the existing one.
-				for fn := pkgMod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
-					if fn.IsDeclaration() {
-						continue
-					}
-					existing := mod.NamedFunction(fn.Name())
-					if existing.IsNil() || existing.IsDeclaration() {
-						continue
-					}
-					fn.SetLinkage(llvm.LinkOnceODRLinkage)
+				if err := linkModules(group, pkgMod); err != nil {
+					return err
 				}
-				err = llvm.LinkModules(mod, pkgMod)
-				if err != nil {
-					return fmt.Errorf("failed to link module: %w", err)
+				groupSize++
+				if groupSize == packageLinkGroupSize {
+					if err := linkModules(mod, group); err != nil {
+						return err
+					}
+					group = llvm.Module{}
+					groupSize = 0
+				}
+			}
+			if !group.IsNil() {
+				if err := linkModules(mod, group); err != nil {
+					return err
 				}
 			}
 

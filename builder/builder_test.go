@@ -12,6 +12,33 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+func TestLinkModulesKeepsEarlierDefinition(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	dst := ctx.NewModule("dst")
+	defer dst.Dispose()
+	src := ctx.NewModule("src")
+
+	addReturningFunction := func(mod llvm.Module, value uint64) {
+		fnType := llvm.FunctionType(ctx.Int32Type(), nil, false)
+		fn := llvm.AddFunction(mod, "duplicate", fnType)
+		block := ctx.AddBasicBlock(fn, "entry")
+		builder := ctx.NewBuilder()
+		defer builder.Dispose()
+		builder.SetInsertPointAtEnd(block)
+		builder.CreateRet(llvm.ConstInt(ctx.Int32Type(), value, false))
+	}
+	addReturningFunction(dst, 1)
+	addReturningFunction(src, 2)
+
+	if err := linkModules(dst, src); err != nil {
+		t.Fatal(err)
+	}
+	if body := dst.NamedFunction("duplicate").String(); !strings.Contains(body, "ret i32 1") {
+		t.Fatalf("later definition replaced earlier definition:\n%s", body)
+	}
+}
+
 // Test whether the Clang generated "target-cpu" and "target-features"
 // attributes match the CPU and Features property in TinyGo target files.
 func TestClangAttributes(t *testing.T) {
