@@ -745,6 +745,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 			}
 			if !config.Options.PrintStacks && !config.AutomaticStackSize() {
 				disposeModule()
+				releaseUnusedMemory()
 			}
 			return nil
 		},
@@ -881,6 +882,9 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 				}
 				ldflags = append(ldflags, dependency.result)
 			}
+			clearJobGraph(job.dependencies)
+			job.dependencies = nil
+			releaseUnusedMemory()
 			ldflags = append(ldflags, "-mllvm", "-mcpu="+config.CPU())
 			ldflags = append(ldflags, "-mllvm", "-mattr="+config.Features()) // needed for MIPS softfloat
 			switch config.LinkerFlavor() {

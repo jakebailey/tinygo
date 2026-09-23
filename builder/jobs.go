@@ -39,6 +39,26 @@ func dummyCompileJob(result string) *compileJob {
 	}
 }
 
+func clearJobGraph(jobs []*compileJob) {
+	seen := make(map[*compileJob]struct{})
+	var clear func(*compileJob)
+	clear = func(job *compileJob) {
+		if _, ok := seen[job]; ok {
+			return
+		}
+		seen[job] = struct{}{}
+		dependencies := job.dependencies
+		job.dependencies = nil
+		job.run = nil
+		for _, dependency := range dependencies {
+			clear(dependency)
+		}
+	}
+	for _, job := range jobs {
+		clear(job)
+	}
+}
+
 // runJobs runs the indicated job and all its dependencies. For every job, all
 // the dependencies are run first. It returns the error of the first job that
 // fails.
