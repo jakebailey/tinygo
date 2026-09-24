@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -28,6 +29,7 @@ func TestLinkModulesKeepsEarlierDefinition(t *testing.T) {
 		builder.SetInsertPointAtEnd(block)
 		builder.CreateRet(llvm.ConstInt(ctx.Int32Type(), value, false))
 	}
+
 	addReturningFunction(dst, 1)
 	addReturningFunction(src, 2)
 
@@ -37,6 +39,36 @@ func TestLinkModulesKeepsEarlierDefinition(t *testing.T) {
 	if body := dst.NamedFunction("duplicate").String(); !strings.Contains(body, "ret i32 1") {
 		t.Fatalf("later definition replaced earlier definition:\n%s", body)
 	}
+}
+
+func TestWasmOptEnvironment(t *testing.T) {
+	t.Run("speed", func(t *testing.T) {
+		env := []string{"PATH=/bin"}
+		got := wasmOptEnvironment(env, 0)
+		if !slices.Equal(got, env) {
+			t.Fatalf("wasmOptEnvironment() = %q, want %q", got, env)
+		}
+	})
+
+	t.Run("size", func(t *testing.T) {
+		env := []string{"PATH=/bin"}
+		got := wasmOptEnvironment(env, 1)
+		want := []string{"PATH=/bin", "BINARYEN_CORES=1"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("wasmOptEnvironment() = %q, want %q", got, want)
+		}
+		if !slices.Equal(env, []string{"PATH=/bin"}) {
+			t.Fatalf("wasmOptEnvironment() modified input: %q", env)
+		}
+	})
+
+	t.Run("override", func(t *testing.T) {
+		env := []string{"PATH=/bin", "BINARYEN_CORES=4"}
+		got := wasmOptEnvironment(env, 2)
+		if !slices.Equal(got, env) {
+			t.Fatalf("wasmOptEnvironment() = %q, want %q", got, env)
+		}
+	})
 }
 
 // Test whether the Clang generated "target-cpu" and "target-features"

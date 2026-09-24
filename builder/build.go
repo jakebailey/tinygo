@@ -71,6 +71,18 @@ type BuildResult struct {
 
 const packageLinkGroupSize = 32
 
+func wasmOptEnvironment(env []string, sizeLevel int) []string {
+	if sizeLevel == 0 {
+		return env
+	}
+	for _, value := range env {
+		if strings.HasPrefix(value, "BINARYEN_CORES=") {
+			return env
+		}
+	}
+	return append(slices.Clone(env), "BINARYEN_CORES=1")
+}
+
 func linkModules(dst, src llvm.Module) error {
 	// Keep the earlier definition when the standard library and runtime both
 	// provide a body for the same symbol.
@@ -986,6 +998,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 					config.Options.PrintCommands(wasmopt, args...)
 				}
 				cmd := exec.Command(wasmopt, args...)
+				cmd.Env = wasmOptEnvironment(os.Environ(), sizeLevel)
 				cmd.Stdout = os.Stdout
 				cmd.Stderr = os.Stderr
 
