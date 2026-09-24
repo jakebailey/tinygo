@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -172,6 +173,26 @@ func TestBuild(t *testing.T) {
 			opts.Opt = "0"
 			runTestWithConfig("print.go", t, opts, nil, nil)
 		})
+
+		if !*testOnlyCurrentOS && !testing.Short() {
+			for _, opt := range []string{"0", "z"} {
+				t.Run("wasip1-fmt-scheduler=none-opt="+opt, func(t *testing.T) {
+					t.Parallel()
+					opts := optionsFromTarget("wasip1", sema)
+					opts.Opt = opt
+					opts.Scheduler = "none"
+					runTestWithConfig("wasi-fmt-noscheduler.go", t, opts, nil, nil)
+				})
+			}
+			t.Run("wasip1-multipart-scheduler=none-opt=2", func(t *testing.T) {
+				t.Parallel()
+				opts := optionsFromTarget("wasip1", sema)
+				opts.Opt = "2"
+				opts.GC = "precise"
+				opts.Scheduler = "none"
+				runTestWithConfig("wasi-multipart-noscheduler.go", t, opts, nil, nil)
+			})
+		}
 
 		t.Run("opt=0-gc=boehm", func(t *testing.T) {
 			t.Parallel()
@@ -761,6 +782,82 @@ var (
 	simavrLoadTextLogPattern  = regexp.MustCompile(`^Loaded [0-9]+ \.[A-Za-z0-9_]+( at address 0x[0-9a-fA-F]+)?$`)
 	simavrLoadBytesLogPattern = regexp.MustCompile(`^Loaded [0-9]+ bytes of [A-Za-z]+ data at (0x)?[0-9a-fA-F]+$`)
 )
+
+func TestWASINoSchedulerPoll(t *testing.T) {
+	if *testOnlyCurrentOS || testing.Short() {
+		t.Skip("WASI test needs a cross-target runner")
+	}
+	t.Parallel()
+	opts := optionsFromTarget("wasip1", sema)
+	opts.Opt = "0"
+	opts.Scheduler = "none"
+	config, err := builder.NewConfig(&opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"timeout", "", "testdata/wasi-poll-noscheduler.txt"},
+		{"ready", "x", "testdata/wasi-poll-noscheduler-ready.txt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader, writer, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			defer writer.Close()
+			if tc.input != "" {
+				if _, err := writer.Write([]byte(tc.input)); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			output := &bytes.Buffer{}
+			_, err = buildAndRun("testdata/wasi-poll-noscheduler.go", config, output, []string{tc.name}, nil, time.Minute, func(cmd *exec.Cmd, result builder.BuildResult) error {
+				cmd.Stdin = reader
+				return cmd.Run()
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkOutput(t, tc.want, output.Bytes())
+		})
+	}
+}
+
+func TestWASINoSchedulerSocketDeadline(t *testing.T) {
+	if *testOnlyCurrentOS || testing.Short() {
+		t.Skip("WASI test needs a cross-target runner")
+	}
+	t.Parallel()
+	opts := optionsFromTarget("wasip1", sema)
+	opts.Opt = "0"
+	opts.Scheduler = "none"
+	config, err := builder.NewConfig(&opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	_, err = buildAndRun("testdata/wasi-poll-noscheduler-socket.go", config, output, nil, nil, time.Minute, func(cmd *exec.Cmd, result builder.BuildResult) error {
+		cmd.Args = slices.Insert(cmd.Args, 2, "-S", "preview2=n", "-S", "tcplisten=127.0.0.1:0")
+		cmd.Stderr = stderr
+		return cmd.Run()
+	})
+	if err != nil {
+		if strings.Contains(stderr.String(), "the `-Spreview2=n` flag is no longer supported") {
+			t.Skip("Wasmtime no longer supports legacy Preview1 sockets")
+		}
+		t.Fatalf("%v\n%s", err, stderr.String())
+	}
+	checkOutput(t, "testdata/wasi-poll-noscheduler-socket.txt", output.Bytes())
+}
 
 // Test WebAssembly files for certain properties.
 func TestWebAssembly(t *testing.T) {

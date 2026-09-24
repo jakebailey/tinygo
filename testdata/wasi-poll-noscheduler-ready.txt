@@ -1,0 +1,2 @@
+ready: 1 <nil> x
+expired: 0 i/o timeout
