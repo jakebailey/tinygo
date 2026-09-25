@@ -233,11 +233,11 @@ func (c *compilerContext) getFunction(fn *ssa.Function) (llvm.Type, llvm.Value) 
 	case "runtime.hashmapGenericDelete":
 		llvmFn.AddAttributeAtIndex(2, c.ctx.CreateEnumAttribute(llvm.AttributeKindID(llvmutil.NoCaptureAttrName()), 0))
 	case "runtime.trackPointer":
-		// This function is necessary for tracking pointers on the stack in a
-		// portable way (see gc_stack_portable.go). Indicate to the optimizer
-		// that the only thing we'll do is read the pointer.
+		// The marker reads but does not retain the pointer.
 		llvmFn.AddAttributeAtIndex(1, c.ctx.CreateEnumAttribute(llvm.AttributeKindID(llvmutil.NoCaptureAttrName()), 0))
 		llvmFn.AddAttributeAtIndex(1, c.ctx.CreateEnumAttribute(llvm.AttributeKindID("readonly"), 0))
+		// Keep roots with different lifetimes separate. See https://llvm.org/docs/LangRef.html#nomerge.
+		llvmFn.AddFunctionAttr(c.ctx.CreateEnumAttribute(llvm.AttributeKindID("nomerge"), 0))
 	case "__mulsi3", "__divmodsi4", "__udivmodsi4":
 		if strings.Split(c.Triple, "-")[0] == "avr" {
 			// These functions are compiler-rt/libgcc functions that are

@@ -10,6 +10,7 @@ target triple = "wasm32-unknown-wasi"
 @main.a = hidden global { ptr, i32, i32 } zeroinitializer, align 4
 @main.b = hidden global [2 x ptr] zeroinitializer, align 4
 
+; Function Attrs: nomerge
 declare void @runtime.trackPointer(ptr nocapture readonly, ptr, ptr) #0
 
 ; Function Attrs: nounwind
@@ -47,14 +48,14 @@ divbyzero.next:                                   ; preds = %entry
   ret i32 %5
 
 divbyzero.throw:                                  ; preds = %entry
-  call void @runtime.divideByZeroPanic(ptr undef) #2
+  call void @runtime.divideByZeroPanic(ptr undef) #3
   br label %unwind.return
 
 unwind.return:                                    ; preds = %divbyzero.throw
   ret i32 undef
 }
 
-declare void @runtime.divideByZeroPanic(ptr) #0
+declare void @runtime.divideByZeroPanic(ptr) #2
 
 ; Function Attrs: nounwind
 define hidden i32 @main.divUint(i32 %x, i32 %y, ptr %context) unnamed_addr #1 {
@@ -67,7 +68,7 @@ divbyzero.next:                                   ; preds = %entry
   ret i32 %1
 
 divbyzero.throw:                                  ; preds = %entry
-  call void @runtime.divideByZeroPanic(ptr undef) #2
+  call void @runtime.divideByZeroPanic(ptr undef) #3
   br label %unwind.return
 
 unwind.return:                                    ; preds = %divbyzero.throw
@@ -89,7 +90,7 @@ divbyzero.next:                                   ; preds = %entry
   ret i32 %5
 
 divbyzero.throw:                                  ; preds = %entry
-  call void @runtime.divideByZeroPanic(ptr undef) #2
+  call void @runtime.divideByZeroPanic(ptr undef) #3
   br label %unwind.return
 
 unwind.return:                                    ; preds = %divbyzero.throw
@@ -107,7 +108,7 @@ divbyzero.next:                                   ; preds = %entry
   ret i32 %1
 
 divbyzero.throw:                                  ; preds = %entry
-  call void @runtime.divideByZeroPanic(ptr undef) #2
+  call void @runtime.divideByZeroPanic(ptr undef) #3
   br label %unwind.return
 
 unwind.return:                                    ; preds = %divbyzero.throw
@@ -222,6 +223,7 @@ entry:
   ret void
 }
 
-attributes #0 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #0 = { nomerge "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #1 = { nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
-attributes #2 = { nounwind }
+attributes #2 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #3 = { nounwind }

@@ -12,6 +12,7 @@ target triple = "wasm32-unknown-wasi"
 @"runtime/gc.layout:92-545555555555555555550500" = linkonce_odr unnamed_addr constant { i32, [12 x i8] } { i32 92, [12 x i8] c"TUUUUUUUUU\05\00" }
 @"runtime.hashmapType:[5]string:int" = linkonce_odr unnamed_addr constant { ptr, ptr, ptr } { ptr inttoptr (i32 69 to ptr), ptr inttoptr (i32 3 to ptr), ptr @"runtime/gc.layout:92-545555555555555555550500" }
 
+; Function Attrs: nomerge
 declare void @runtime.trackPointer(ptr nocapture readonly, ptr, ptr) #0
 
 ; Function Attrs: nounwind
@@ -31,7 +32,7 @@ entry:
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.value)
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.key)
   store %main.hasPadding %2, ptr %hashmap.key, align 4
-  %3 = call i1 @runtime.hashmapGenericGet(ptr %m, ptr nonnull %hashmap.key, ptr nonnull %hashmap.value, i32 4, ptr undef) #4
+  %3 = call i1 @runtime.hashmapGenericGet(ptr %m, ptr nonnull %hashmap.key, ptr nonnull %hashmap.value, i32 4, ptr undef) #5
   call void @llvm.lifetime.end.p0(ptr nonnull %hashmap.key)
   %4 = load i32, ptr %hashmap.value, align 4
   call void @llvm.lifetime.end.p0(ptr nonnull %hashmap.value)
@@ -41,7 +42,7 @@ entry:
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.lifetime.start.p0(ptr nocapture) #3
 
-declare i1 @runtime.hashmapGenericGet(ptr dereferenceable_or_null(52), ptr nocapture, ptr nocapture, i32, ptr) #0
+declare i1 @runtime.hashmapGenericGet(ptr dereferenceable_or_null(52), ptr nocapture, ptr nocapture, i32, ptr) #4
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.lifetime.end.p0(ptr nocapture) #3
@@ -58,13 +59,13 @@ entry:
   store i32 5, ptr %hashmap.value, align 4
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.key)
   store %main.hasPadding %2, ptr %hashmap.key, align 4
-  call void @runtime.hashmapGenericSet(ptr %m, ptr nonnull %hashmap.key, ptr nonnull %hashmap.value, ptr undef) #4
+  call void @runtime.hashmapGenericSet(ptr %m, ptr nonnull %hashmap.key, ptr nonnull %hashmap.value, ptr undef) #5
   call void @llvm.lifetime.end.p0(ptr nonnull %hashmap.key)
   call void @llvm.lifetime.end.p0(ptr nonnull %hashmap.value)
   ret void
 }
 
-declare void @runtime.hashmapGenericSet(ptr dereferenceable_or_null(52), ptr nocapture, ptr nocapture, ptr) #0
+declare void @runtime.hashmapGenericSet(ptr dereferenceable_or_null(52), ptr nocapture, ptr nocapture, ptr) #4
 
 ; Function Attrs: noinline nounwind
 define hidden i32 @main.testZeroArrayGet(ptr dereferenceable_or_null(52) %m, [2 x %main.hasPadding] %s, ptr %context) unnamed_addr #2 {
@@ -78,7 +79,7 @@ entry:
   %hashmap.key.repack1 = getelementptr inbounds nuw i8, ptr %hashmap.key, i32 12
   %s.elt2 = extractvalue [2 x %main.hasPadding] %s, 1
   store %main.hasPadding %s.elt2, ptr %hashmap.key.repack1, align 4
-  %0 = call i1 @runtime.hashmapGenericGet(ptr %m, ptr nonnull %hashmap.key, ptr nonnull %hashmap.value, i32 4, ptr undef) #4
+  %0 = call i1 @runtime.hashmapGenericGet(ptr %m, ptr nonnull %hashmap.key, ptr nonnull %hashmap.value, i32 4, ptr undef) #5
   call void @llvm.lifetime.end.p0(ptr nonnull %hashmap.key)
   %1 = load i32, ptr %hashmap.value, align 4
   call void @llvm.lifetime.end.p0(ptr nonnull %hashmap.value)
@@ -98,7 +99,7 @@ entry:
   %hashmap.key.repack1 = getelementptr inbounds nuw i8, ptr %hashmap.key, i32 12
   %s.elt2 = extractvalue [2 x %main.hasPadding] %s, 1
   store %main.hasPadding %s.elt2, ptr %hashmap.key.repack1, align 4
-  call void @runtime.hashmapGenericSet(ptr %m, ptr nonnull %hashmap.key, ptr nonnull %hashmap.value, ptr undef) #4
+  call void @runtime.hashmapGenericSet(ptr %m, ptr nonnull %hashmap.key, ptr nonnull %hashmap.value, ptr undef) #5
   call void @llvm.lifetime.end.p0(ptr nonnull %hashmap.key)
   call void @llvm.lifetime.end.p0(ptr nonnull %hashmap.value)
   ret void
@@ -108,23 +109,23 @@ entry:
 define hidden ptr @main.makeStringStructMap(ptr %context) unnamed_addr #2 {
 entry:
   %stackalloc = alloca i8, align 1
-  %0 = call ptr @runtime.hashmapMakeGeneric(i32 16, i32 4, i32 8, ptr nonnull @"runtime.hashmapType:struct{string; string}:int", ptr null, ptr nonnull @"hashmapKeyHash.struct{string; string}", ptr null, ptr nonnull @"hashmapKeyEqual.struct{string; string}", ptr undef) #4
-  call void @runtime.trackPointer(ptr %0, ptr nonnull %stackalloc, ptr undef) #4
+  %0 = call ptr @runtime.hashmapMakeGeneric(i32 16, i32 4, i32 8, ptr nonnull @"runtime.hashmapType:struct{string; string}:int", ptr null, ptr nonnull @"hashmapKeyHash.struct{string; string}", ptr null, ptr nonnull @"hashmapKeyEqual.struct{string; string}", ptr undef) #5
+  call void @runtime.trackPointer(ptr %0, ptr nonnull %stackalloc, ptr undef) #5
   ret ptr %0
 }
 
 ; Function Attrs: nounwind
 define linkonce_odr i32 @"hashmapKeyHash.struct{string; string}"(ptr %0, i32 %1, i32 %2, ptr %3) unnamed_addr #1 {
 entry:
-  %hash = call i32 @runtime.hashmapStringPtrHash(ptr %0, i32 8, i32 %2, ptr undef) #4
+  %hash = call i32 @runtime.hashmapStringPtrHash(ptr %0, i32 8, i32 %2, ptr undef) #5
   %4 = getelementptr inbounds nuw i8, ptr %0, i32 8
-  %hash1 = call i32 @runtime.hashmapStringPtrHash(ptr nonnull %4, i32 8, i32 %2, ptr undef) #4
+  %hash1 = call i32 @runtime.hashmapStringPtrHash(ptr nonnull %4, i32 8, i32 %2, ptr undef) #5
   %5 = mul i32 %hash, 31
   %6 = xor i32 %5, %hash1
   ret i32 %6
 }
 
-declare i32 @runtime.hashmapStringPtrHash(ptr, i32, i32, ptr) #0
+declare i32 @runtime.hashmapStringPtrHash(ptr, i32, i32, ptr) #4
 
 ; Function Attrs: nounwind
 define linkonce_odr i1 @"hashmapKeyEqual.struct{string; string}"(ptr %0, ptr %1, i32 %2, ptr %3) unnamed_addr #1 {
@@ -135,7 +136,7 @@ entry:
   %y.str.unpack = load ptr, ptr %1, align 4
   %y.str.elt7 = getelementptr inbounds nuw i8, ptr %1, i32 4
   %y.str.unpack8 = load i32, ptr %y.str.elt7, align 4
-  %eq = call i1 @runtime.stringEqual(ptr %x.str.unpack, i32 %x.str.unpack5, ptr %y.str.unpack, i32 %y.str.unpack8, ptr undef) #4
+  %eq = call i1 @runtime.stringEqual(ptr %x.str.unpack, i32 %x.str.unpack5, ptr %y.str.unpack, i32 %y.str.unpack8, ptr undef) #5
   %4 = getelementptr inbounds nuw i8, ptr %0, i32 8
   %5 = getelementptr inbounds nuw i8, ptr %1, i32 8
   %x.str1.unpack = load ptr, ptr %4, align 4
@@ -144,30 +145,30 @@ entry:
   %y.str2.unpack = load ptr, ptr %5, align 4
   %y.str2.elt13 = getelementptr inbounds nuw i8, ptr %1, i32 12
   %y.str2.unpack14 = load i32, ptr %y.str2.elt13, align 4
-  %eq3 = call i1 @runtime.stringEqual(ptr %x.str1.unpack, i32 %x.str1.unpack11, ptr %y.str2.unpack, i32 %y.str2.unpack14, ptr undef) #4
+  %eq3 = call i1 @runtime.stringEqual(ptr %x.str1.unpack, i32 %x.str1.unpack11, ptr %y.str2.unpack, i32 %y.str2.unpack14, ptr undef) #5
   %6 = and i1 %eq, %eq3
   ret i1 %6
 }
 
-declare i1 @runtime.stringEqual(ptr readonly, i32, ptr readonly, i32, ptr) #0
+declare i1 @runtime.stringEqual(ptr readonly, i32, ptr readonly, i32, ptr) #4
 
-declare ptr @runtime.hashmapMakeGeneric(i32, i32, i32, ptr, ptr, ptr, ptr, ptr, ptr) #0
+declare ptr @runtime.hashmapMakeGeneric(i32, i32, i32, ptr, ptr, ptr, ptr, ptr, ptr) #4
 
 ; Function Attrs: noinline nounwind
 define hidden ptr @main.makeShortStringArrayMap(ptr %context) unnamed_addr #2 {
 entry:
   %stackalloc = alloca i8, align 1
-  %0 = call ptr @runtime.hashmapMakeGeneric(i32 16, i32 4, i32 8, ptr nonnull @"runtime.hashmapType:[2]string:int", ptr null, ptr nonnull @"hashmapKeyHash.[2]string", ptr null, ptr nonnull @"hashmapKeyEqual.[2]string", ptr undef) #4
-  call void @runtime.trackPointer(ptr %0, ptr nonnull %stackalloc, ptr undef) #4
+  %0 = call ptr @runtime.hashmapMakeGeneric(i32 16, i32 4, i32 8, ptr nonnull @"runtime.hashmapType:[2]string:int", ptr null, ptr nonnull @"hashmapKeyHash.[2]string", ptr null, ptr nonnull @"hashmapKeyEqual.[2]string", ptr undef) #5
+  call void @runtime.trackPointer(ptr %0, ptr nonnull %stackalloc, ptr undef) #5
   ret ptr %0
 }
 
 ; Function Attrs: nounwind
 define linkonce_odr i32 @"hashmapKeyHash.[2]string"(ptr %0, i32 %1, i32 %2, ptr %3) unnamed_addr #1 {
 entry:
-  %hash = call i32 @runtime.hashmapStringPtrHash(ptr %0, i32 8, i32 %2, ptr undef) #4
+  %hash = call i32 @runtime.hashmapStringPtrHash(ptr %0, i32 8, i32 %2, ptr undef) #5
   %4 = getelementptr inbounds nuw i8, ptr %0, i32 8
-  %hash1 = call i32 @runtime.hashmapStringPtrHash(ptr nonnull %4, i32 8, i32 %2, ptr undef) #4
+  %hash1 = call i32 @runtime.hashmapStringPtrHash(ptr nonnull %4, i32 8, i32 %2, ptr undef) #5
   %5 = mul i32 %hash, 31
   %6 = xor i32 %5, %hash1
   ret i32 %6
@@ -182,7 +183,7 @@ entry:
   %y.str.unpack = load ptr, ptr %1, align 4
   %y.str.elt7 = getelementptr inbounds nuw i8, ptr %1, i32 4
   %y.str.unpack8 = load i32, ptr %y.str.elt7, align 4
-  %eq = call i1 @runtime.stringEqual(ptr %x.str.unpack, i32 %x.str.unpack5, ptr %y.str.unpack, i32 %y.str.unpack8, ptr undef) #4
+  %eq = call i1 @runtime.stringEqual(ptr %x.str.unpack, i32 %x.str.unpack5, ptr %y.str.unpack, i32 %y.str.unpack8, ptr undef) #5
   %4 = getelementptr inbounds nuw i8, ptr %0, i32 8
   %5 = getelementptr inbounds nuw i8, ptr %1, i32 8
   %x.str1.unpack = load ptr, ptr %4, align 4
@@ -191,7 +192,7 @@ entry:
   %y.str2.unpack = load ptr, ptr %5, align 4
   %y.str2.elt13 = getelementptr inbounds nuw i8, ptr %1, i32 12
   %y.str2.unpack14 = load i32, ptr %y.str2.elt13, align 4
-  %eq3 = call i1 @runtime.stringEqual(ptr %x.str1.unpack, i32 %x.str1.unpack11, ptr %y.str2.unpack, i32 %y.str2.unpack14, ptr undef) #4
+  %eq3 = call i1 @runtime.stringEqual(ptr %x.str1.unpack, i32 %x.str1.unpack11, ptr %y.str2.unpack, i32 %y.str2.unpack14, ptr undef) #5
   %6 = and i1 %eq, %eq3
   ret i1 %6
 }
@@ -200,8 +201,8 @@ entry:
 define hidden ptr @main.makeLongStringArrayMap(ptr %context) unnamed_addr #2 {
 entry:
   %stackalloc = alloca i8, align 1
-  %0 = call ptr @runtime.hashmapMakeGeneric(i32 40, i32 4, i32 8, ptr nonnull @"runtime.hashmapType:[5]string:int", ptr null, ptr nonnull @"hashmapKeyHash.[5]string", ptr null, ptr nonnull @"hashmapKeyEqual.[5]string", ptr undef) #4
-  call void @runtime.trackPointer(ptr %0, ptr nonnull %stackalloc, ptr undef) #4
+  %0 = call ptr @runtime.hashmapMakeGeneric(i32 40, i32 4, i32 8, ptr nonnull @"runtime.hashmapType:[5]string:int", ptr null, ptr nonnull @"hashmapKeyHash.[5]string", ptr null, ptr nonnull @"hashmapKeyEqual.[5]string", ptr undef) #5
+  call void @runtime.trackPointer(ptr %0, ptr nonnull %stackalloc, ptr undef) #5
   ret ptr %0
 }
 
@@ -214,7 +215,7 @@ hash.array.body:                                  ; preds = %hash.array.body, %e
   %i = phi i32 [ 0, %entry ], [ %7, %hash.array.body ]
   %hash.acc = phi i32 [ 0, %entry ], [ %6, %hash.array.body ]
   %4 = getelementptr inbounds nuw %runtime._string, ptr %0, i32 %i
-  %hash = call i32 @runtime.hashmapStringPtrHash(ptr %4, i32 8, i32 %2, ptr undef) #4
+  %hash = call i32 @runtime.hashmapStringPtrHash(ptr %4, i32 8, i32 %2, ptr undef) #5
   %5 = mul i32 %hash.acc, 31
   %6 = xor i32 %5, %hash
   %7 = add nuw nsw i32 %i, 1
@@ -240,7 +241,7 @@ eq.array.body:                                    ; preds = %eq.array.body, %ent
   %y.str.unpack = load ptr, ptr %5, align 4
   %y.str.elt4 = getelementptr inbounds nuw i8, ptr %5, i32 4
   %y.str.unpack5 = load i32, ptr %y.str.elt4, align 4
-  %eq = call i1 @runtime.stringEqual(ptr %x.str.unpack, i32 %x.str.unpack2, ptr %y.str.unpack, i32 %y.str.unpack5, ptr undef) #4
+  %eq = call i1 @runtime.stringEqual(ptr %x.str.unpack, i32 %x.str.unpack2, ptr %y.str.unpack, i32 %y.str.unpack5, ptr undef) #5
   %6 = add i32 %i, 1
   %7 = icmp ult i32 %6, 5
   %.not7 = and i1 %7, %eq
@@ -256,8 +257,9 @@ entry:
   ret void
 }
 
-attributes #0 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #0 = { nomerge "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #1 = { nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #2 = { noinline nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #3 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
-attributes #4 = { nounwind }
+attributes #4 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #5 = { nounwind }

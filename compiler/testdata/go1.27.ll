@@ -21,6 +21,7 @@ target triple = "wasm32-unknown-wasi"
 @"reflect/types.type:named:main.onlyGenericMethod" = linkonce_odr constant { i8, i16, ptr, ptr, ptr, [23 x i8] } { i8 122, i16 0, ptr @"reflect/types.type:pointer:named:main.onlyGenericMethod", ptr @"reflect/types.type:struct:{}", ptr @"reflect/types.type.pkgpath:main", [23 x i8] c"main.onlyGenericMethod\00" }, align 4
 @"reflect/types.type:pointer:named:main.onlyGenericMethod" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:named:main.onlyGenericMethod" }, align 4
 
+; Function Attrs: nomerge
 declare void @runtime.trackPointer(ptr nocapture readonly, ptr, ptr) #0
 
 ; Function Attrs: nounwind
@@ -62,6 +63,6 @@ entry:
   ret i32 %ret
 }
 
-attributes #0 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #0 = { nomerge "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #1 = { nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #2 = { nounwind }

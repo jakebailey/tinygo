@@ -1402,6 +1402,11 @@ func TestTest(t *testing.T) {
 				defer out.Close()
 
 				opts := targ.opts
+				if opts.Target == "wasm" || opts.Target == "wasip1" || opts.GOOS == "wasip1" {
+					// TestDeepSuspendWithDefer keeps 512 GC and Asyncify frames live.
+					// See tests/testing/pass/pass_wasm_test.go.
+					opts.StackSize = 128 * 1024
+				}
 				passed, err := Test("github.com/tinygo-org/tinygo/tests/testing/pass", out, out, &opts, "")
 				if err != nil {
 					t.Errorf("test error: %v", err)

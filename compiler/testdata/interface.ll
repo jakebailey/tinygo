@@ -19,6 +19,7 @@ target triple = "wasm32-unknown-wasi"
 @"reflect/types.type:interface:{String:func:{}{basic:string}}" = linkonce_odr constant { i8, ptr, { i32, [1 x ptr] } } { i8 84, ptr @"reflect/types.type:pointer:interface:{String:func:{}{basic:string}}", { i32, [1 x ptr] } { i32 1, [1 x ptr] [ptr @"reflect/types.signature:String:func:{}{basic:string}"] } }, align 4
 @"reflect/types.typeid:basic:int" = external constant i8
 
+; Function Attrs: nomerge
 declare void @runtime.trackPointer(ptr nocapture readonly, ptr, ptr) #0
 
 ; Function Attrs: nounwind
@@ -31,8 +32,8 @@ entry:
 define hidden %runtime._interface @main.simpleType(ptr %context) unnamed_addr #1 {
 entry:
   %stackalloc = alloca i8, align 1
-  call void @runtime.trackPointer(ptr nonnull @"reflect/types.type:basic:int", ptr nonnull %stackalloc, ptr undef) #6
-  call void @runtime.trackPointer(ptr null, ptr nonnull %stackalloc, ptr undef) #6
+  call void @runtime.trackPointer(ptr nonnull @"reflect/types.type:basic:int", ptr nonnull %stackalloc, ptr undef) #7
+  call void @runtime.trackPointer(ptr null, ptr nonnull %stackalloc, ptr undef) #7
   ret %runtime._interface { ptr @"reflect/types.type:basic:int", ptr null }
 }
 
@@ -40,8 +41,8 @@ entry:
 define hidden %runtime._interface @main.pointerType(ptr %context) unnamed_addr #1 {
 entry:
   %stackalloc = alloca i8, align 1
-  call void @runtime.trackPointer(ptr nonnull @"reflect/types.type:pointer:basic:int", ptr nonnull %stackalloc, ptr undef) #6
-  call void @runtime.trackPointer(ptr null, ptr nonnull %stackalloc, ptr undef) #6
+  call void @runtime.trackPointer(ptr nonnull @"reflect/types.type:pointer:basic:int", ptr nonnull %stackalloc, ptr undef) #7
+  call void @runtime.trackPointer(ptr null, ptr nonnull %stackalloc, ptr undef) #7
   ret %runtime._interface { ptr @"reflect/types.type:pointer:basic:int", ptr null }
 }
 
@@ -49,8 +50,8 @@ entry:
 define hidden %runtime._interface @main.interfaceType(ptr %context) unnamed_addr #1 {
 entry:
   %stackalloc = alloca i8, align 1
-  call void @runtime.trackPointer(ptr nonnull @"reflect/types.type:pointer:named:error", ptr nonnull %stackalloc, ptr undef) #6
-  call void @runtime.trackPointer(ptr null, ptr nonnull %stackalloc, ptr undef) #6
+  call void @runtime.trackPointer(ptr nonnull @"reflect/types.type:pointer:named:error", ptr nonnull %stackalloc, ptr undef) #7
+  call void @runtime.trackPointer(ptr null, ptr nonnull %stackalloc, ptr undef) #7
   ret %runtime._interface { ptr @"reflect/types.type:pointer:named:error", ptr null }
 }
 
@@ -58,15 +59,15 @@ entry:
 define hidden %runtime._interface @main.anonymousInterfaceType(ptr %context) unnamed_addr #1 {
 entry:
   %stackalloc = alloca i8, align 1
-  call void @runtime.trackPointer(ptr nonnull @"reflect/types.type:pointer:interface:{String:func:{}{basic:string}}", ptr nonnull %stackalloc, ptr undef) #6
-  call void @runtime.trackPointer(ptr null, ptr nonnull %stackalloc, ptr undef) #6
+  call void @runtime.trackPointer(ptr nonnull @"reflect/types.type:pointer:interface:{String:func:{}{basic:string}}", ptr nonnull %stackalloc, ptr undef) #7
+  call void @runtime.trackPointer(ptr null, ptr nonnull %stackalloc, ptr undef) #7
   ret %runtime._interface { ptr @"reflect/types.type:pointer:interface:{String:func:{}{basic:string}}", ptr null }
 }
 
 ; Function Attrs: nounwind
 define hidden i1 @main.isInt(ptr %itf.typecode, ptr %itf.value, ptr %context) unnamed_addr #1 {
 entry:
-  %typecode = call i1 @runtime.typeAssert(ptr %itf.typecode, ptr nonnull @"reflect/types.typeid:basic:int", ptr undef) #6
+  %typecode = call i1 @runtime.typeAssert(ptr %itf.typecode, ptr nonnull @"reflect/types.typeid:basic:int", ptr undef) #7
   br i1 %typecode, label %typeassert.ok, label %typeassert.next
 
 typeassert.next:                                  ; preds = %typeassert.ok, %entry
@@ -76,12 +77,12 @@ typeassert.ok:                                    ; preds = %entry
   br label %typeassert.next
 }
 
-declare i1 @runtime.typeAssert(ptr, ptr dereferenceable_or_null(1), ptr) #0
+declare i1 @runtime.typeAssert(ptr, ptr dereferenceable_or_null(1), ptr) #2
 
 ; Function Attrs: nounwind
 define hidden i1 @main.isError(ptr %itf.typecode, ptr %itf.value, ptr %context) unnamed_addr #1 {
 entry:
-  %0 = call i1 @"interface:{Error:func:{}{basic:string}}.$typeassert"(ptr %itf.typecode) #6
+  %0 = call i1 @"interface:{Error:func:{}{basic:string}}.$typeassert"(ptr %itf.typecode) #7
   br i1 %0, label %typeassert.ok, label %typeassert.next
 
 typeassert.next:                                  ; preds = %typeassert.ok, %entry
@@ -91,12 +92,12 @@ typeassert.ok:                                    ; preds = %entry
   br label %typeassert.next
 }
 
-declare i1 @"interface:{Error:func:{}{basic:string}}.$typeassert"(ptr) #2
+declare i1 @"interface:{Error:func:{}{basic:string}}.$typeassert"(ptr) #3
 
 ; Function Attrs: nounwind
 define hidden i1 @main.isStringer(ptr %itf.typecode, ptr %itf.value, ptr %context) unnamed_addr #1 {
 entry:
-  %0 = call i1 @"interface:{String:func:{}{basic:string}}.$typeassert"(ptr %itf.typecode) #6
+  %0 = call i1 @"interface:{String:func:{}{basic:string}}.$typeassert"(ptr %itf.typecode) #7
   br i1 %0, label %typeassert.ok, label %typeassert.next
 
 typeassert.next:                                  ; preds = %typeassert.ok, %entry
@@ -106,33 +107,34 @@ typeassert.ok:                                    ; preds = %entry
   br label %typeassert.next
 }
 
-declare i1 @"interface:{String:func:{}{basic:string}}.$typeassert"(ptr) #3
+declare i1 @"interface:{String:func:{}{basic:string}}.$typeassert"(ptr) #4
 
 ; Function Attrs: nounwind
 define hidden i8 @main.callFooMethod(ptr %itf.typecode, ptr %itf.value, ptr %context) unnamed_addr #1 {
 entry:
-  %0 = call i8 @"interface:{String:func:{}{basic:string},main.foo:func:{basic:int}{basic:uint8}}.foo$invoke"(ptr %itf.value, i32 3, ptr %itf.typecode, ptr undef) #6
+  %0 = call i8 @"interface:{String:func:{}{basic:string},main.foo:func:{basic:int}{basic:uint8}}.foo$invoke"(ptr %itf.value, i32 3, ptr %itf.typecode, ptr undef) #7
   ret i8 %0
 }
 
-declare i8 @"interface:{String:func:{}{basic:string},main.foo:func:{basic:int}{basic:uint8}}.foo$invoke"(ptr, i32, ptr, ptr) #4
+declare i8 @"interface:{String:func:{}{basic:string},main.foo:func:{basic:int}{basic:uint8}}.foo$invoke"(ptr, i32, ptr, ptr) #5
 
 ; Function Attrs: nounwind
 define hidden %runtime._string @main.callErrorMethod(ptr %itf.typecode, ptr %itf.value, ptr %context) unnamed_addr #1 {
 entry:
   %stackalloc = alloca i8, align 1
-  %0 = call %runtime._string @"interface:{Error:func:{}{basic:string}}.Error$invoke"(ptr %itf.value, ptr %itf.typecode, ptr undef) #6
+  %0 = call %runtime._string @"interface:{Error:func:{}{basic:string}}.Error$invoke"(ptr %itf.value, ptr %itf.typecode, ptr undef) #7
   %1 = extractvalue %runtime._string %0, 0
-  call void @runtime.trackPointer(ptr %1, ptr nonnull %stackalloc, ptr undef) #6
+  call void @runtime.trackPointer(ptr %1, ptr nonnull %stackalloc, ptr undef) #7
   ret %runtime._string %0
 }
 
-declare %runtime._string @"interface:{Error:func:{}{basic:string}}.Error$invoke"(ptr, ptr, ptr) #5
+declare %runtime._string @"interface:{Error:func:{}{basic:string}}.Error$invoke"(ptr, ptr, ptr) #6
 
-attributes #0 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #0 = { nomerge "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #1 = { nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
-attributes #2 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" "tinygo-methods"="reflect/methods.Error:func:{}{basic:string}" }
-attributes #3 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" "tinygo-methods"="reflect/methods.String:func:{}{basic:string}" }
-attributes #4 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" "tinygo-invoke"="main.$methods.foo:func:{basic:int}{basic:uint8}" "tinygo-methods"="reflect/methods.String:func:{}{basic:string}; main.$methods.foo:func:{basic:int}{basic:uint8}" }
-attributes #5 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" "tinygo-invoke"="reflect/methods.Error:func:{}{basic:string}" "tinygo-methods"="reflect/methods.Error:func:{}{basic:string}" }
-attributes #6 = { nounwind }
+attributes #2 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #3 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" "tinygo-methods"="reflect/methods.Error:func:{}{basic:string}" }
+attributes #4 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" "tinygo-methods"="reflect/methods.String:func:{}{basic:string}" }
+attributes #5 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" "tinygo-invoke"="main.$methods.foo:func:{basic:int}{basic:uint8}" "tinygo-methods"="reflect/methods.String:func:{}{basic:string}; main.$methods.foo:func:{basic:int}{basic:uint8}" }
+attributes #6 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" "tinygo-invoke"="reflect/methods.Error:func:{}{basic:string}" "tinygo-methods"="reflect/methods.Error:func:{}{basic:string}" }
+attributes #7 = { nounwind }

@@ -4,6 +4,8 @@ target triple = "x86_64--linux"
 @main.phiNodesResultA = global i8 0
 @main.phiNodesResultB = global i8 0
 
+declare void @runtime.trackPointer(ptr, ptr)
+
 define void @runtime.initAll() {
   call void @main.init()
   ret void
@@ -21,6 +23,7 @@ entry:
 for.loop:
   %a = phi i8 [ 1, %entry ], [ %b, %for.loop ]
   %b = phi i8 [ 3, %entry ], [ %a, %for.loop ]
+  call void @runtime.trackPointer(ptr @main.phiNodesResultA, ptr null)
   %icmp = icmp eq i8 %a, 3
   br i1 %icmp, label %for.done, label %for.loop
 

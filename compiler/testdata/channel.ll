@@ -12,7 +12,8 @@ target triple = "wasm32-unknown-wasi"
 @"reflect/types.type:basic:string" = linkonce_odr constant { i8, ptr } { i8 81, ptr @"reflect/types.type:pointer:basic:string" }, align 4
 @"reflect/types.type:pointer:basic:string" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:basic:string" }, align 4
 
-declare void @runtime.trackPointer(ptr readonly captures(none), ptr, ptr) #0
+; Function Attrs: nomerge
+declare void @runtime.trackPointer(ptr nocapture readonly, ptr, ptr) #0
 
 ; Function Attrs: nounwind
 define hidden void @main.init(ptr %context) unnamed_addr #1 {
@@ -28,7 +29,7 @@ entry:
   call void @llvm.lifetime.start.p0(ptr nonnull %chan.value)
   store i32 3, ptr %chan.value, align 4
   call void @llvm.lifetime.start.p0(ptr nonnull %chan.op)
-  call void @runtime.chanSend(ptr %ch, ptr nonnull %chan.value, ptr nonnull %chan.op, ptr undef) #3
+  call void @runtime.chanSend(ptr %ch, ptr nonnull %chan.value, ptr nonnull %chan.op, ptr undef) #4
   call void @llvm.lifetime.end.p0(ptr nonnull %chan.op)
   call void @llvm.lifetime.end.p0(ptr nonnull %chan.value)
   ret void
@@ -37,7 +38,7 @@ entry:
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.lifetime.start.p0(ptr nocapture) #2
 
-declare void @runtime.chanSend(ptr dereferenceable_or_null(40), ptr, ptr dereferenceable_or_null(16), ptr) #0
+declare void @runtime.chanSend(ptr dereferenceable_or_null(40), ptr, ptr dereferenceable_or_null(16), ptr) #3
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.lifetime.end.p0(ptr nocapture) #2
@@ -49,20 +50,20 @@ entry:
   %chan.value = alloca i32, align 4
   call void @llvm.lifetime.start.p0(ptr nonnull %chan.value)
   call void @llvm.lifetime.start.p0(ptr nonnull %chan.op)
-  %0 = call i1 @runtime.chanRecv(ptr %ch, ptr nonnull %chan.value, ptr nonnull %chan.op, ptr undef) #3
+  %0 = call i1 @runtime.chanRecv(ptr %ch, ptr nonnull %chan.value, ptr nonnull %chan.op, ptr undef) #4
   call void @llvm.lifetime.end.p0(ptr nonnull %chan.value)
   call void @llvm.lifetime.end.p0(ptr nonnull %chan.op)
   ret void
 }
 
-declare i1 @runtime.chanRecv(ptr dereferenceable_or_null(40), ptr, ptr dereferenceable_or_null(16), ptr) #0
+declare i1 @runtime.chanRecv(ptr dereferenceable_or_null(40), ptr, ptr dereferenceable_or_null(16), ptr) #3
 
 ; Function Attrs: nounwind
 define hidden void @main.chanZeroSend(ptr dereferenceable_or_null(40) %ch, ptr %context) unnamed_addr #1 {
 entry:
   %chan.op = alloca %runtime.channelOp, align 8
   call void @llvm.lifetime.start.p0(ptr nonnull %chan.op)
-  call void @runtime.chanSend(ptr %ch, ptr null, ptr nonnull %chan.op, ptr undef) #3
+  call void @runtime.chanSend(ptr %ch, ptr null, ptr nonnull %chan.op, ptr undef) #4
   call void @llvm.lifetime.end.p0(ptr nonnull %chan.op)
   ret void
 }
@@ -72,7 +73,7 @@ define hidden void @main.chanZeroRecv(ptr dereferenceable_or_null(40) %ch, ptr %
 entry:
   %chan.op = alloca %runtime.channelOp, align 8
   call void @llvm.lifetime.start.p0(ptr nonnull %chan.op)
-  %0 = call i1 @runtime.chanRecv(ptr %ch, ptr null, ptr nonnull %chan.op, ptr undef) #3
+  %0 = call i1 @runtime.chanRecv(ptr %ch, ptr null, ptr nonnull %chan.op, ptr undef) #4
   call void @llvm.lifetime.end.p0(ptr nonnull %chan.op)
   ret void
 }
@@ -91,7 +92,7 @@ entry:
   store ptr %ch2, ptr %0, align 4
   %.repack3 = getelementptr inbounds nuw i8, ptr %select.states.alloca, i32 12
   store ptr null, ptr %.repack3, align 4
-  %select.result = call { i32, i1 } @runtime.chanSelect(ptr undef, ptr nonnull %select.states.alloca, i32 2, i32 2, ptr null, i32 0, i32 0, ptr undef) #3
+  %select.result = call { i32, i1 } @runtime.chanSelect(ptr undef, ptr nonnull %select.states.alloca, i32 2, i32 2, ptr null, i32 0, i32 0, ptr undef) #4
   call void @llvm.lifetime.end.p0(ptr nonnull %select.states.alloca)
   %1 = extractvalue { i32, i1 } %select.result, 0
   %2 = icmp eq i32 %1, 0
@@ -108,14 +109,14 @@ select.body:                                      ; preds = %select.next
   br label %select.done
 }
 
-declare { i32, i1 } @runtime.chanSelect(ptr, ptr, i32, i32, ptr, i32, i32, ptr) #0
+declare { i32, i1 } @runtime.chanSelect(ptr, ptr, i32, i32, ptr, i32, i32, ptr) #3
 
 ; Function Attrs: nounwind
 define hidden i1 @main.selectNonBlockingSend(ptr dereferenceable_or_null(40) %ch, i32 %value, ptr %context) unnamed_addr #1 {
 entry:
   %select.send.value = alloca i32, align 4
   store i32 %value, ptr %select.send.value, align 4
-  %select.sent = call i1 @runtime.chanTrySend(ptr %ch, ptr nonnull %select.send.value, ptr undef) #3
+  %select.sent = call i1 @runtime.chanTrySend(ptr %ch, ptr nonnull %select.send.value, ptr undef) #4
   br i1 %select.sent, label %select.body, label %select.next
 
 select.body:                                      ; preds = %entry
@@ -125,7 +126,7 @@ select.next:                                      ; preds = %entry
   ret i1 false
 }
 
-declare i1 @runtime.chanTrySend(ptr dereferenceable_or_null(40), ptr, ptr) #0
+declare i1 @runtime.chanTrySend(ptr dereferenceable_or_null(40), ptr, ptr) #3
 
 ; Function Attrs: nounwind
 define hidden { i32, i1, i1 } @main.selectNonBlockingRecv(ptr dereferenceable_or_null(40) %ch, ptr %context) unnamed_addr #1 {
@@ -133,9 +134,9 @@ entry:
   %select.recvbuf = alloca i32, align 4
   %stackalloc = alloca i8, align 1
   call void @llvm.lifetime.start.p0(ptr nonnull %select.recvbuf)
-  %select.recv = call { i1, i1 } @runtime.chanTryRecv(ptr %ch, ptr nonnull %select.recvbuf, ptr undef) #3
+  %select.recv = call { i1, i1 } @runtime.chanTryRecv(ptr %ch, ptr nonnull %select.recvbuf, ptr undef) #4
   %select.received = extractvalue { i1, i1 } %select.recv, 0
-  call void @runtime.trackPointer(ptr nonnull %select.recvbuf, ptr nonnull %stackalloc, ptr undef) #3
+  call void @runtime.trackPointer(ptr nonnull %select.recvbuf, ptr nonnull %stackalloc, ptr undef) #4
   br i1 %select.received, label %select.body, label %select.next
 
 select.body:                                      ; preds = %entry
@@ -150,12 +151,12 @@ select.next:                                      ; preds = %entry
   ret { i32, i1, i1 } zeroinitializer
 }
 
-declare { i1, i1 } @runtime.chanTryRecv(ptr dereferenceable_or_null(40), ptr, ptr) #0
+declare { i1, i1 } @runtime.chanTryRecv(ptr dereferenceable_or_null(40), ptr, ptr) #3
 
 ; Function Attrs: nounwind
 define hidden i1 @main.selectNonBlockingZeroSend(ptr dereferenceable_or_null(40) %ch, ptr %context) unnamed_addr #1 {
 entry:
-  %select.sent = call i1 @runtime.chanTrySend(ptr %ch, ptr null, ptr undef) #3
+  %select.sent = call i1 @runtime.chanTrySend(ptr %ch, ptr null, ptr undef) #4
   br i1 %select.sent, label %select.body, label %select.next
 
 select.body:                                      ; preds = %entry
@@ -168,7 +169,7 @@ select.next:                                      ; preds = %entry
 ; Function Attrs: nounwind
 define hidden { i1, i1 } @main.selectNonBlockingZeroRecv(ptr dereferenceable_or_null(40) %ch, ptr %context) unnamed_addr #1 {
 entry:
-  %select.recv = call { i1, i1 } @runtime.chanTryRecv(ptr %ch, ptr null, ptr undef) #3
+  %select.recv = call { i1, i1 } @runtime.chanTryRecv(ptr %ch, ptr null, ptr undef) #4
   %select.received = extractvalue { i1, i1 } %select.recv, 0
   br i1 %select.received, label %select.body, label %select.next
 
@@ -199,10 +200,10 @@ entry:
   %.repack6 = getelementptr inbounds nuw i8, ptr %select.states.alloca, i32 12
   store ptr null, ptr %.repack6, align 4
   call void @llvm.lifetime.start.p0(ptr nonnull %select.block.alloca)
-  %select.result = call { i32, i1 } @runtime.chanSelect(ptr nonnull %select.recvbuf.alloca, ptr nonnull %select.states.alloca, i32 2, i32 2, ptr nonnull %select.block.alloca, i32 2, i32 2, ptr undef) #3
+  %select.result = call { i32, i1 } @runtime.chanSelect(ptr nonnull %select.recvbuf.alloca, ptr nonnull %select.states.alloca, i32 2, i32 2, ptr nonnull %select.block.alloca, i32 2, i32 2, ptr undef) #4
   call void @llvm.lifetime.end.p0(ptr nonnull %select.block.alloca)
   call void @llvm.lifetime.end.p0(ptr nonnull %select.states.alloca)
-  call void @runtime.trackPointer(ptr nonnull %select.recvbuf.alloca, ptr nonnull %stackalloc, ptr undef) #3
+  call void @runtime.trackPointer(ptr nonnull %select.recvbuf.alloca, ptr nonnull %stackalloc, ptr undef) #4
   %1 = extractvalue { i32, i1 } %select.result, 0
   %2 = icmp eq i32 %1, 0
   br i1 %2, label %select.body, label %select.next
@@ -226,18 +227,19 @@ select.body1:                                     ; preds = %select.next
   ret { i32, i1 } %9
 
 select.next2:                                     ; preds = %select.next
-  call void @runtime.trackPointer(ptr nonnull @"reflect/types.type:basic:string", ptr nonnull %stackalloc, ptr undef) #3
-  call void @runtime.trackPointer(ptr nonnull @"main$pack", ptr nonnull %stackalloc, ptr undef) #3
-  call void @runtime._panic(ptr nonnull @"reflect/types.type:basic:string", ptr nonnull @"main$pack", ptr undef) #3
+  call void @runtime.trackPointer(ptr nonnull @"reflect/types.type:basic:string", ptr nonnull %stackalloc, ptr undef) #4
+  call void @runtime.trackPointer(ptr nonnull @"main$pack", ptr nonnull %stackalloc, ptr undef) #4
+  call void @runtime._panic(ptr nonnull @"reflect/types.type:basic:string", ptr nonnull @"main$pack", ptr undef) #4
   br label %unwind.return
 
-unwind.return:
+unwind.return:                                    ; preds = %select.next2
   ret { i32, i1 } undef
 }
 
-declare void @runtime._panic(ptr, ptr, ptr) #0
+declare void @runtime._panic(ptr, ptr, ptr) #3
 
-attributes #0 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #0 = { nomerge "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #1 = { nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #2 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
-attributes #3 = { nounwind }
+attributes #3 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #4 = { nounwind }

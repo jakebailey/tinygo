@@ -12,6 +12,7 @@ target triple = "wasm32-unknown-unknown-wasm"
 declare void @runtime.trackPointer(ptr nocapture readonly)
 
 declare noalias nonnull ptr @runtime.alloc(i32, ptr)
+declare void @collectingConsumer(ptr)
 
 declare i32 @runtime.gcGlobalRootCount()
 
@@ -62,6 +63,60 @@ define ptr @noAllocatingFunction() {
   ret ptr %ptr
 }
 
+define void @liveDuringCall() {
+entry:
+  %ptr = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  call void @runtime.trackPointer(ptr %ptr)
+  call void @collectingConsumer(ptr %ptr)
+  call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  ret void
+}
+
+define void @parameterUsedDuringCall(ptr %owner) {
+entry:
+  call void @collectingConsumer(ptr %owner)
+  call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  ret void
+}
+
+define i8 @deadBeforeCollect() {
+entry:
+  %ptr = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %ptr)
+  %byte = load i8, ptr %ptr
+  call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  ret i8 %byte
+}
+
+define i8 @aggregateAfterCollect() {
+entry:
+  %ptr = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  call void @runtime.trackPointer(ptr %ptr)
+  %aggregate = insertvalue {ptr, i32} poison, ptr %ptr, 0
+  call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  %extracted = extractvalue {ptr, i32} %aggregate, 0
+  %byte = load i8, ptr %extracted
+  call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  ret i8 %byte
+}
+
+define void @parameterThroughAggregate(ptr %owner) {
+entry:
+  %aggregate = insertvalue {ptr, i32} poison, ptr %owner, 0
+  call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  %extracted = extractvalue {ptr, i32} %aggregate, 0
+  store i8 1, ptr %extracted
+  ret void
+}
+
+define {ptr, i32} @returnedInAggregate() {
+entry:
+  %ptr = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  call void @runtime.trackPointer(ptr %ptr)
+  %result = insertvalue {ptr, i32} poison, ptr %ptr, 0
+  ret {ptr, i32} %result
+}
+
 define ptr @fibNext(ptr %x, ptr %y) {
   %x.val = load i8, ptr %x
   %y.val = load i8, ptr %y
@@ -70,6 +125,88 @@ define ptr @fibNext(ptr %x, ptr %y) {
   call void @runtime.trackPointer(ptr %out.alloc)
   store i8 %out.val, ptr %out.alloc
   ret ptr %out.alloc
+}
+
+define void @argumentAcrossAlloc(ptr %owner) {
+entry:
+  %field = getelementptr i8, ptr %owner, i32 4
+  %new = tail call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  store i8 1, ptr %field
+  ret void
+}
+
+define void @argumentAcrossTwoAllocs(ptr %owner) {
+entry:
+  %field = getelementptr i8, ptr %owner, i32 4
+  call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  store i8 1, ptr %field
+  ret void
+}
+
+define void @argumentDeadBeforeAlloc(ptr %owner) {
+entry:
+  %field = getelementptr i8, ptr %owner, i32 4
+  call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  store i8 1, ptr %field
+  call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  ret void
+}
+
+define void @deadArgument(ptr %dead) {
+entry:
+  %byte = load i8, ptr %dead
+  %new = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  store i8 %byte, ptr %new
+  ret void
+}
+
+define void @indirectCall(ptr %owner, ptr %fn) {
+entry:
+  %field = getelementptr i8, ptr %owner, i32 4
+  tail call void %fn()
+  %byte = load i8, ptr %field
+  store i8 %byte, ptr @someGlobal
+  ret void
+}
+
+define void @deadCallerArgument(ptr %dead) {
+entry:
+  tail call void @allocAndSave(ptr %dead)
+  ret void
+}
+
+declare void @"internal/task.Pause"()
+
+define ptr @liveRootAfterPause() {
+entry:
+  %ptr = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %ptr)
+  call void @"internal/task.Pause"()
+  store i8 1, ptr %ptr
+  ret ptr %ptr
+}
+
+define void @deadRootAtPause() {
+entry:
+  %ptr = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %ptr)
+  store i8 1, ptr %ptr
+  call void @"internal/task.Pause"()
+  ret void
+}
+
+define void @loopRootAtPause() {
+entry:
+  br label %loop
+loop:
+  %ptr = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %ptr)
+  call void @"internal/task.Pause"()
+  %again = load i1, ptr @someGlobal
+  br i1 %again, label %loop, label %end
+end:
+  ret void
 }
 
 define ptr @allocLoop() {

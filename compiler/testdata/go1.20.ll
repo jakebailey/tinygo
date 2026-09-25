@@ -5,6 +5,7 @@ target triple = "wasm32-unknown-wasi"
 
 %runtime._string = type { ptr, i32 }
 
+; Function Attrs: nomerge
 declare void @runtime.trackPointer(ptr nocapture readonly, ptr, ptr) #0
 
 ; Function Attrs: nounwind
@@ -17,7 +18,7 @@ entry:
 define hidden ptr @main.unsafeSliceData(ptr %s.data, i32 %s.len, i32 %s.cap, ptr %context) unnamed_addr #1 {
 entry:
   %stackalloc = alloca i8, align 1
-  call void @runtime.trackPointer(ptr %s.data, ptr nonnull %stackalloc, ptr undef) #2
+  call void @runtime.trackPointer(ptr %s.data, ptr nonnull %stackalloc, ptr undef) #3
   ret ptr %s.data
 }
 
@@ -36,27 +37,28 @@ unsafe.String.next:                               ; preds = %entry
   %5 = zext nneg i16 %len to i32
   %6 = insertvalue %runtime._string undef, ptr %ptr, 0
   %7 = insertvalue %runtime._string %6, i32 %5, 1
-  call void @runtime.trackPointer(ptr %ptr, ptr nonnull %stackalloc, ptr undef) #2
+  call void @runtime.trackPointer(ptr %ptr, ptr nonnull %stackalloc, ptr undef) #3
   ret %runtime._string %7
 
 unsafe.String.throw:                              ; preds = %entry
-  call void @runtime.unsafeSlicePanic(ptr undef) #2
+  call void @runtime.unsafeSlicePanic(ptr undef) #3
   br label %unwind.return
 
 unwind.return:                                    ; preds = %unsafe.String.throw
   ret %runtime._string undef
 }
 
-declare void @runtime.unsafeSlicePanic(ptr) #0
+declare void @runtime.unsafeSlicePanic(ptr) #2
 
 ; Function Attrs: nounwind
 define hidden ptr @main.unsafeStringData(ptr readonly %s.data, i32 %s.len, ptr %context) unnamed_addr #1 {
 entry:
   %stackalloc = alloca i8, align 1
-  call void @runtime.trackPointer(ptr %s.data, ptr nonnull %stackalloc, ptr undef) #2
+  call void @runtime.trackPointer(ptr %s.data, ptr nonnull %stackalloc, ptr undef) #3
   ret ptr %s.data
 }
 
-attributes #0 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #0 = { nomerge "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #1 = { nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
-attributes #2 = { nounwind }
+attributes #2 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #3 = { nounwind }

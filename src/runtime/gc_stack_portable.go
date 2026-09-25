@@ -54,9 +54,7 @@ func markStack() {
 	markRoots(sysSP, stackTop)
 }
 
-// trackPointer is a stub function call inserted by the compiler during IR
-// construction. Calls to it are later replaced with regular stack bookkeeping
-// code.
+// trackPointer calls are later replaced with stack bookkeeping code.
 func trackPointer(ptr, alloca unsafe.Pointer)
 
 // swapStackChain swaps the stack chain.

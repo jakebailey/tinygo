@@ -81,3 +81,11 @@ func makeSlice() {
 func makeInterface(v complex128) interface{} {
 	return v // always stored in an allocation
 }
+
+func loopPointer(count int) *byte {
+	value := new(byte)
+	for range count {
+		value = new(byte)
+	}
+	return value
+}

@@ -25,6 +25,7 @@ target triple = "wasm32-unknown-wasi"
 @"reflect/types.type:basic:complex128" = linkonce_odr constant { i8, ptr } { i8 80, ptr @"reflect/types.type:pointer:basic:complex128" }, align 4
 @"reflect/types.type:pointer:basic:complex128" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:basic:complex128" }, align 4
 
+; Function Attrs: nomerge
 declare void @runtime.trackPointer(ptr nocapture readonly, ptr, ptr) #0
 
 ; Function Attrs: nounwind
@@ -142,7 +143,30 @@ entry:
   ret %runtime._interface %1
 }
 
-attributes #0 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+; Function Attrs: nounwind
+define hidden ptr @main.loopPointer(i32 %count, ptr %context) unnamed_addr #1 {
+entry:
+  %stackalloc = alloca i8, align 1
+  %new = call align 1 dereferenceable(1) ptr @runtime.alloc(i32 1, ptr nonnull inttoptr (i32 3 to ptr), ptr undef) #3
+  call void @runtime.trackPointer(ptr nonnull %new, ptr nonnull %stackalloc, ptr undef) #3
+  %0 = icmp sgt i32 %count, 0
+  br i1 %0, label %rangeint.body, label %rangeint.done
+
+rangeint.body:                                    ; preds = %rangeint.body, %entry
+  %1 = phi i32 [ 0, %entry ], [ %2, %rangeint.body ]
+  %new1 = call align 1 dereferenceable(1) ptr @runtime.alloc(i32 1, ptr nonnull inttoptr (i32 3 to ptr), ptr undef) #3
+  call void @runtime.trackPointer(ptr nonnull %new1, ptr nonnull %stackalloc, ptr undef) #3
+  %2 = add i32 %1, 1
+  %3 = icmp slt i32 %2, %count
+  br i1 %3, label %rangeint.body, label %rangeint.done
+
+rangeint.done:                                    ; preds = %rangeint.body, %entry
+  %4 = phi ptr [ %new, %entry ], [ %new1, %rangeint.body ]
+  call void @runtime.trackPointer(ptr nonnull %4, ptr nonnull %stackalloc, ptr undef) #3
+  ret ptr %4
+}
+
+attributes #0 = { nomerge "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #1 = { nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #2 = { allockind("alloc,zeroed") allocsize(0) "alloc-family"="runtime.alloc" "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #3 = { nounwind }

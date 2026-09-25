@@ -1,6 +1,7 @@
 package transform
 
 import (
+	"slices"
 	"strings"
 
 	"tinygo.org/x/go-llvm"
@@ -11,8 +12,8 @@ import (
 // https://github.com/llvm/llvm-project/blob/94ebcfd16dac67486bae624f74e1c5c789448bae/llvm/include/llvm/Support/ModRef.h#L87
 const shiftExcludeArgMem = 2
 
-// MakeGCStackSlots converts all calls to runtime.trackPointer to explicit
-// stores to stack slots that are scannable by the GC.
+// MakeGCStackSlots converts pointer tracking calls to explicit stores to stack
+// slots that are scannable by the GC.
 func MakeGCStackSlots(mod llvm.Module) bool {
 	hasGlobalRoots := makeGCGlobalRoots(mod)
 
@@ -33,8 +34,11 @@ func MakeGCStackSlots(mod llvm.Module) bool {
 		return hasGlobalRoots
 	}
 
-	trackPointer := mod.NamedFunction("runtime.trackPointer")
-	if trackPointer.IsNil() || trackPointer.FirstUse().IsNil() {
+	trackPointers := map[llvm.Value]struct{}{}
+	if fn := mod.NamedFunction("runtime.trackPointer"); !fn.IsNil() {
+		trackPointers[fn] = struct{}{}
+	}
+	if len(trackPointers) == 0 {
 		return hasGlobalRoots
 	}
 
@@ -60,8 +64,8 @@ func MakeGCStackSlots(mod llvm.Module) bool {
 			// This is not an external function.
 			continue
 		}
-		if fn == trackPointer {
-			// Manually exclude trackPointer.
+		if _, ok := trackPointers[fn]; ok {
+			// Manually exclude pointer tracking calls.
 			continue
 		}
 
@@ -108,8 +112,10 @@ func MakeGCStackSlots(mod llvm.Module) bool {
 		// This may be reached in a weird scenario where we call runtime.alloc but the garbage collector is unreachable.
 		// This can be accomplished by allocating 0 bytes.
 		// There is no point in tracking anything.
-		for _, use := range getUses(trackPointer) {
-			use.EraseFromParentAsInstruction()
+		for trackPointer := range trackPointers {
+			for _, use := range getUses(trackPointer) {
+				use.EraseFromParentAsInstruction()
+			}
 		}
 		return hasGlobalRoots
 	}
@@ -117,37 +123,31 @@ func MakeGCStackSlots(mod llvm.Module) bool {
 	stackChainStartType := stackChainStart.GlobalValueType()
 	stackChainStart.SetInitializer(llvm.ConstNull(stackChainStartType))
 
-	// Iterate until runtime.trackPointer has no uses left.
-	for use := trackPointer.FirstUse(); !use.IsNil(); use = trackPointer.FirstUse() {
-		// Pick the first use of runtime.trackPointer.
-		call := use.User()
-		if call.IsACallInst().IsNil() {
-			panic("expected runtime.trackPointer use to be a call")
+	parameterRoots := make(map[llvm.Value]map[llvm.Value][]llvm.Value)
+	for fn := mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		if _, ok := trackFuncs[fn]; ok && !fn.FirstBasicBlock().IsNil() {
+			if roots := gcParameterRoots(fn, trackFuncs, trackPointers); len(roots) != 0 {
+				parameterRoots[fn] = roots
+			}
 		}
+	}
 
-		// Pick the parent function.
-		fn := call.InstructionParent().Parent()
-
+	for fn := mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
 		if _, ok := trackFuncs[fn]; !ok {
-			// This function nor any of the functions it calls (recursively)
-			// allocate anything from the heap, so it will not trigger a garbage
-			// collection cycle. Thus, it does not need to track local pointer
-			// values.
-			// This is a useful optimization but not as big as you might guess,
-			// as described above (it avoids stack objects for ~12% of
-			// functions).
-			call.EraseFromParentAsInstruction()
+			continue
+		}
+		if fn.FirstBasicBlock().IsNil() {
 			continue
 		}
 
-		// Find all calls to runtime.trackPointer in this function.
+		// Find all pointer tracking calls in this function.
 		var calls []llvm.Value
 		var returns []llvm.Value
 		for bb := fn.FirstBasicBlock(); !bb.IsNil(); bb = llvm.NextBasicBlock(bb) {
 			for inst := bb.FirstInstruction(); !inst.IsNil(); inst = llvm.NextInstruction(inst) {
 				switch inst.InstructionOpcode() {
 				case llvm.Call:
-					if inst.CalledValue() == trackPointer {
+					if _, ok := trackPointers[inst.CalledValue()]; ok {
 						calls = append(calls, inst)
 					}
 				case llvm.Ret:
@@ -212,9 +212,37 @@ func MakeGCStackSlots(mod llvm.Module) bool {
 			pointers = append(pointers, ptr)
 		}
 
-		if len(pointers) == 0 {
+		deadRootCalls := make(map[llvm.Value][]llvm.Value)
+		seenPointers := make(map[llvm.Value]struct{})
+		livePointers := pointers[:0]
+		for _, ptr := range pointers {
+			if _, seen := seenPointers[ptr]; seen {
+				continue
+			}
+			seenPointers[ptr] = struct{}{}
+			live, deadCalls := gcRootDeadCalls(ptr, trackFuncs, trackPointers)
+			if !live && !gcRootReturned(ptr) {
+				continue
+			}
+			livePointers = append(livePointers, ptr)
+			deadRootCalls[ptr] = deadCalls
+		}
+		pointers = livePointers
+
+		roots := parameterRoots[fn]
+		if len(pointers) == 0 && len(roots) == 0 {
 			// This function does not need to keep track of stack pointers.
 			continue
+		}
+
+		var rootedParameters []llvm.Value
+		for param := fn.FirstParam(); !param.IsNil(); param = llvm.NextParam(param) {
+			for _, values := range roots {
+				if slices.Contains(values, param) {
+					rootedParameters = append(rootedParameters, param)
+					break
+				}
+			}
 		}
 
 		// Determine the type of the required stack slot.
@@ -224,6 +252,9 @@ func MakeGCStackSlots(mod llvm.Module) bool {
 		}
 		for _, ptr := range pointers {
 			fields = append(fields, ptr.Type())
+		}
+		for range rootedParameters {
+			fields = append(fields, llvm.PointerType(ctx.Int8Type(), 0))
 		}
 		stackObjectType := ctx.StructType(fields, false)
 
@@ -245,8 +276,15 @@ func MakeGCStackSlots(mod llvm.Module) bool {
 		builder.CreateStore(parent, gep)
 		builder.CreateStore(stackObject, stackChainStart)
 
+		for i, param := range rootedParameters {
+			slot := builder.CreateGEP(stackObjectType, stackObject, []llvm.Value{
+				llvm.ConstInt(ctx.Int32Type(), 0, false),
+				llvm.ConstInt(ctx.Int32Type(), uint64(2+len(pointers)+i), false),
+			}, "")
+			builder.CreateStore(param, slot)
+		}
+
 		// Do a store to the stack object after each new pointer that is created.
-		pointerStores := make(map[llvm.Value]struct{})
 		for i, ptr := range pointers {
 			// Insert the store after the pointer value is created.
 			insertionPoint := llvm.NextInstruction(ptr)
@@ -264,8 +302,59 @@ func MakeGCStackSlots(mod llvm.Module) bool {
 			}, "")
 
 			// Store the pointer into the stack slot.
-			store := builder.CreateStore(ptr, gep)
-			pointerStores[store] = struct{}{}
+			builder.CreateStore(ptr, gep)
+		}
+
+		for i, ptr := range pointers {
+			for _, call := range deadRootCalls[ptr] {
+				builder.SetInsertPointBefore(call)
+				slot := builder.CreateGEP(stackObjectType, stackObject, []llvm.Value{
+					llvm.ConstInt(ctx.Int32Type(), 0, false),
+					llvm.ConstInt(ctx.Int32Type(), uint64(2+i), false),
+				}, "")
+				builder.CreateStore(llvm.ConstNull(ptr.Type()), slot)
+			}
+		}
+
+		for bb := fn.FirstBasicBlock(); !bb.IsNil(); bb = llvm.NextBasicBlock(bb) {
+			for call := bb.FirstInstruction(); !call.IsNil(); call = llvm.NextInstruction(call) {
+				if call.IsACallInst().IsNil() || call.CalledValue().Name() != "internal/task.Pause" {
+					continue
+				}
+				builder.SetInsertPointBefore(call)
+				for i, ptr := range pointers {
+					if gcRootLiveAfter(ptr, call) {
+						continue
+					}
+					slot := builder.CreateGEP(stackObjectType, stackObject, []llvm.Value{
+						llvm.ConstInt(ctx.Int32Type(), 0, false),
+						llvm.ConstInt(ctx.Int32Type(), uint64(2+i), false),
+					}, "")
+					builder.CreateStore(llvm.ConstNull(ptr.Type()), slot)
+				}
+			}
+		}
+
+		for bb := fn.FirstBasicBlock(); !bb.IsNil(); bb = llvm.NextBasicBlock(bb) {
+			for inst := bb.FirstInstruction(); !inst.IsNil(); inst = llvm.NextInstruction(inst) {
+				if inst.IsACallInst().IsNil() || !gcCanCollect(inst, trackFuncs, trackPointers) {
+					continue
+				}
+				builder.SetInsertPointBefore(inst)
+				for i, param := range rootedParameters {
+					if slices.Contains(roots[inst], param) {
+						continue
+					}
+					slot := builder.CreateGEP(stackObjectType, stackObject, []llvm.Value{
+						llvm.ConstInt(ctx.Int32Type(), 0, false),
+						llvm.ConstInt(ctx.Int32Type(), uint64(2+len(pointers)+i), false),
+					}, "")
+					builder.CreateStore(llvm.ConstNull(param.Type()), slot)
+				}
+				if inst.IsTailCall() {
+					inst.SetTailCall(false)
+				}
+			}
 		}
 
 		// Make sure this stack object is popped from the linked list of stack
@@ -283,6 +372,12 @@ func MakeGCStackSlots(mod llvm.Module) bool {
 			}
 			builder.SetInsertPointBefore(ret)
 			builder.CreateStore(parent, stackChainStart)
+		}
+	}
+
+	for trackPointer := range trackPointers {
+		for _, call := range getUses(trackPointer) {
+			call.EraseFromParentAsInstruction()
 		}
 	}
 

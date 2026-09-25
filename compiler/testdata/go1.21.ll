@@ -5,6 +5,7 @@ target triple = "wasm32-unknown-wasi"
 
 %runtime._string = type { ptr, i32 }
 
+; Function Attrs: nomerge
 declare void @runtime.trackPointer(ptr nocapture readonly, ptr, ptr) #0
 
 ; Function Attrs: nounwind
@@ -94,14 +95,14 @@ entry:
   %2 = insertvalue %runtime._string zeroinitializer, ptr %b.data, 0
   %3 = insertvalue %runtime._string %2, i32 %b.len, 1
   %stackalloc = alloca i8, align 1
-  %4 = call i1 @runtime.stringLess(ptr %a.data, i32 %a.len, ptr %b.data, i32 %b.len, ptr undef) #4
+  %4 = call i1 @runtime.stringLess(ptr %a.data, i32 %a.len, ptr %b.data, i32 %b.len, ptr undef) #5
   %5 = select i1 %4, %runtime._string %1, %runtime._string %3
   %6 = select i1 %4, ptr %a.data, ptr %b.data
-  call void @runtime.trackPointer(ptr %6, ptr nonnull %stackalloc, ptr undef) #4
+  call void @runtime.trackPointer(ptr %6, ptr nonnull %stackalloc, ptr undef) #5
   ret %runtime._string %5
 }
 
-declare i1 @runtime.stringLess(ptr readonly, i32, ptr readonly, i32, ptr) #0
+declare i1 @runtime.stringLess(ptr readonly, i32, ptr readonly, i32, ptr) #3
 
 ; Function Attrs: nounwind
 define hidden i32 @main.maxInt(i32 %a, i32 %b, ptr %context) unnamed_addr #1 {
@@ -141,10 +142,10 @@ entry:
   %2 = insertvalue %runtime._string zeroinitializer, ptr %b.data, 0
   %3 = insertvalue %runtime._string %2, i32 %b.len, 1
   %stackalloc = alloca i8, align 1
-  %4 = call i1 @runtime.stringLess(ptr %b.data, i32 %b.len, ptr %a.data, i32 %a.len, ptr undef) #4
+  %4 = call i1 @runtime.stringLess(ptr %b.data, i32 %b.len, ptr %a.data, i32 %a.len, ptr undef) #5
   %5 = select i1 %4, %runtime._string %1, %runtime._string %3
   %6 = select i1 %4, ptr %a.data, ptr %b.data
-  call void @runtime.trackPointer(ptr %6, ptr nonnull %stackalloc, ptr undef) #4
+  call void @runtime.trackPointer(ptr %6, ptr nonnull %stackalloc, ptr undef) #5
   ret %runtime._string %5
 }
 
@@ -157,7 +158,7 @@ entry:
 }
 
 ; Function Attrs: nocallback nofree nounwind willreturn memory(argmem: write)
-declare void @llvm.memset.p0.i32(ptr nocapture writeonly, i8, i32, i1 immarg) #3
+declare void @llvm.memset.p0.i32(ptr nocapture writeonly, i8, i32, i1 immarg) #4
 
 ; Function Attrs: nounwind
 define hidden void @main.clearZeroSizedSlice(ptr %s.data, i32 %s.len, i32 %s.cap, ptr %context) unnamed_addr #1 {
@@ -168,14 +169,15 @@ entry:
 ; Function Attrs: nounwind
 define hidden void @main.clearMap(ptr dereferenceable_or_null(52) %m, ptr %context) unnamed_addr #1 {
 entry:
-  call void @runtime.hashmapClear(ptr %m, ptr undef) #4
+  call void @runtime.hashmapClear(ptr %m, ptr undef) #5
   ret void
 }
 
-declare void @runtime.hashmapClear(ptr dereferenceable_or_null(52), ptr) #0
+declare void @runtime.hashmapClear(ptr dereferenceable_or_null(52), ptr) #3
 
-attributes #0 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #0 = { nomerge "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #1 = { nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #2 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }
-attributes #3 = { nocallback nofree nounwind willreturn memory(argmem: write) }
-attributes #4 = { nounwind }
+attributes #3 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
+attributes #4 = { nocallback nofree nounwind willreturn memory(argmem: write) }
+attributes #5 = { nounwind }

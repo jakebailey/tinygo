@@ -14,6 +14,8 @@ declare void @runtime.trackPointer(ptr nocapture readonly)
 
 declare noalias nonnull ptr @runtime.alloc(i32, ptr)
 
+declare void @collectingConsumer(ptr)
+
 define i32 @runtime.gcGlobalRootCount() {
 entry:
   ret i32 4
@@ -56,25 +58,17 @@ define ptr @needsStackSlots() {
 }
 
 define ptr @needsStackSlots2() {
-  %gc.stackobject = alloca { ptr, i32, ptr, ptr, ptr, ptr, ptr }, align 8
-  store { ptr, i32, ptr, ptr, ptr, ptr, ptr } { ptr null, i32 5, ptr null, ptr null, ptr null, ptr null, ptr null }, ptr %gc.stackobject, align 4
+  %gc.stackobject = alloca { ptr, i32, ptr }, align 8
+  store { ptr, i32, ptr } { ptr null, i32 1, ptr null }, ptr %gc.stackobject, align 4
   %1 = load ptr, ptr @runtime.stackChainStart, align 4
-  %2 = getelementptr { ptr, i32, ptr, ptr, ptr, ptr, ptr }, ptr %gc.stackobject, i32 0, i32 0
+  %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
   store ptr %1, ptr %2, align 4
   store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
   %ptr1 = call ptr @getPointer()
-  %3 = getelementptr { ptr, i32, ptr, ptr, ptr, ptr, ptr }, ptr %gc.stackobject, i32 0, i32 4
+  %3 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
   store ptr %ptr1, ptr %3, align 4
-  %4 = getelementptr { ptr, i32, ptr, ptr, ptr, ptr, ptr }, ptr %gc.stackobject, i32 0, i32 3
-  store ptr %ptr1, ptr %4, align 4
-  %5 = getelementptr { ptr, i32, ptr, ptr, ptr, ptr, ptr }, ptr %gc.stackobject, i32 0, i32 2
-  store ptr %ptr1, ptr %5, align 4
   %ptr2 = getelementptr i8, ptr @someGlobal, i32 0
-  %6 = getelementptr { ptr, i32, ptr, ptr, ptr, ptr, ptr }, ptr %gc.stackobject, i32 0, i32 5
-  store ptr %ptr2, ptr %6, align 4
   %unused = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
-  %7 = getelementptr { ptr, i32, ptr, ptr, ptr, ptr, ptr }, ptr %gc.stackobject, i32 0, i32 6
-  store ptr %unused, ptr %7, align 4
   store ptr %1, ptr @runtime.stackChainStart, align 4
   ret ptr %ptr1
 }
@@ -82,6 +76,107 @@ define ptr @needsStackSlots2() {
 define ptr @noAllocatingFunction() {
   %ptr = call ptr @getPointer()
   ret ptr %ptr
+}
+
+define void @liveDuringCall() {
+entry:
+  %gc.stackobject = alloca { ptr, i32, ptr }, align 8
+  store { ptr, i32, ptr } { ptr null, i32 1, ptr null }, ptr %gc.stackobject, align 4
+  %0 = load ptr, ptr @runtime.stackChainStart, align 4
+  %1 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
+  store ptr %0, ptr %1, align 4
+  store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
+  %ptr = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr %ptr, ptr %2, align 4
+  call void @collectingConsumer(ptr %ptr)
+  %3 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr null, ptr %3, align 4
+  %4 = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  store ptr %0, ptr @runtime.stackChainStart, align 4
+  ret void
+}
+
+define void @parameterUsedDuringCall(ptr %owner) {
+entry:
+  %gc.stackobject = alloca { ptr, i32, ptr }, align 8
+  store { ptr, i32, ptr } { ptr null, i32 1, ptr null }, ptr %gc.stackobject, align 4
+  %0 = load ptr, ptr @runtime.stackChainStart, align 4
+  %1 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
+  store ptr %0, ptr %1, align 4
+  store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
+  %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr %owner, ptr %2, align 4
+  call void @collectingConsumer(ptr %owner)
+  %3 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr null, ptr %3, align 4
+  %4 = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  store ptr %0, ptr @runtime.stackChainStart, align 4
+  ret void
+}
+
+define i8 @deadBeforeCollect() {
+entry:
+  %ptr = call ptr @getPointer()
+  %byte = load i8, ptr %ptr, align 1
+  %0 = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  ret i8 %byte
+}
+
+define i8 @aggregateAfterCollect() {
+entry:
+  %gc.stackobject = alloca { ptr, i32, ptr }, align 8
+  store { ptr, i32, ptr } { ptr null, i32 1, ptr null }, ptr %gc.stackobject, align 4
+  %0 = load ptr, ptr @runtime.stackChainStart, align 4
+  %1 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
+  store ptr %0, ptr %1, align 4
+  store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
+  %ptr = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr %ptr, ptr %2, align 4
+  %aggregate = insertvalue { ptr, i32 } poison, ptr %ptr, 0
+  %3 = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  %extracted = extractvalue { ptr, i32 } %aggregate, 0
+  %byte = load i8, ptr %extracted, align 1
+  %4 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr null, ptr %4, align 4
+  %5 = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  store ptr %0, ptr @runtime.stackChainStart, align 4
+  ret i8 %byte
+}
+
+define void @parameterThroughAggregate(ptr %owner) {
+entry:
+  %gc.stackobject = alloca { ptr, i32, ptr }, align 8
+  store { ptr, i32, ptr } { ptr null, i32 1, ptr null }, ptr %gc.stackobject, align 4
+  %0 = load ptr, ptr @runtime.stackChainStart, align 4
+  %1 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
+  store ptr %0, ptr %1, align 4
+  store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
+  %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr %owner, ptr %2, align 4
+  %aggregate = insertvalue { ptr, i32 } poison, ptr %owner, 0
+  %3 = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  %extracted = extractvalue { ptr, i32 } %aggregate, 0
+  store i8 1, ptr %extracted, align 1
+  store ptr %0, ptr @runtime.stackChainStart, align 4
+  ret void
+}
+
+define { ptr, i32 } @returnedInAggregate() {
+entry:
+  %gc.stackobject = alloca { ptr, i32, ptr }, align 8
+  store { ptr, i32, ptr } { ptr null, i32 1, ptr null }, ptr %gc.stackobject, align 4
+  %0 = load ptr, ptr @runtime.stackChainStart, align 4
+  %1 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
+  store ptr %0, ptr %1, align 4
+  store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
+  %ptr = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr %ptr, ptr %2, align 4
+  %result = insertvalue { ptr, i32 } poison, ptr %ptr, 0
+  store ptr %0, ptr @runtime.stackChainStart, align 4
+  ret { ptr, i32 } %result
 }
 
 define ptr @fibNext(ptr %x, ptr %y) {
@@ -100,6 +195,143 @@ define ptr @fibNext(ptr %x, ptr %y) {
   store i8 %out.val, ptr %out.alloc, align 1
   store ptr %1, ptr @runtime.stackChainStart, align 4
   ret ptr %out.alloc
+}
+
+define void @argumentAcrossAlloc(ptr %owner) {
+entry:
+  %gc.stackobject = alloca { ptr, i32, ptr }, align 8
+  store { ptr, i32, ptr } { ptr null, i32 1, ptr null }, ptr %gc.stackobject, align 4
+  %0 = load ptr, ptr @runtime.stackChainStart, align 4
+  %1 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
+  store ptr %0, ptr %1, align 4
+  store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
+  %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr %owner, ptr %2, align 4
+  %field = getelementptr i8, ptr %owner, i32 4
+  %new = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  store i8 1, ptr %field, align 1
+  store ptr %0, ptr @runtime.stackChainStart, align 4
+  ret void
+}
+
+define void @argumentAcrossTwoAllocs(ptr %owner) {
+entry:
+  %gc.stackobject = alloca { ptr, i32, ptr }, align 8
+  store { ptr, i32, ptr } { ptr null, i32 1, ptr null }, ptr %gc.stackobject, align 4
+  %0 = load ptr, ptr @runtime.stackChainStart, align 4
+  %1 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
+  store ptr %0, ptr %1, align 4
+  store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
+  %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr %owner, ptr %2, align 4
+  %field = getelementptr i8, ptr %owner, i32 4
+  %3 = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  %4 = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  store i8 1, ptr %field, align 1
+  store ptr %0, ptr @runtime.stackChainStart, align 4
+  ret void
+}
+
+define void @argumentDeadBeforeAlloc(ptr %owner) {
+entry:
+  %gc.stackobject = alloca { ptr, i32, ptr }, align 8
+  store { ptr, i32, ptr } { ptr null, i32 1, ptr null }, ptr %gc.stackobject, align 4
+  %0 = load ptr, ptr @runtime.stackChainStart, align 4
+  %1 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
+  store ptr %0, ptr %1, align 4
+  store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
+  %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr %owner, ptr %2, align 4
+  %field = getelementptr i8, ptr %owner, i32 4
+  %3 = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  store i8 1, ptr %field, align 1
+  %4 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr null, ptr %4, align 4
+  %5 = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  store ptr %0, ptr @runtime.stackChainStart, align 4
+  ret void
+}
+
+define void @deadArgument(ptr %dead) {
+entry:
+  %byte = load i8, ptr %dead, align 1
+  %new = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
+  store i8 %byte, ptr %new, align 1
+  ret void
+}
+
+define void @indirectCall(ptr %owner, ptr %fn) {
+entry:
+  %gc.stackobject = alloca { ptr, i32, ptr }, align 8
+  store { ptr, i32, ptr } { ptr null, i32 1, ptr null }, ptr %gc.stackobject, align 4
+  %0 = load ptr, ptr @runtime.stackChainStart, align 4
+  %1 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
+  store ptr %0, ptr %1, align 4
+  store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
+  %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr %owner, ptr %2, align 4
+  %field = getelementptr i8, ptr %owner, i32 4
+  call void %fn()
+  %byte = load i8, ptr %field, align 1
+  store i8 %byte, ptr @someGlobal, align 1
+  store ptr %0, ptr @runtime.stackChainStart, align 4
+  ret void
+}
+
+define void @deadCallerArgument(ptr %dead) {
+entry:
+  %gc.stackobject = alloca { ptr, i32, ptr }, align 8
+  store { ptr, i32, ptr } { ptr null, i32 1, ptr null }, ptr %gc.stackobject, align 4
+  %0 = load ptr, ptr @runtime.stackChainStart, align 4
+  %1 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
+  store ptr %0, ptr %1, align 4
+  store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
+  %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr %dead, ptr %2, align 4
+  call void @allocAndSave(ptr %dead)
+  store ptr %0, ptr @runtime.stackChainStart, align 4
+  ret void
+}
+
+declare void @"internal/task.Pause"()
+
+define ptr @liveRootAfterPause() {
+entry:
+  %gc.stackobject = alloca { ptr, i32, ptr }, align 8
+  store { ptr, i32, ptr } { ptr null, i32 1, ptr null }, ptr %gc.stackobject, align 4
+  %0 = load ptr, ptr @runtime.stackChainStart, align 4
+  %1 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
+  store ptr %0, ptr %1, align 4
+  store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
+  %ptr = call ptr @getPointer()
+  %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
+  store ptr %ptr, ptr %2, align 4
+  call void @"internal/task.Pause"()
+  store i8 1, ptr %ptr, align 1
+  store ptr %0, ptr @runtime.stackChainStart, align 4
+  ret ptr %ptr
+}
+
+define void @deadRootAtPause() {
+entry:
+  %ptr = call ptr @getPointer()
+  store i8 1, ptr %ptr, align 1
+  call void @"internal/task.Pause"()
+  ret void
+}
+
+define void @loopRootAtPause() {
+entry:
+  br label %loop
+
+loop:                                             ; preds = %loop, %entry
+  %ptr = call ptr @getPointer()
+  call void @"internal/task.Pause"()
+  %again = load i1, ptr @someGlobal, align 1
+  br i1 %again, label %loop, label %end
+
+end:                                              ; preds = %loop
+  ret void
 }
 
 define ptr @allocLoop() {
@@ -141,20 +373,9 @@ end:                                              ; preds = %loop
 declare ptr @arrayAlloc()
 
 define void @testGEPBitcast() {
-  %gc.stackobject = alloca { ptr, i32, ptr, ptr }, align 8
-  store { ptr, i32, ptr, ptr } { ptr null, i32 2, ptr null, ptr null }, ptr %gc.stackobject, align 4
-  %1 = load ptr, ptr @runtime.stackChainStart, align 4
-  %2 = getelementptr { ptr, i32, ptr, ptr }, ptr %gc.stackobject, i32 0, i32 0
-  store ptr %1, ptr %2, align 4
-  store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
   %arr = call ptr @arrayAlloc()
   %arr.bitcast = getelementptr [32 x i8], ptr %arr, i32 0, i32 0
-  %3 = getelementptr { ptr, i32, ptr, ptr }, ptr %gc.stackobject, i32 0, i32 2
-  store ptr %arr.bitcast, ptr %3, align 4
   %other = call ptr @runtime.alloc(i32 1, ptr inttoptr (i32 3 to ptr))
-  %4 = getelementptr { ptr, i32, ptr, ptr }, ptr %gc.stackobject, i32 0, i32 3
-  store ptr %other, ptr %4, align 4
-  store ptr %1, ptr @runtime.stackChainStart, align 4
   ret void
 }
 
@@ -184,9 +405,9 @@ define void @allocAndSave(ptr %x) {
   %2 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 0
   store ptr %1, ptr %2, align 4
   store ptr %gc.stackobject, ptr @runtime.stackChainStart, align 4
-  %y = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
   %3 = getelementptr { ptr, i32, ptr }, ptr %gc.stackobject, i32 0, i32 2
-  store ptr %y, ptr %3, align 4
+  store ptr %x, ptr %3, align 4
+  %y = call ptr @runtime.alloc(i32 4, ptr inttoptr (i32 3 to ptr))
   store ptr %y, ptr %x, align 4
   store ptr %x, ptr @ptrGlobal, align 4
   store ptr %1, ptr @runtime.stackChainStart, align 4
