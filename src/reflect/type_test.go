@@ -9,6 +9,67 @@ import (
 	"testing"
 )
 
+func TestFunctionResultCount(t *testing.T) {
+	type manyResults func() (
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+	)
+	type manyVariadicResults func(...int) (
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+	)
+	for i, typ := range []reflect.Type{reflect.TypeFor[manyResults](), reflect.TypeFor[manyVariadicResults]()} {
+		if typ.NumIn() != i || typ.NumOut() != 128 || typ.IsVariadic() != (i != 0) {
+			t.Fatalf("function %v has %d inputs, %d outputs, variadic %v", typ, typ.NumIn(), typ.NumOut(), typ.IsVariadic())
+		}
+		for n := 0; n < typ.NumOut(); n++ {
+			if got := typ.Out(n); got != reflect.TypeFor[int]() {
+				t.Fatalf("Out(%d) = %v, want int", n, got)
+			}
+		}
+	}
+}
+
+func checkConstructedType[T any](t *testing.T, value reflect.Value) {
+	t.Helper()
+	if _, ok := value.Interface().(T); !ok {
+		t.Fatalf("constructed %v failed a concrete type assertion", value.Type())
+	}
+	switch value.Interface().(type) {
+	case T:
+	default:
+		t.Fatalf("constructed %v failed a type switch", value.Type())
+	}
+}
+
 func TestTypeFor(t *testing.T) {
 	type (
 		mystring string

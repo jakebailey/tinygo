@@ -315,10 +315,15 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 				types.NewVar(token.NoPos, nil, "methods", methodSetType),
 			)
 		case *types.Signature:
+			numIn := typ.Params().Len()
+			numOut := typ.Results().Len()
+			c.getReflectCallWrapper(typ)
 			typeFieldTypes = append(typeFieldTypes,
+				types.NewVar(token.NoPos, nil, "numIn", types.Typ[types.Uint8]),
+				types.NewVar(token.NoPos, nil, "numOut", types.Typ[types.Uint16]), // high bit = variadic
 				types.NewVar(token.NoPos, nil, "ptrTo", types.Typ[types.UnsafePointer]),
+				types.NewVar(token.NoPos, nil, "inOut", types.NewArray(types.Typ[types.UnsafePointer], int64(numIn+numOut))),
 			)
-			// TODO: signature params and return values
 		}
 		if hasMethodSet {
 			// This method set is appended at the start of the struct. It is
@@ -513,8 +518,31 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 				methodSetValue,
 			}
 		case *types.Signature:
-			typeFields = []llvm.Value{c.getTypeCode(types.NewPointer(typ))}
-			// TODO: params, return values, etc
+			params := typ.Params()
+			results := typ.Results()
+			if params.Len() >= 0x100 {
+				c.addError(token.NoPos, fmt.Sprintf("too many function parameters for typecode (%d): %s", params.Len(), typ.String()))
+			}
+			if results.Len() >= 0x8000 {
+				c.addError(token.NoPos, fmt.Sprintf("too many function results for typecode (%d): %s", results.Len(), typ.String()))
+			}
+			numOut := uint64(results.Len())
+			if typ.Variadic() {
+				numOut |= 0x8000
+			}
+			inOut := make([]llvm.Value, 0, params.Len()+results.Len())
+			for i := 0; i < params.Len(); i++ {
+				inOut = append(inOut, c.getTypeCode(params.At(i).Type()))
+			}
+			for i := 0; i < results.Len(); i++ {
+				inOut = append(inOut, c.getTypeCode(results.At(i).Type()))
+			}
+			typeFields = []llvm.Value{
+				llvm.ConstInt(c.ctx.Int8Type(), uint64(params.Len()), false),
+				llvm.ConstInt(c.ctx.Int16Type(), numOut, false),
+				c.getTypeCode(types.NewPointer(typ)),
+				llvm.ConstArray(c.dataPtrType, inOut),
+			}
 		}
 		// Prepend the common RawType field.
 		typeFields = append([]llvm.Value{
@@ -560,6 +588,92 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 		llvm.ConstInt(c.ctx.Int32Type(), 0, false),
 		llvm.ConstInt(c.ctx.Int32Type(), offset, false),
 	})
+}
+
+func (c *compilerContext) getReflectCallWrapper(sig *types.Signature) llvm.Value {
+	typeName, _ := c.getTypeCodeName(sig)
+	name := "reflect/call:" + typeName
+	if wrapper := c.mod.NamedFunction(name); !wrapper.IsNil() {
+		return wrapper
+	}
+
+	wrapperType := llvm.FunctionType(c.ctx.VoidType(), []llvm.Type{
+		c.uintptrType,
+		c.dataPtrType,
+		c.dataPtrType,
+		c.dataPtrType,
+		c.dataPtrType,
+	}, false)
+	wrapper := llvm.AddFunction(c.mod, name, wrapperType)
+	wrapper.SetLinkage(llvm.WeakODRLinkage)
+
+	irbuilder := c.ctx.NewBuilder()
+	defer irbuilder.Dispose()
+	b := &builder{compilerContext: c, Builder: irbuilder}
+	entry := c.ctx.AddBasicBlock(wrapper, "entry")
+	b.SetInsertPointAtEnd(entry)
+
+	fn := b.CreateIntToPtr(wrapper.Param(0), c.funcPtrType, "")
+	context := wrapper.Param(1)
+	args := wrapper.Param(2)
+	results := wrapper.Param(3)
+	abi := c.getFunctionABI(sig, false)
+
+	var callArgs []llvm.Value
+	var indirectResult llvm.Value
+	if abi.indirectResult {
+		indirectResult = b.CreateAlloca(abi.resultType, "result")
+		callArgs = append(callArgs, indirectResult)
+	}
+	for i, param := range abi.params {
+		slot := b.CreateInBoundsGEP(c.dataPtrType, args, []llvm.Value{
+			llvm.ConstInt(c.ctx.Int32Type(), uint64(i), false),
+		}, "")
+		valuePtr := b.CreateLoad(c.dataPtrType, slot, "")
+		if param.indirect {
+			callArgs = append(callArgs, valuePtr)
+			continue
+		}
+		var value llvm.Value
+		if c.targetData.TypeAllocSize(param.llvmType) == 0 {
+			value = llvm.ConstNull(param.llvmType)
+		} else {
+			value = b.CreateLoad(param.llvmType, valuePtr, "")
+		}
+		callArgs = append(callArgs, b.expandFormalParam(value)...)
+	}
+	callArgs = append(callArgs, context)
+
+	call := b.CreateCall(c.getLLVMFunctionType(sig), fn, callArgs, "")
+	var result llvm.Value
+	if abi.indirectResult {
+		result = b.CreateLoad(abi.resultType, indirectResult, "")
+	} else {
+		result = call
+	}
+
+	for i := 0; i < sig.Results().Len(); i++ {
+		resultType := c.getLLVMType(sig.Results().At(i).Type())
+		if c.targetData.TypeAllocSize(resultType) == 0 {
+			continue
+		}
+		slot := b.CreateInBoundsGEP(c.dataPtrType, results, []llvm.Value{
+			llvm.ConstInt(c.ctx.Int32Type(), uint64(i), false),
+		}, "")
+		resultPtr := b.CreateLoad(c.dataPtrType, slot, "")
+		value := result
+		if sig.Results().Len() != 1 {
+			value = b.CreateExtractValue(result, i, "")
+		}
+		b.CreateStore(value, resultPtr)
+	}
+	b.CreateRetVoid()
+
+	link := llvm.AddGlobal(c.mod, c.dataPtrType, "reflect/call.link:"+typeName)
+	link.SetInitializer(llvm.ConstPointerCast(wrapper, c.dataPtrType))
+	link.SetLinkage(llvm.WeakODRLinkage)
+	link.SetGlobalConstant(true)
+	return wrapper
 }
 
 // getTypeKind returns the type kind for the given type, as defined by
@@ -721,7 +835,11 @@ func (c *compilerContext) getTypeCodeName(t types.Type) (name string, isLocal bo
 			}
 			results[i] = s
 		}
-		return "func:" + "{" + strings.Join(params, ",") + "}{" + strings.Join(results, ",") + "}", isLocal
+		prefix := "func:"
+		if t.Variadic() {
+			prefix = "func:variadic:"
+		}
+		return prefix + "{" + strings.Join(params, ",") + "}{" + strings.Join(results, ",") + "}", isLocal
 	case *types.Slice:
 		s, isLocal := c.getTypeCodeName(t.Elem())
 		return "slice:" + s, isLocal
@@ -1074,18 +1192,8 @@ func (b *builder) createTypeAssert(expr *ssa.TypeAssert) llvm.Value {
 			commaOk = b.createInterfaceTypeAssert(intf, actualTypeNum)
 		}
 	} else {
-		name, _ := b.getTypeCodeName(expr.AssertedType)
-		globalName := "reflect/types.typeid:" + name
-		assertedTypeCodeGlobal := b.mod.NamedGlobal(globalName)
-		if assertedTypeCodeGlobal.IsNil() {
-			// Create a new typecode global.
-			assertedTypeCodeGlobal = llvm.AddGlobal(b.mod, b.ctx.Int8Type(), globalName)
-			assertedTypeCodeGlobal.SetGlobalConstant(true)
-		}
-		// Type assert on concrete type.
-		// Call runtime.typeAssert, which will be lowered to a simple icmp or
-		// const false in the interface lowering pass.
-		commaOk = b.createRuntimeCall("typeAssert", []llvm.Value{actualTypeNum, assertedTypeCodeGlobal}, "typecode")
+		assertedTypeCode := b.getTypeCode(expr.AssertedType)
+		commaOk = b.CreateICmp(llvm.IntEQ, actualTypeNum, assertedTypeCode, "typecode")
 	}
 
 	// Add 2 new basic blocks (that should get optimized away): one for the
