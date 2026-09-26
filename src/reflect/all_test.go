@@ -129,7 +129,6 @@ var typeTests = []pair{
 	}{},
 		"struct { c chan *int32; d float32 }",
 	},
-	/* // TODO(tinygo): No function support
 	{struct{ x (func(a int8, b int32)) }{}, "func(int8, int32)"},
 	{struct {
 		x struct {
@@ -137,7 +136,7 @@ var typeTests = []pair{
 		}
 	}{},
 		"struct { c func(chan *reflect_test.integer, *int8) }",
-	}, */
+	},
 	{struct {
 		x struct {
 			a int8
@@ -202,7 +201,6 @@ var typeTests = []pair{
 	}{},
 		`struct { a int8 "reflect:\"hi \\x00there\\t\\n\\\"\\\\\"" }`,
 	},
-	/* // TODO(tinygo):  Functions not supported
 	{struct {
 		x struct {
 			f func(args ...int)
@@ -226,7 +224,6 @@ var typeTests = []pair{
 	}{},
 		"struct { int32; int64 }",
 	},
-	*/
 }
 
 var valueTests = []pair{
@@ -252,18 +249,16 @@ var valueTests = []pair{
 	{new(**integer), "**reflect_test.integer(0)"},
 	{new(map[string]int32), "map[string]int32{<can't iterate on maps>}"},
 	{new(chan<- string), "chan<- string"},
-	//{new(func(a int8, b int32)), "func(int8, int32)(0)"}, // TODO(tinygo): No function support
+	{new(func(a int8, b int32)), "func(int8, int32)(0)"},
 	{new(struct {
 		c chan *int32
 		d float32
 	}),
 		"struct { c chan *int32; d float32 }{chan *int32, 0}",
 	},
-	/* // TODO(tinygo): No function support
 	{new(struct{ c func(chan *integer, *int8) }),
 		"struct { c func(chan *reflect_test.integer, *int8) }{func(chan *reflect_test.integer, *int8)(0)}",
 	},
-	*/
 	{new(struct {
 		a int8
 		b int32
@@ -771,8 +766,6 @@ func TestInterfaceValue(t *testing.T) {
 	}
 }
 
-/*
-
 func TestFunctionValue(t *testing.T) {
 	var x any = func() {}
 	v := ValueOf(x)
@@ -781,8 +774,6 @@ func TestFunctionValue(t *testing.T) {
 	}
 	assert(t, v.Type().String(), "func()")
 }
-
-*/
 
 func TestGrow(t *testing.T) {
 	v := ValueOf([]int(nil))
@@ -2185,7 +2176,7 @@ func fmtSelect(info []caseInfo) string {
 	return buf.String()
 }
 
-// TODO(tinygo): missing func/method/call support
+*/
 
 type two [2]uintptr
 
@@ -2276,6 +2267,8 @@ func TestCallWithStruct(t *testing.T) {
 		t.Errorf("takesNonEmpty returned %#v", r)
 	}
 }
+
+/*
 
 func TestCallReturnsEmpty(t *testing.T) {
 	// Issue 21717: past-the-end pointer write in Call with
@@ -3286,8 +3279,6 @@ func TestFieldPkgPath(t *testing.T) {
 	})
 }
 
-/*
-
 func TestMethodPkgPath(t *testing.T) {
 	type I interface {
 		x()
@@ -3344,10 +3335,7 @@ func TestVariadicType(t *testing.T) {
 	t.Error(s)
 }
 
-*/
-
 /*
-
 type inner struct {
 	x int
 }
@@ -3787,8 +3775,6 @@ func TestStructArg(t *testing.T) {
 	}
 }
 
-*/
-
 var tagGetTests = []struct {
 	Tag   StructTag
 	Key   string
@@ -3932,6 +3918,8 @@ func TestUnexported(t *testing.T) {
 	shouldPanic("Method", func() { v.Type().Method(0) })
 }
 
+*/
+
 func TestSetPanic(t *testing.T) {
 	ok := func(f func()) { f() }
 	bad := func(f func()) { shouldPanic("Set", f) }
@@ -4017,8 +4005,6 @@ func TestSetPanic(t *testing.T) {
 	bad(func() { clear(v.Field(6).Field(1)) })          // .namedT2.namedT0
 	bad(func() { clear(v.Field(6).Field(1).Field(0)) }) // .namedT2.namedT0.W
 }
-
-*/
 
 type timp int
 
@@ -4149,7 +4135,6 @@ func TestValuePanic(t *testing.T) {
 */
 
 func shouldPanic(expect string, f func()) {
-	return
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -4188,8 +4173,6 @@ func isValid(v Value) {
 	}
 }
 
-/*
-
 func TestAlias(t *testing.T) {
 	x := string("hello")
 	v := ValueOf(&x).Elem()
@@ -4201,8 +4184,6 @@ func TestAlias(t *testing.T) {
 		t.Errorf("aliasing: old=%q new=%q, want hello, world", oldvalue, newvalue)
 	}
 }
-
-*/
 
 var V = ValueOf
 
@@ -6552,8 +6533,6 @@ func TestEmbed(t *testing.T) {
 	}
 }
 
-/*
-
 func TestAllocsInterfaceBig(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping malloc count in short mode")
@@ -6669,6 +6648,8 @@ func GCFunc(args []Value) []Value {
 	return []Value{}
 }
 
+/*
+
 func TestReflectFuncTraceback(t *testing.T) {
 	f := MakeFunc(TypeOf(func() {}), GCFunc)
 	f.Call([]Value{})
@@ -6682,6 +6663,8 @@ func TestReflectMethodTraceback(t *testing.T) {
 		t.Errorf("Call returned %d; want 8", i)
 	}
 }
+
+*/
 
 func TestSmallZero(t *testing.T) {
 	type T [10]byte
@@ -6723,8 +6706,6 @@ func TestZeroSet(t *testing.T) {
 	}
 }
 
-*/
-
 func TestFieldByIndexNil(t *testing.T) {
 	type P struct {
 		F int
@@ -6749,7 +6730,6 @@ func TestFieldByIndexNil(t *testing.T) {
 }
 
 /*
-
 // Given
 //	type Outer struct {
 //		*Inner
@@ -8110,8 +8090,6 @@ type (
 	namedBytes []byte
 )
 
-/*
-
 func TestValue_Cap(t *testing.T) {
 	a := &[3]int{1, 2, 3}
 	v := ValueOf(a)
@@ -8177,8 +8155,6 @@ func TestValue_Len(t *testing.T) {
 		t.Errorf("error is %q, want %q", e, wantStr)
 	}
 }
-
-*/
 
 func TestValue_Comparable(t *testing.T) {
 	var a int
@@ -8360,8 +8336,6 @@ func TestValue_Comparable(t *testing.T) {
 		}
 	}
 }
-
-/*
 
 type ValueEqualTest struct {
 	v, u           any
@@ -8564,6 +8538,8 @@ func TestValue_EqualNonComparable(t *testing.T) {
 		}
 	}
 }
+
+/*
 
 func TestInitFuncTypes(t *testing.T) {
 	n := 100

@@ -154,6 +154,67 @@ func TestTypeFieldByIndexNonStruct(t *testing.T) {
 	}
 }
 
+func TestFunctionResultCount(t *testing.T) {
+	type manyResults func() (
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+	)
+	type manyVariadicResults func(...int) (
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+	)
+	for i, typ := range []reflect.Type{reflect.TypeFor[manyResults](), reflect.TypeFor[manyVariadicResults]()} {
+		if typ.NumIn() != i || typ.NumOut() != 128 || typ.IsVariadic() != (i != 0) {
+			t.Fatalf("function %v has %d inputs, %d outputs, variadic %v", typ, typ.NumIn(), typ.NumOut(), typ.IsVariadic())
+		}
+		for n := 0; n < typ.NumOut(); n++ {
+			if got := typ.Out(n); got != reflect.TypeFor[int]() {
+				t.Fatalf("Out(%d) = %v, want int", n, got)
+			}
+		}
+	}
+}
+
+func checkConstructedType[T any](t *testing.T, value reflect.Value) {
+	t.Helper()
+	if _, ok := value.Interface().(T); !ok {
+		t.Fatalf("constructed %v failed a concrete type assertion", value.Type())
+	}
+	switch value.Interface().(type) {
+	case T:
+	default:
+		t.Fatalf("constructed %v failed a type switch", value.Type())
+	}
+}
+
 func TestTypeFor(t *testing.T) {
 	type (
 		mystring string
@@ -194,5 +255,25 @@ func TestElemOfNamedMultiPointer(t *testing.T) {
 		if got := test.typ.Elem(); got != test.want {
 			t.Errorf("%v.Elem() = %v; want %v", test.typ, got, test.want)
 		}
+	}
+}
+
+func TestReflectedPointerTypeAssertions(t *testing.T) {
+	type named uint32
+
+	value := reflect.New(reflect.TypeOf(0)).Interface()
+	if _, ok := value.(*int); !ok {
+		t.Fatalf("constructed %T failed a type assertion", value)
+	}
+
+	pointer := reflect.New(reflect.TypeOf(named(0)))
+	value = pointer.Interface()
+	if _, ok := value.(*named); !ok {
+		t.Fatalf("constructed %T failed a type assertion", value)
+	}
+
+	value = reflect.New(pointer.Type()).Interface()
+	if _, ok := value.(**named); !ok {
+		t.Fatalf("constructed %T failed a type assertion", value)
 	}
 }
