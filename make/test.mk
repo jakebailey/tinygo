@@ -116,6 +116,7 @@ TEST_PACKAGES_LINUX := \
 	regexp \
 	testing/fstest \
 	testing/quick \
+	time \
 	$(nil)
 
 TEST_PACKAGES_DARWIN := $(TEST_PACKAGES_LINUX)
@@ -124,6 +125,7 @@ TEST_PACKAGES_DARWIN := $(TEST_PACKAGES_LINUX)
 TEST_PACKAGES_WINDOWS := \
 	compress/flate \
 	mime \
+	time \
 	$(nil)
 
 
