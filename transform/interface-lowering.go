@@ -470,7 +470,123 @@ func (p *lowerInterfacesPass) run() error {
 		}
 	}
 
+	p.createReflectTypeLinks(typeNames)
+	p.createReflectCallLinks(typeNames)
+
 	return nil
+}
+
+func (p *lowerInterfacesPass) createReflectTypeLinks(typeNames []string) {
+	for _, spec := range []struct {
+		prefix string
+		data   string
+		length string
+	}{
+		{"slice:", "internal/reflectlite.sliceTypeLinks", "internal/reflectlite.sliceTypeLinksLen"},
+		{"map:", "internal/reflectlite.mapTypeLinks", "internal/reflectlite.mapTypeLinksLen"},
+		{"array:", "internal/reflectlite.arrayTypeLinks", "internal/reflectlite.arrayTypeLinksLen"},
+		{"chan:", "internal/reflectlite.chanTypeLinks", "internal/reflectlite.chanTypeLinksLen"},
+		{"struct:", "internal/reflectlite.structTypeLinks", "internal/reflectlite.structTypeLinksLen"},
+		{"func:", "internal/reflectlite.funcTypeLinks", "internal/reflectlite.funcTypeLinksLen"},
+	} {
+		dataGlobal := p.mod.NamedGlobal(spec.data)
+		lengthGlobal := p.mod.NamedGlobal(spec.length)
+		if dataGlobal.IsNil() && lengthGlobal.IsNil() {
+			continue
+		}
+		if dataGlobal.IsNil() || lengthGlobal.IsNil() {
+			panic("reflect type link globals must be defined together")
+		}
+
+		var typeCodes []llvm.Value
+		for _, name := range typeNames {
+			if !strings.HasPrefix(name, spec.prefix) {
+				continue
+			}
+			typ := p.types[name]
+			typeCodes = append(typeCodes, llvm.ConstGEP(typ.typecode.GlobalValueType(), typ.typecode, []llvm.Value{
+				llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+				llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+			}))
+		}
+
+		lengthGlobal.SetInitializer(llvm.ConstInt(p.uintptrType, uint64(len(typeCodes)), false))
+		lengthGlobal.SetGlobalConstant(true)
+		if len(typeCodes) == 0 {
+			dataGlobal.SetInitializer(llvm.ConstPointerNull(p.ptrType))
+			dataGlobal.SetGlobalConstant(true)
+			continue
+		}
+
+		arrayType := llvm.ArrayType(p.ptrType, len(typeCodes))
+		array := llvm.AddGlobal(p.mod, arrayType, spec.data+".data")
+		array.SetInitializer(llvm.ConstArray(p.ptrType, typeCodes))
+		array.SetGlobalConstant(true)
+		array.SetLinkage(llvm.InternalLinkage)
+		dataGlobal.SetInitializer(llvm.ConstGEP(arrayType, array, []llvm.Value{
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+		}))
+		dataGlobal.SetGlobalConstant(true)
+	}
+}
+
+func (p *lowerInterfacesPass) createReflectCallLinks(typeNames []string) {
+	typesGlobal := p.mod.NamedGlobal("internal/reflectlite.funcCallTypes")
+	adaptersGlobal := p.mod.NamedGlobal("internal/reflectlite.funcCallAdapters")
+	lengthGlobal := p.mod.NamedGlobal("internal/reflectlite.funcCallLinksLen")
+	if typesGlobal.IsNil() && adaptersGlobal.IsNil() && lengthGlobal.IsNil() {
+		return
+	}
+	if typesGlobal.IsNil() || adaptersGlobal.IsNil() || lengthGlobal.IsNil() {
+		panic("reflect call link globals must be defined together")
+	}
+
+	var typeCodes, adapters []llvm.Value
+	for _, name := range typeNames {
+		if !strings.HasPrefix(name, "func:") {
+			continue
+		}
+		typ := p.types[name]
+		link := p.mod.NamedGlobal("reflect/call.link:" + name)
+		if link.IsNil() {
+			panic("missing reflect call adapter for " + name)
+		}
+		adapter := stripPointerCasts(link.Initializer())
+		typeCodes = append(typeCodes, llvm.ConstGEP(typ.typecode.GlobalValueType(), typ.typecode, []llvm.Value{
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+		}))
+		adapters = append(adapters, adapter)
+		link.EraseFromParentAsGlobal()
+	}
+
+	lengthGlobal.SetInitializer(llvm.ConstInt(p.uintptrType, uint64(len(typeCodes)), false))
+	lengthGlobal.SetGlobalConstant(true)
+	for _, table := range []struct {
+		global llvm.Value
+		values []llvm.Value
+		name   string
+	}{
+		{typesGlobal, typeCodes, "internal/reflectlite.funcCallTypes.data"},
+		{adaptersGlobal, adapters, "internal/reflectlite.funcCallAdapters.data"},
+	} {
+		if len(table.values) == 0 {
+			table.global.SetInitializer(llvm.ConstPointerNull(p.ptrType))
+			table.global.SetGlobalConstant(true)
+			continue
+		}
+		arrayType := llvm.ArrayType(p.ptrType, len(table.values))
+		array := llvm.AddGlobal(p.mod, arrayType, table.name)
+		array.SetInitializer(llvm.ConstArray(p.ptrType, table.values))
+		array.SetGlobalConstant(true)
+		array.SetLinkage(llvm.InternalLinkage)
+		table.global.SetInitializer(llvm.ConstGEP(arrayType, array, []llvm.Value{
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+			llvm.ConstInt(p.ctx.Int32Type(), 0, false),
+		}))
+		table.global.SetGlobalConstant(true)
+	}
 }
 
 // addTypeMethods reads the method set of the given type info struct. It

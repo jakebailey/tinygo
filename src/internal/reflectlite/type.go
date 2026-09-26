@@ -3,6 +3,7 @@ package reflectlite
 import (
 	"internal/gclayout"
 	"internal/itoa"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -166,6 +167,46 @@ type RawType struct {
 	meta uint8 // metadata byte, contains kind and flags (see constants above)
 }
 
+type cacheKey struct {
+	kind  Kind
+	t1    *RawType
+	t2    *RawType
+	extra uintptr
+}
+
+type cacheEntry struct {
+	key  cacheKey
+	typ  *RawType
+	next *cacheEntry
+}
+
+var lookupCache atomic.Pointer[cacheEntry]
+
+func loadCachedType(key cacheKey) *RawType {
+	for entry := lookupCache.Load(); entry != nil; entry = entry.next {
+		if entry.key == key {
+			return entry.typ
+		}
+	}
+	return nil
+}
+
+func loadOrStoreCachedType(key cacheKey, typ *RawType) *RawType {
+	entry := &cacheEntry{key: key, typ: typ}
+	for {
+		head := lookupCache.Load()
+		for existing := head; existing != nil; existing = existing.next {
+			if existing.key == key {
+				return existing.typ
+			}
+		}
+		entry.next = head
+		if lookupCache.CompareAndSwap(head, entry) {
+			return typ
+		}
+	}
+}
+
 type basicType struct {
 	RawType
 	ptrTo *RawType
@@ -179,6 +220,12 @@ type elemType struct {
 	ptrTo     *RawType
 	elem      *RawType
 }
+
+//go:extern internal/reflectlite.chanTypeLinks
+var chanTypeLinks **RawType
+
+//go:extern internal/reflectlite.chanTypeLinksLen
+var chanTypeLinksLen uintptr
 
 // ptrType is the type descriptor for pointer types.
 // The numMethod field stores the number of exported methods in the lower bits,
@@ -208,6 +255,12 @@ type arrayType struct {
 	layout    unsafe.Pointer
 }
 
+//go:extern internal/reflectlite.arrayTypeLinks
+var arrayTypeLinks **RawType
+
+//go:extern internal/reflectlite.arrayTypeLinksLen
+var arrayTypeLinksLen uintptr
+
 type mapType struct {
 	RawType
 	numMethod uint16
@@ -216,6 +269,12 @@ type mapType struct {
 	key       *RawType
 	typeInfo  unsafe.Pointer
 }
+
+//go:extern internal/reflectlite.mapTypeLinks
+var mapTypeLinks **RawType
+
+//go:extern internal/reflectlite.mapTypeLinksLen
+var mapTypeLinksLen uintptr
 
 // namedType is the type descriptor for named types. The numMethod field uses
 // bit 15 (numMethodHasMethodSet) to indicate whether an inline method set is
@@ -255,10 +314,45 @@ type structType struct {
 	// methods methodSet follows after fields, only when numMethod & numMethodHasMethodSet != 0
 }
 
+//go:extern internal/reflectlite.structTypeLinks
+var structTypeLinks **RawType
+
+//go:extern internal/reflectlite.structTypeLinksLen
+var structTypeLinksLen uintptr
+
 type structField struct {
 	fieldType *RawType
 	data      unsafe.Pointer // various bits of information, packed in a byte array
 }
+
+// funcType is the type descriptor for function types. The high bit of numOut
+// marks a variadic function. The remaining bits hold the result count.
+// Parameter types are followed by result types in inOut.
+type funcType struct {
+	RawType
+	numIn  uint8
+	numOut uint8
+	ptrTo  *RawType
+	inOut  [0]*RawType
+}
+
+const funcTypeVariadic = 0x80
+
+type funcCacheEntry struct {
+	typ     *RawType
+	in      []*RawType
+	out     []*RawType
+	storage []byte
+	next    *funcCacheEntry
+}
+
+var funcLookupCache atomic.Pointer[funcCacheEntry]
+
+//go:extern internal/reflectlite.funcTypeLinks
+var funcTypeLinks **RawType
+
+//go:extern internal/reflectlite.funcTypeLinksLen
+var funcTypeLinksLen uintptr
 
 // Method set, as emitted by the compiler.
 type methodSet struct {
@@ -300,6 +394,12 @@ func PointerTo(t Type) Type {
 	return pointerTo(t.(*RawType))
 }
 
+//go:extern internal/reflectlite.sliceTypeLinks
+var sliceTypeLinks **RawType
+
+//go:extern internal/reflectlite.sliceTypeLinksLen
+var sliceTypeLinksLen uintptr
+
 func pointerTo(t *RawType) *RawType {
 	if t.isNamed() {
 		return (*elemType)(unsafe.Pointer(t)).ptrTo
@@ -316,8 +416,10 @@ func pointerTo(t *RawType) *RawType {
 		// TODO(dgryski): This is blocking https://github.com/tinygo-org/tinygo/issues/3131
 		// We need to be able to create types that match existing types to prevent typecode equality.
 		panic("reflect: cannot make *****T type")
-	case Interface, Func:
+	case Interface:
 		return (*interfaceType)(unsafe.Pointer(t)).ptrTo
+	case Func:
+		return (*funcType)(unsafe.Pointer(t)).ptrTo
 	case Struct:
 		return (*structType)(unsafe.Pointer(t)).ptrTo
 	default:
@@ -382,6 +484,39 @@ func (t *RawType) String() string {
 	case Interface:
 		// TODO(dgryski): Needs actual method set info
 		return "interface {}"
+	case Func:
+		ft := t.funcDescriptor()
+		numIn := int(ft.numIn)
+		numOut := int(ft.numOut &^ funcTypeVariadic)
+		variadic := ft.numOut&funcTypeVariadic != 0
+		inOut := (*[1 << 16]*RawType)(unsafe.Pointer(&ft.inOut))
+		s := "func("
+		for i := 0; i < numIn; i++ {
+			if i > 0 {
+				s += ", "
+			}
+			if variadic && i == numIn-1 {
+				s += "..." + inOut[i].elem().String()
+			} else {
+				s += inOut[i].String()
+			}
+		}
+		s += ")"
+		switch numOut {
+		case 0:
+		case 1:
+			s += " " + inOut[numIn].String()
+		default:
+			s += " ("
+			for i := 0; i < numOut; i++ {
+				if i > 0 {
+					s += ", "
+				}
+				s += inOut[numIn+i].String()
+			}
+			s += ")"
+		}
+		return s
 	default:
 		return t.Kind().String()
 	}
@@ -1016,6 +1151,58 @@ func (t *RawType) ChanDir() ChanDir {
 	return ChanDir(dir)
 }
 
+func (t *RawType) funcDescriptor() *funcType {
+	return (*funcType)(unsafe.Pointer(t.underlying()))
+}
+
+func (t *RawType) NumIn() int {
+	if t.Kind() != Func {
+		panic(TypeError{"NumIn"})
+	}
+	return int(t.funcDescriptor().numIn)
+}
+
+func (t *RawType) NumOut() int {
+	if t.Kind() != Func {
+		panic(TypeError{"NumOut"})
+	}
+	return int(t.funcDescriptor().numOut &^ funcTypeVariadic)
+}
+
+func (t *RawType) IsVariadic() bool {
+	if t.Kind() != Func {
+		panic(TypeError{"IsVariadic"})
+	}
+	return t.funcDescriptor().numOut&funcTypeVariadic != 0
+}
+
+func (t *RawType) In(i int) Type {
+	if t.Kind() != Func {
+		panic(TypeError{"In"})
+	}
+	ft := t.funcDescriptor()
+	numIn := int(ft.numIn)
+	if i < 0 || i >= numIn {
+		panic("reflect: Type.In: index out of range")
+	}
+	inOut := (*[1 << 16]*RawType)(unsafe.Pointer(&ft.inOut))
+	return inOut[i]
+}
+
+func (t *RawType) Out(i int) Type {
+	if t.Kind() != Func {
+		panic(TypeError{"Out"})
+	}
+	ft := t.funcDescriptor()
+	numIn := int(ft.numIn)
+	numOut := int(ft.numOut &^ funcTypeVariadic)
+	if i < 0 || i >= numOut {
+		panic("reflect: Type.Out: index out of range")
+	}
+	inOut := (*[1 << 16]*RawType)(unsafe.Pointer(&ft.inOut))
+	return inOut[numIn+i]
+}
+
 func (t *RawType) NumMethod() int {
 
 	if t.isNamed() {
@@ -1345,7 +1532,103 @@ func MapOf(key, value Type) Type {
 }
 
 func FuncOf(in, out []Type, variadic bool) Type {
-	panic("unimplemented: reflect.FuncOf()")
+	if variadic && (len(in) == 0 || in[len(in)-1].Kind() != Slice) {
+		panic("reflect.FuncOf: last arg of variadic func must be slice")
+	}
+	if len(in)+len(out) > 128 {
+		panic("reflect.FuncOf: too many arguments")
+	}
+	if len(out) >= int(funcTypeVariadic) {
+		panic("reflect.FuncOf: too many results")
+	}
+
+	rawIn := make([]*RawType, len(in))
+	for i, typ := range in {
+		rawIn[i] = typ.(*RawType)
+	}
+	rawOut := make([]*RawType, len(out))
+	for i, typ := range out {
+		rawOut[i] = typ.(*RawType)
+	}
+
+	if typ := loadCachedFuncType(rawIn, rawOut, variadic); typ != nil {
+		return typ
+	}
+	for _, typ := range unsafe.Slice(funcTypeLinks, funcTypeLinksLen) {
+		if funcTypeMatches(typ, rawIn, rawOut, variadic) {
+			return loadOrStoreCachedFuncType(rawIn, rawOut, variadic, typ, nil)
+		}
+	}
+
+	size := unsafe.Sizeof(funcType{}) + uintptr(len(rawIn)+len(rawOut))*unsafe.Sizeof(unsafe.Pointer(nil))
+	storage := make([]byte, size+3)
+	addr := align(uintptr(unsafe.Pointer(unsafe.SliceData(storage))), 4)
+	typ := (*funcType)(unsafe.Pointer(addr))
+	typ.meta = uint8(Func)
+	typ.numIn = uint8(len(rawIn))
+	typ.numOut = uint8(len(rawOut))
+	if variadic {
+		typ.numOut |= funcTypeVariadic
+	}
+	typ.ptrTo = (*RawType)(unsafe.Add(unsafe.Pointer(&typ.RawType), 1))
+	inOut := unsafe.Slice((**RawType)(unsafe.Pointer(&typ.inOut)), len(rawIn)+len(rawOut))
+	copy(inOut, rawIn)
+	copy(inOut[len(rawIn):], rawOut)
+	return loadOrStoreCachedFuncType(rawIn, rawOut, variadic, &typ.RawType, storage)
+}
+
+func funcTypeMatches(typ *RawType, in, out []*RawType, variadic bool) bool {
+	if typ.Kind() != Func {
+		return false
+	}
+	ft := (*funcType)(unsafe.Pointer(typ.underlying()))
+	if int(ft.numIn) != len(in) ||
+		int(ft.numOut&^funcTypeVariadic) != len(out) ||
+		(ft.numOut&funcTypeVariadic != 0) != variadic {
+		return false
+	}
+	inOut := unsafe.Slice((**RawType)(unsafe.Pointer(&ft.inOut)), len(in)+len(out))
+	for i, typ := range in {
+		if inOut[i] != typ {
+			return false
+		}
+	}
+	for i, typ := range out {
+		if inOut[len(in)+i] != typ {
+			return false
+		}
+	}
+	return true
+}
+
+func loadCachedFuncType(in, out []*RawType, variadic bool) *RawType {
+	for entry := funcLookupCache.Load(); entry != nil; entry = entry.next {
+		if funcTypeMatches(entry.typ, in, out, variadic) {
+			return entry.typ
+		}
+	}
+	return nil
+}
+
+func loadOrStoreCachedFuncType(in, out []*RawType, variadic bool, typ *RawType, storage []byte) *RawType {
+	entry := &funcCacheEntry{
+		typ:     typ,
+		in:      in,
+		out:     out,
+		storage: storage,
+	}
+	for {
+		head := funcLookupCache.Load()
+		for existing := head; existing != nil; existing = existing.next {
+			if funcTypeMatches(existing.typ, in, out, variadic) {
+				return existing.typ
+			}
+		}
+		entry.next = head
+		if funcLookupCache.CompareAndSwap(head, entry) {
+			return typ
+		}
+	}
 }
 
 const maxVarintLen32 = 5
