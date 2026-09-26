@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.org/x/tools/go/buildutil"
-	yaml "gopkg.in/yaml.v2"
+	yaml "gopkg.in/yaml.v3"
 )
 
 /*

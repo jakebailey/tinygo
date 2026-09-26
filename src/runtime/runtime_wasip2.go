@@ -15,7 +15,7 @@ import (
 func init() {
 	wasiclirun.Exports.Run = func() cm.BoolResult {
 		callMain()
-		return false
+		return cm.ResultOK
 	}
 }
 
