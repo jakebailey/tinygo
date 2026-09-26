@@ -18,19 +18,19 @@ func Asm(asm string)
 //
 // You can use {} in the asm string (which expands to a register) to set the
 // return value.
-func AsmFull(asm string, regs map[string]interface{}) uintptr
+func AsmFull(asm string, regs map[string]any) uintptr
 
 // Run the following system call (SVCall) with 0 arguments.
 func SVCall0(num uintptr) uintptr
 
 // Run the following system call (SVCall) with 1 argument.
-func SVCall1(num uintptr, a1 interface{}) uintptr
+func SVCall1(num uintptr, a1 any) uintptr
 
 // Run the following system call (SVCall) with 2 arguments.
-func SVCall2(num uintptr, a1, a2 interface{}) uintptr
+func SVCall2(num uintptr, a1, a2 any) uintptr
 
 // Run the following system call (SVCall) with 3 arguments.
-func SVCall3(num uintptr, a1, a2, a3 interface{}) uintptr
+func SVCall3(num uintptr, a1, a2, a3 any) uintptr
 
 // Run the following system call (SVCall) with 4 arguments.
-func SVCall4(num uintptr, a1, a2, a3, a4 interface{}) uintptr
+func SVCall4(num uintptr, a1, a2, a3, a4 any) uintptr

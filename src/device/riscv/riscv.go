@@ -18,7 +18,7 @@ func Asm(asm string)
 //
 // You can use {} in the asm string (which expands to a register) to set the
 // return value.
-func AsmFull(asm string, regs map[string]interface{}) uintptr
+func AsmFull(asm string, regs map[string]any) uintptr
 
 // DisableInterrupts disables all interrupts, and returns the old interrupt
 // state.

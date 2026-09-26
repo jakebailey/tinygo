@@ -1,6 +1,7 @@
 package transform
 
 import (
+	"slices"
 	"strings"
 
 	"tinygo.org/x/go-llvm"
@@ -504,10 +505,8 @@ func gcTypeHasPointers(typ llvm.Type) bool {
 	case llvm.PointerTypeKind:
 		return true
 	case llvm.StructTypeKind:
-		for _, field := range typ.StructElementTypes() {
-			if gcTypeHasPointers(field) {
-				return true
-			}
+		if slices.ContainsFunc(typ.StructElementTypes(), gcTypeHasPointers) {
+			return true
 		}
 	case llvm.ArrayTypeKind:
 		return typ.ArrayLength() != 0 && gcTypeHasPointers(typ.ElementType())

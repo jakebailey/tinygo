@@ -7,6 +7,6 @@ package abi
 // Calls to FuncPCABI0 however are treated specially by the compiler when
 // compiling for MacOS.
 
-func FuncPCABI0(f interface{}) uintptr
+func FuncPCABI0(f any) uintptr
 
-func FuncPCABIInternal(f interface{}) uintptr
+func FuncPCABIInternal(f any) uintptr

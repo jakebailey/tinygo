@@ -13,6 +13,7 @@ import (
 	"go/token"
 	"go/types"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path"
@@ -515,9 +516,7 @@ func (p *Package) parseFiles() ([]*ast.File, error) {
 		generated, headerCode, cflags, ldflags, accessedFiles, errs := cgo.Process(files, p.program.workingDir, p.ImportPath, p.program.fset, initialCFlags, p.program.config.GOOS())
 		p.CFlags = append(initialCFlags, cflags...)
 		p.CGoHeaders = headerCode
-		for path, hash := range accessedFiles {
-			p.FileHashes[path] = hash
-		}
+		maps.Copy(p.FileHashes, accessedFiles)
 		if errs != nil {
 			fileErrs = append(fileErrs, errs...)
 		}
