@@ -13,10 +13,14 @@ import (
 )
 
 func init() {
-	if value := startupEnv("GOROOT"); value != "" {
-		goroot = value
+	if gorootEnvEnabled() {
+		if value := startupEnv("GOROOT"); value != "" {
+			goroot = value
+		}
 	}
-	godebugSetEnv(startupEnv("GODEBUG"))
+	if godebugEnvEnabled() {
+		godebugSetEnv(startupEnv("GODEBUG"))
+	}
 
 	wasiclirun.Exports.Run = func() cm.BoolResult {
 		callMain()
