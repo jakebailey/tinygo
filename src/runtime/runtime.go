@@ -34,6 +34,8 @@ func GOMAXPROCS(n int) int {
 
 var goroot string // set by the builder
 
+func gorootEnvEnabled() bool
+
 func GOROOT() string {
 	return goroot
 }
@@ -149,6 +151,8 @@ func makeStrongFromWeak(ptr unsafe.Pointer) unsafe.Pointer {
 var godebugDefault string // set by the builder
 var godebugEnv atomic.Pointer[string]
 var godebugUpdate atomic.Pointer[func(string, string)]
+
+func godebugEnvEnabled() bool
 
 //go:linkname godebug_setUpdate internal/godebug.setUpdate
 func godebug_setUpdate(update func(string, string)) {
