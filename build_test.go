@@ -21,7 +21,6 @@ func TestBuild(t *testing.T) {
 		"alias.go",
 		"atomic.go",
 		"binop.go",
-		"buildinfo.go",
 		"calls.go",
 		"cgo/",
 		"channel.go",
@@ -53,6 +52,8 @@ func TestBuild(t *testing.T) {
 		"print.go",
 		"promoted.go",
 		"reflect.go",
+		"reflect-method-values.go",
+		"reflect-method-init.go",
 		"signal.go",
 		"signalnotify.go",
 		"slice.go",
@@ -464,7 +465,7 @@ func runPlatTests(options compileopts.Options, tests []string, t *testing.T) {
 				// Does not pass due to high mark false positive rate.
 				continue
 
-			case "buildinfo.go", "json.go", "stdlib.go", "testing.go":
+			case "buildinfo.go", "json.go", "localtypes.go", "stdlib.go", "testing.go":
 				// Too big for AVR. Doesn't fit in flash/RAM.
 				continue
 

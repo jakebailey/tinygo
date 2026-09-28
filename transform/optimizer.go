@@ -72,6 +72,9 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 		OptimizeStringToBytes(mod)
 		maxStackSize := config.MaxStackAlloc()
 		OptimizeAllocs(mod, nil, maxStackSize, nil)
+		if err := pruneDeadCodeBeforeInterfaceLowering(mod); err != nil {
+			return []error{err}
+		}
 		err = LowerInterfaces(mod, config)
 		if err != nil {
 			return []error{err}
@@ -92,6 +95,9 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 			return []error{fmt.Errorf("could not build pass pipeline: %w", err)}
 		}
 
+		if err := mod.RunPasses("always-inline,function-attrs", llvm.TargetMachine{}, po); err != nil {
+			return []error{fmt.Errorf("could not inline before escape analysis: %w", err)}
+		}
 		// Run TinyGo-specific interprocedural optimizations.
 		if config.Options.PrintAllocs != nil && config.Options.PrintAllocsCover {
 			// The go coverage tool expects this header before any blocks.
@@ -114,6 +120,10 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 		OptimizeStringEqual(mod)
 
 	} else {
+		if err := pruneDeadCodeBeforeInterfaceLowering(mod); err != nil {
+			return []error{err}
+		}
+
 		// Must be run at any optimization level.
 		err := LowerInterfaces(mod, config)
 		if err != nil {
@@ -206,6 +216,16 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 		}
 	}
 
+	return nil
+}
+
+func pruneDeadCodeBeforeInterfaceLowering(mod llvm.Module) error {
+	pruneUnusedReflectMakeFunc(mod)
+	options := llvm.NewPassBuilderOptions()
+	defer options.Dispose()
+	if err := mod.RunPasses("globaldce", llvm.TargetMachine{}, options); err != nil {
+		return fmt.Errorf("could not run pre-interface globaldce pass: %w", err)
+	}
 	return nil
 }
 

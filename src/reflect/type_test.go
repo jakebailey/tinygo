@@ -12,6 +12,84 @@ import (
 	"unsafe"
 )
 
+func TestFunctionResultCount(t *testing.T) {
+	type manyResults func() (
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+	)
+	type manyVariadicResults func(...int) (
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+		int, int, int, int, int, int, int, int,
+	)
+	for i, typ := range []reflect.Type{reflect.TypeFor[manyResults](), reflect.TypeFor[manyVariadicResults]()} {
+		if typ.NumIn() != i || typ.NumOut() != 128 || typ.IsVariadic() != (i != 0) {
+			t.Fatalf("function %v has %d inputs, %d outputs, variadic %v", typ, typ.NumIn(), typ.NumOut(), typ.IsVariadic())
+		}
+		for n := 0; n < typ.NumOut(); n++ {
+			if got := typ.Out(n); got != reflect.TypeFor[int]() {
+				t.Fatalf("Out(%d) = %v, want int", n, got)
+			}
+		}
+	}
+}
+
+func TestCanSeqFunction(t *testing.T) {
+	type namedBool bool
+
+	tests := []struct {
+		name     string
+		typ      reflect.Type
+		wantSeq  bool
+		wantSeq2 bool
+	}{
+		{"seq", reflect.TypeOf(func(func(int) bool) {}), true, false},
+		{"seq2", reflect.TypeOf(func(func(int, string) bool) {}), false, true},
+		{"no result", reflect.TypeOf(func(func(int)) {}), false, false},
+		{"named bool", reflect.TypeOf(func(func(int) namedBool) {}), false, false},
+		{"outer result", reflect.TypeOf(func(func(int) bool) bool { return false }), false, false},
+		{"two inputs", reflect.TypeOf(func(func(int) bool, int) {}), false, false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.typ.CanSeq(); got != test.wantSeq {
+				t.Errorf("CanSeq() = %v, want %v", got, test.wantSeq)
+			}
+			if got := test.typ.CanSeq2(); got != test.wantSeq2 {
+				t.Errorf("CanSeq2() = %v, want %v", got, test.wantSeq2)
+			}
+		})
+	}
+}
+
 func TestLongStructTags(t *testing.T) {
 	typ := reflect.TypeOf(struct {
 		Empty int
@@ -173,7 +251,51 @@ type StructOfEmbedded struct {
 
 type StructOfEmbeddedWithMethod struct{}
 
-func (StructOfEmbeddedWithMethod) Method() {}
+func (StructOfEmbeddedWithMethod) Method() int { return 42 }
+
+type structOfMethod interface {
+	Method() int
+}
+
+type StructOfEmbeddedInterface interface {
+	Method() int
+}
+
+type StructOfEmbeddedPointer struct {
+	Value int
+}
+
+func (v *StructOfEmbeddedPointer) Method() int { return v.Value }
+func (v *StructOfEmbeddedPointer) Set(value int) {
+	v.Value = value
+}
+
+type structOfSetter interface {
+	Set(int)
+}
+
+type structOfPair [2]uintptr
+
+type StructOfEmbeddedABI struct {
+	Base int
+}
+
+func (v StructOfEmbeddedABI) Mix(a byte, b int, pair structOfPair, text string) (byte, int, structOfPair, string) {
+	return a, v.Base + b, pair, text
+}
+
+func (v StructOfEmbeddedABI) Sum(values ...int) int {
+	total := v.Base
+	for _, value := range values {
+		total += value
+	}
+	return total
+}
+
+type structOfABI interface {
+	Mix(byte, int, structOfPair, string) (byte, int, structOfPair, string)
+	Sum(...int) int
+}
 
 func TestArrayOfRuntimeConstruction(t *testing.T) {
 	type elem struct {
@@ -672,12 +794,92 @@ func TestStructOfRuntimeConstruction(t *testing.T) {
 			{Name: "second", PkgPath: "two", Type: uint64Type},
 		})
 	})
-	checkPanic("embedded type with methods", func() {
-		reflect.StructOf([]reflect.StructField{{
-			Name:      "StructOfEmbeddedWithMethod",
-			Type:      reflect.TypeOf(StructOfEmbeddedWithMethod{}),
-			Anonymous: true,
-		}})
+	methodType := reflect.StructOf([]reflect.StructField{{
+		Name:      "StructOfEmbeddedWithMethod",
+		Type:      reflect.TypeOf(StructOfEmbeddedWithMethod{}),
+		Anonymous: true,
+	}})
+	if methodType.NumMethod() != 1 {
+		t.Fatalf("StructOf embedded method count = %d, want 1", methodType.NumMethod())
+	}
+	method, ok := methodType.MethodByName("Method")
+	if !ok {
+		t.Fatal("StructOf promoted method was not found")
+	}
+	methodValue := reflect.New(methodType).Elem()
+	if got := method.Func.Call([]reflect.Value{methodValue})[0].Int(); got != 42 {
+		t.Fatalf("StructOf Method.Func returned %d, want 42", got)
+	}
+	if got := methodValue.MethodByName("Method").Call(nil)[0].Int(); got != 42 {
+		t.Fatalf("StructOf method value returned %d, want 42", got)
+	}
+	interfaceType := reflect.TypeOf((*structOfMethod)(nil)).Elem()
+	if !methodType.Implements(interfaceType) {
+		t.Fatal("StructOf type does not implement structOfMethod")
+	}
+	if got := methodValue.Interface().(structOfMethod).Method(); got != 42 {
+		t.Fatalf("StructOf interface method returned %d, want 42", got)
+	}
+
+	pointerMethodType := reflect.StructOf([]reflect.StructField{{
+		Name:      "StructOfEmbeddedPointer",
+		Type:      reflect.TypeOf((*StructOfEmbeddedPointer)(nil)),
+		Anonymous: true,
+	}})
+	pointerMethodValue := reflect.New(pointerMethodType).Elem()
+	pointerMethodValue.Field(0).Set(reflect.ValueOf(&StructOfEmbeddedPointer{Value: 42}))
+	if got := pointerMethodValue.Interface().(structOfMethod).Method(); got != 42 {
+		t.Fatalf("StructOf pointer interface method returned %d, want 42", got)
+	}
+	pointerMethodValue.Interface().(structOfSetter).Set(43)
+	if got := pointerMethodValue.Field(0).Elem().Field(0).Int(); got != 43 {
+		t.Fatalf("StructOf pointer interface Set stored %d, want 43", got)
+	}
+	dynamicPointerType := reflect.PointerTo(pointerMethodType)
+	if dynamicPointerType.NumMethod() != 2 {
+		t.Fatalf("PointerTo(StructOf) method count = %d, want 2", dynamicPointerType.NumMethod())
+	}
+	if got := pointerMethodValue.Addr().Interface().(structOfMethod).Method(); got != 43 {
+		t.Fatalf("PointerTo(StructOf) interface method returned %d, want 43", got)
+	}
+	interfaceMethodType := reflect.StructOf([]reflect.StructField{{
+		Name:      "StructOfEmbeddedInterface",
+		Type:      reflect.TypeOf((*StructOfEmbeddedInterface)(nil)).Elem(),
+		Anonymous: true,
+	}})
+	interfaceMethodValue := reflect.New(interfaceMethodType).Elem()
+	interfaceMethodValue.Field(0).Set(reflect.ValueOf(StructOfEmbeddedWithMethod{}))
+	if got := interfaceMethodValue.Interface().(structOfMethod).Method(); got != 42 {
+		t.Fatalf("StructOf embedded interface method returned %d, want 42", got)
+	}
+	abiType := reflect.StructOf([]reflect.StructField{{
+		Name:      "StructOfEmbeddedABI",
+		Type:      reflect.TypeOf(StructOfEmbeddedABI{}),
+		Anonymous: true,
+	}})
+	abiValue := reflect.New(abiType).Elem()
+	abiValue.Field(0).Field(0).SetInt(40)
+	abi := abiValue.Interface().(structOfABI)
+	a, b, pair, text := abi.Mix(1, 2, structOfPair{3, 4}, "five")
+	if a != 1 || b != 42 || pair != (structOfPair{3, 4}) || text != "five" {
+		t.Fatalf("StructOf mixed ABI method returned %d, %d, %v, %q", a, b, pair, text)
+	}
+	if got := abi.Sum(1, 2); got != 43 {
+		t.Fatalf("StructOf variadic interface method returned %d, want 43", got)
+	}
+	sum := abiValue.MethodByName("Sum")
+	if got := sum.CallSlice([]reflect.Value{reflect.ValueOf([]int{1, 2})})[0].Int(); got != 43 {
+		t.Fatalf("StructOf variadic method value returned %d, want 43", got)
+	}
+	checkPanic("embedded type with methods and multiple fields", func() {
+		reflect.StructOf([]reflect.StructField{
+			{
+				Name:      "StructOfEmbeddedWithMethod",
+				Type:      reflect.TypeOf(StructOfEmbeddedWithMethod{}),
+				Anonymous: true,
+			},
+			{Name: "Value", Type: uint64Type},
+		})
 	})
 	checkPanic("map with uncomparable struct key", func() {
 		reflect.MapOf(reflect.StructOf([]reflect.StructField{{

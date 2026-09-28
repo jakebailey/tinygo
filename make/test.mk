@@ -79,7 +79,6 @@ TEST_PACKAGES_FAST = \
 # archive/zip requires os.ReadAt, which is not yet supported on windows
 # bytes requires mmap
 # compress/flate appears to hang on wasi
-# crypto/aes needs reflect.Type.Method(), not yet implemented
 # debug/plan9obj requires os.ReadAt, which is not yet supported on windows
 # encoding/xml takes a minute on linux and gives a stack overflow on wasi
 # io/ioutil requires os.ReadDir, which is not yet supported on windows or wasi
@@ -103,7 +102,11 @@ TEST_PACKAGES_LINUX := \
 	debug/gosym \
 	debug/plan9obj \
 	encoding/gob \
+	encoding/json \
+	encoding/json/jsontext \
+	encoding/json/v2 \
 	encoding/xml \
+	fmt \
 	go/build/constraint \
 	go/parser \
 	go/printer \
@@ -123,6 +126,8 @@ TEST_PACKAGES_LINUX := \
 	strings \
 	testing/cryptotest \
 	testing/fstest \
+	testing/quick \
+	time \
 	$(nil)
 
 TEST_PACKAGES_DARWIN := $(TEST_PACKAGES_LINUX)
@@ -131,6 +136,7 @@ TEST_PACKAGES_DARWIN := $(TEST_PACKAGES_LINUX)
 TEST_PACKAGES_WINDOWS := \
 	compress/flate \
 	mime \
+	time \
 	$(nil)
 
 
@@ -192,11 +198,11 @@ TEST_PACKAGES_NOBOUNDARYSLICES = \
 # Report platforms on which each standard library package is known to pass tests
 report-stdlib-tests-pass:
 	$(eval jointmp := $(shell echo /tmp/join.$$$$))
-	@for t in $(TEST_PACKAGES_DARWIN); do echo "$$t darwin"; done | sort > $(jointmp).darwin
-	@for t in $(TEST_PACKAGES_LINUX); do echo "$$t linux"; done | sort > $(jointmp).linux
-	@for t in $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW); do echo "$$t darwin linux wasi windows"; done | sort > $(jointmp).portable
-	@join -a1 -a2 $(jointmp).darwin $(jointmp).linux | \
-	join -a1 -a2 - $(jointmp).portable
+	@for t in $(TEST_PACKAGES_DARWIN); do echo "$$t darwin"; done | LC_ALL=C sort > $(jointmp).darwin
+	@for t in $(TEST_PACKAGES_LINUX); do echo "$$t linux"; done | LC_ALL=C sort > $(jointmp).linux
+	@for t in $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW); do echo "$$t darwin linux wasi windows"; done | LC_ALL=C sort > $(jointmp).portable
+	@LC_ALL=C join -a1 -a2 $(jointmp).darwin $(jointmp).linux | \
+	LC_ALL=C join -a1 -a2 - $(jointmp).portable
 	@rm $(jointmp).*
 
 # Standard library packages that pass tests quickly on the current platform
@@ -213,19 +219,20 @@ ifeq ($(OS),Windows_NT)
 TEST_PACKAGES_HOST := $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_WINDOWS)
 endif
 
-TEST_SKIP_FLAG := -skip='TestExtraMethods|TestAsValidation|TestUnmarshalNestingLimitSlice|TestUnmarshalNestingLimitStruct'
+TEST_SKIP_FLAG := -skip='TestAsValidation|TestUnmarshalNestingLimitSlice|TestUnmarshalNestingLimitStruct'
 TEST_ADDITIONAL_FLAGS ?=
 
 TEST_OPTIONS_crypto/dsa := -short
-TEST_OPTIONS_crypto/sha256 := -skip='^(TestExtraMethods|TestAllocations|TestAllocatonsWithTypeAsserts)$$'
-TEST_OPTIONS_crypto/sha512 := -skip='^(TestExtraMethods|TestAllocations|TestAllocatonsWithTypeAsserts)$$'
+TEST_OPTIONS_crypto/sha256 := -skip='^(TestAllocations|TestAllocatonsWithTypeAsserts)$$'
+TEST_OPTIONS_crypto/sha512 := -skip='^(TestAllocations|TestAllocatonsWithTypeAsserts)$$'
+TEST_OPTIONS_fmt := -stack-size=1MB -skip='^TestCountMallocs$$'
 TEST_OPTIONS_strconv := -skip='^(TestCountMallocs|TestAllocationsFromBytes)$$'
 TEST_OPTIONS_unicode/utf16 := -skip='^(TestAllocationsDecode|TestRuneCountNonASCIIAllocation)$$'
 TEST_OPTIONS_unicode/utf8 := -skip='^(TestAllocationsDecode|TestRuneCountNonASCIIAllocation)$$'
 TEST_OPTIONS_context := -skip='^TestAllocs$$'
 TEST_OPTIONS_mime := -skip='^TestLookupMallocs$$'
 TEST_OPTIONS_net/textproto := -skip='^TestCommonHeaders$$'
-TEST_OPTIONS_reflect := -skip='^TestMapIterSet$$'
+TEST_OPTIONS_reflect :=
 TEST_OPTIONS_bytes := -skip='^(TestNewBufferShallow|TestEqual|TestIndex|TestLastIndex|TestReplace)$$'
 TEST_OPTIONS_slices := -skip='^(TestGrow|TestInsert|TestConcat)$$'
 TEST_OPTIONS_strings := -skip='^(TestBuilderAllocs|TestBuilderGrow|TestBuilderGrowSizeclasses|TestIndexRune|TestReplace)$$'
@@ -233,14 +240,17 @@ TEST_OPTIONS_crypto/mldsa := -short -stack-size=1MB -skip='^TestAllocations$$'
 TEST_OPTIONS_encoding/gob := -skip='^(TestIgnoreDepthLimit|TestCountEncodeMallocs|TestCountDecodeMallocs)$$'
 
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/printer := -stack-size=1MB
+tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/json := -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^\#05$$|^TestTokenStringAllocations$$'
+tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/json/jsontext := -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^\#05$$|^TestTokenStringAllocations$$'
+tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/json/v2 := -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^\#05$$|^TestTokenStringAllocations$$'
+tinygo-test tinygo-test-fast: TEST_OPTIONS_testing/quick := -stack-size=1MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/gob := -stack-size=1MB -skip='^(TestCountDecodeMallocs|TestCountEncodeMallocs)$$'
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/build/constraint = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=1MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_regexp = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=1MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_path/filepath = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=4MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/parser = $(HOST_TEST_STACK_SKIP_FLAG) -stack-size=256MB
-tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/xml = $(TEST_SKIP_FLAG) -short -stack-size=16MB
-tinygo-test: TEST_OPTIONS_archive/zip = $(TEST_SKIP_FLAG) -short
-tinygo-test: TEST_OPTIONS_index/suffixarray = $(TEST_SKIP_FLAG) -short
+tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/xml = $(TEST_SKIP_FLAG) -stack-size=16MB
+tinygo-test tinygo-test-fast: TEST_OPTIONS_archive/zip = $(TEST_SKIP_FLAG) -parallel=1
 tinygo-test: TEST_OPTIONS_net/netip := -skip='^TestAddrStringAllocs$$|^TestNoAllocs$$/^(Addr.IsGlobalUnicast|Addr.IsInterfaceLocalMulticast|Addr.IsLinkLocalMulticast|Addr.IsLinkLocalUnicast|Addr.IsPrivate)$$'
 tinygo-test: TEST_OPTIONS_io/fs := -stack-size=6MB
 tinygo-test: TEST_OPTIONS_internal/synctest = -skip='^(TestReflectFuncOf|TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount$(TEST_SYNCTEST_THREAD_LIMIT_SKIP))$$'
@@ -250,7 +260,7 @@ tinygo-test-fast: HOST_TEST_STACK_SKIP_FLAG = $(TEST_SKIP_FLAG)
 tinygo-test-baremetal: TEST_OPTIONS_strconv := -skip='TestCountMallocs|TestAllocationsFromBytes'
 tinygo-test-baremetal: TEST_OPTIONS_unicode/utf16 := -skip='TestAllocationsDecode|TestRuneCountNonASCIIAllocation'
 tinygo-test-baremetal: TEST_OPTIONS_unicode/utf8 := -skip='TestAllocationsDecode|TestRuneCountNonASCIIAllocation'
-tinygo-test-baremetal: TEST_OPTIONS_reflect := -skip='TestMapIterSet'
+tinygo-test-baremetal: TEST_OPTIONS_reflect :=
 
 # Explicit options replace default flags, even when empty.
 # https://www.gnu.org/software/make/manual/html_node/Origin-Function.html
@@ -276,7 +286,6 @@ endif
 # TODO: parallelize, and only show failing tests (no implied -v flag).
 .PHONY: tinygo-test
 tinygo-test:
-	@# TestExtraMethods: used by many crypto packages and uses reflect.Type.Method which is not implemented.
 	@# TestUnmarshalNestingLimit{Slice,Struct}: encoding/asn1 nesting limit added in
 	@# https://github.com/golang/go/commit/6a6d115f9a7422b2fa081ba6f567eefb4a099462
 	$(call run-tinygo-tests,$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW) $(TEST_PACKAGES_HOST_FULL_ONLY),$(TEST_ADDITIONAL_FLAGS),$(TEST_SKIP_FLAG))
