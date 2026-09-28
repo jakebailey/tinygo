@@ -51,7 +51,6 @@ func testTransform(t *testing.T, pathPrefix string, transform func(mod llvm.Modu
 	// Read the input IR.
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
-	ensureTestCacheFreshness(t, pathPrefix+".ll")
 	buf, err := llvm.NewMemoryBufferFromFile(pathPrefix + ".ll")
 	if err != nil {
 		t.Fatalf("could not read file %s: %v", pathPrefix+".ll", err)
@@ -166,8 +165,8 @@ func normalizeCapturesAttr(s string) string {
 func filterIrrelevantIRLines(lines []string) []string {
 	var out []string
 	for _, line := range lines {
-		line = strings.Split(line, ";")[0]    // strip out comments/info
-		line = strings.TrimRight(line, "\r ") // drop '\r' on Windows and remove trailing spaces from comments
+		line = strings.Split(line, ";")[0]  // strip out comments/info
+		line = strings.TrimRight(line, " ") // remove trailing spaces from comments
 		if line == "" {
 			continue
 		}
@@ -263,14 +262,5 @@ func getPosition(val llvm.Value) token.Position {
 		}
 	} else {
 		return token.Position{}
-	}
-}
-
-// ensureTestCacheFreshness registers path as an input of the running test.
-// see https://github.com/tinygo-org/tinygo/issues/5780.
-func ensureTestCacheFreshness(t *testing.T, path string) {
-	t.Helper()
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("could not stat test fixture %s: %v", path, err)
 	}
 }

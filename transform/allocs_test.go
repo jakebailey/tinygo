@@ -27,7 +27,6 @@ func TestAllocsAggregateEdges(t *testing.T) {
 	const path = "testdata/allocs-aggregate.ll"
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
-	ensureTestCacheFreshness(t, path)
 	buf, err := llvm.NewMemoryBufferFromFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +200,7 @@ func TestAllocs2(t *testing.T) {
 		t.Fatal("could not read test input:", err)
 	}
 	var expectedTestOutput strings.Builder
-	for i, line := range strings.Split(strings.ReplaceAll(string(testInput), "\r\n", "\n"), "\n") {
+	for i, line := range strings.Split(string(testInput), "\n") {
 		const prefix = " // OUT: "
 		if idx := strings.Index(line, prefix); idx > 0 {
 			msg := line[idx+len(prefix):]

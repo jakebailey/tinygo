@@ -58,6 +58,7 @@ type channel struct {
 	lock         task.PMutex
 	buf          unsafe.Pointer
 	synctest     unsafe.Pointer
+	timer        *timer
 }
 
 const (
@@ -166,6 +167,9 @@ func chanLen(c *channel) int {
 	if c == nil {
 		return 0
 	}
+	if c.timer != nil {
+		return 0
+	}
 	return int(c.bufLen)
 }
 
@@ -175,7 +179,34 @@ func chanCap(c *channel) int {
 	if c == nil {
 		return 0
 	}
+	if c.timer != nil {
+		return 0
+	}
 	return int(c.bufCap)
+}
+
+func timerChanDrain(c unsafe.Pointer) bool {
+	if c == nil {
+		return false
+	}
+	ch := (*channel)(c)
+	mask := interrupt.Disable()
+	ch.lock.Lock()
+	if ch.bufLen == 0 {
+		ch.lock.Unlock()
+		interrupt.Restore(mask)
+		return false
+	}
+	elemAddr := unsafe.Add(ch.buf, ch.bufTail*ch.elementSize)
+	ch.bufLen--
+	ch.bufTail++
+	if ch.bufTail == ch.bufCap {
+		ch.bufTail = 0
+	}
+	memzero(elemAddr, ch.elementSize)
+	ch.lock.Unlock()
+	interrupt.Restore(mask)
+	return true
 }
 
 // Push the value to the channel buffer array, for a send operation.
@@ -333,6 +364,8 @@ func chanRecv(ch *channel, value unsafe.Pointer, op *channelOp) bool {
 		deadlock()
 	}
 	ch.checkSynctest("receive on")
+	timerChanRun(ch.timer)
+	timerChanBlock(ch.timer)
 
 	mask := interrupt.Disable()
 	ch.lock.Lock()
@@ -343,6 +376,7 @@ func chanRecv(ch *channel, value unsafe.Pointer, op *channelOp) bool {
 			scheduleTask(wake)
 		}
 		interrupt.Restore(mask)
+		timerChanUnblock(ch.timer)
 		return ok
 	}
 
@@ -362,6 +396,7 @@ func chanRecv(ch *channel, value unsafe.Pointer, op *channelOp) bool {
 
 	// Wait until the goroutine is resumed.
 	task.Pause()
+	timerChanUnblock(ch.timer)
 
 	// Return whether the receive happened from a closed channel.
 	return t.DataUint32() != chanOperationClosed
@@ -402,6 +437,7 @@ func chanTryRecv(ch *channel, value unsafe.Pointer) (received, ok bool) {
 		return false, false
 	}
 	ch.checkSynctest("receive on")
+	timerChanRun(ch.timer)
 
 	mask := interrupt.Disable()
 	ch.lock.Lock()
@@ -530,6 +566,16 @@ func unlockAllStates(states []chanSelectState) {
 // chanSelect implements blocking or non-blocking select operations.
 // The 'ops' slice must be set if (and only if) this is a blocking select.
 func chanSelect(recvbuf unsafe.Pointer, states []chanSelectState, ops []channelOp) (uint32, bool) {
+	blocking := len(ops) != 0
+	for _, state := range states {
+		if state.ch != nil && state.value == nil {
+			state.ch.checkSynctest("select on")
+			timerChanRun(state.ch.timer)
+			if blocking {
+				timerChanBlock(state.ch.timer)
+			}
+		}
+	}
 	mask := interrupt.Disable()
 	var currentBubble unsafe.Pointer
 	var synctestDurable bool
@@ -591,7 +637,6 @@ func chanSelect(recvbuf unsafe.Pointer, states []chanSelectState, ops []channelO
 
 	// If this select can immediately proceed, or is a non-blocking select,
 	// return early.
-	blocking := len(ops) != 0
 	if selectIndex != selectNoIndex || !blocking {
 		unlockAllStates(states)
 		chanSelectLock.Unlock()
@@ -599,6 +644,13 @@ func chanSelect(recvbuf unsafe.Pointer, states []chanSelectState, ops []channelO
 			scheduleTask(wake)
 		}
 		interrupt.Restore(mask)
+		if blocking {
+			for _, state := range states {
+				if state.ch != nil && state.value == nil {
+					timerChanUnblock(state.ch.timer)
+				}
+			}
+		}
 		if selectClosed {
 			runtimePanic(errSendOnClosedChannel)
 		}
@@ -666,6 +718,11 @@ func chanSelect(recvbuf unsafe.Pointer, states []chanSelectState, ops []channelO
 	// Pull the return values out of t.Data (which contains two bitfields).
 	selectIndex = t.DataUint32() >> 2
 	selectOk = t.DataUint32()&chanOperationMask != chanOperationClosed
+	for _, state := range states {
+		if state.ch != nil && state.value == nil {
+			timerChanUnblock(state.ch.timer)
+		}
+	}
 
 	if !selectOk && states[selectIndex].value != nil {
 		runtimePanic(errSendOnClosedChannel)

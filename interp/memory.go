@@ -926,7 +926,7 @@ func (v rawValue) toLLVMValue(llvmType llvm.Type, mem *memoryView) (llvm.Value, 
 		for i, fieldType := range fieldTypes {
 			offset := mem.r.targetData.ElementOffset(llvmType, i)
 			field := rawValue{
-				buf: v.buf[offset:],
+				buf: v.buf[offset : offset+mem.r.targetData.TypeStoreSize(fieldType)],
 			}
 			var err error
 			fields[i], err = field.toLLVMValue(fieldType, mem)
@@ -946,7 +946,7 @@ func (v rawValue) toLLVMValue(llvmType llvm.Type, mem *memoryView) (llvm.Value, 
 		for i := range fields {
 			offset := i * int(childTypeSize)
 			field := rawValue{
-				buf: v.buf[offset:],
+				buf: v.buf[offset : offset+int(childTypeSize)],
 			}
 			var err error
 			fields[i], err = field.toLLVMValue(childType, mem)
