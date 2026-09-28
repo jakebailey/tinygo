@@ -50,6 +50,7 @@ func (m *msc) scsiCmdBegin() {
 	default:
 		// We don't support this command, error out
 		m.sendScsiError(csw.StatusFailed, scsi.SenseIllegalRequest, scsi.SenseCodeInvalidCmdOpCode)
+		return
 	}
 
 	if len(m.buf) == 0 {
@@ -85,6 +86,7 @@ func (m *msc) scsiDataTransfer(b []byte) bool {
 	switch cmdType {
 	case scsi.CmdWrite, scsi.CmdUnmap:
 		if m.readOnly {
+			m.queuedBytes += uint32(len(b))
 			m.sendScsiError(csw.StatusFailed, scsi.SenseDataProtect, scsi.SenseCodeWriteProtected)
 			return true
 		}
@@ -93,6 +95,7 @@ func (m *msc) scsiDataTransfer(b []byte) bool {
 
 	// Update our sent bytes count to include the just-confirmed bytes
 	m.sentBytes += m.queuedBytes
+	m.queuedBytes = 0
 
 	if m.sentBytes >= m.transferBytes {
 		// Transfer complete, send CSW after transfer confirmed
@@ -284,15 +287,9 @@ func (m *msc) scsiQueueTask(cmdType scsi.CmdType, b []byte) bool {
 }
 
 func (m *msc) sendScsiError(status csw.Status, key scsi.Sense, code scsi.SenseCode) {
-	// Generate CSW into m.cswBuf
 	expected := m.cbw.transferLength()
-	residue := uint32(0)
-	if expected > m.sentBytes {
-		residue = expected - m.sentBytes
-	}
 
 	// Prepare to send CSW
-	m.sendZLP = true // Ensure the transaction is signaled as ended before a CSW is sent
 	m.respStatus = status
 	m.state = mscStateStatus
 
@@ -301,11 +298,13 @@ func (m *msc) sendScsiError(status csw.Status, key scsi.Sense, code scsi.SenseCo
 	m.addlSenseCode = code
 	m.addlSenseQualifier = 0x00 // Not used
 
-	if expected > 0 && residue > 0 {
-		if m.cbw.isIn() {
+	// 6.7.3 Ho, only stall OUT while the host still has data to send
+	// https://usb.org/sites/default/files/usbmassbulk_10.pdf
+	if m.cbw.isIn() {
+		if expected > m.sentBytes {
 			m.stallEndpointIn(usb.MSC_ENDPOINT_IN)
-		} else {
-			m.stallEndpointOut(usb.MSC_ENDPOINT_OUT)
 		}
+	} else if expected > m.sentBytes+m.queuedBytes {
+		m.stallEndpointOut(usb.MSC_ENDPOINT_OUT)
 	}
 }

@@ -320,7 +320,6 @@ func TestBuild(t *testing.T) {
 		"alias.go",
 		"atomic.go",
 		"binop.go",
-		"buildinfo.go",
 		"calls.go",
 		"cgo/",
 		"channel.go",
@@ -346,6 +345,8 @@ func TestBuild(t *testing.T) {
 		"oldgo/",
 		"print.go",
 		"reflect.go",
+		"reflect-method-values.go",
+		"reflect-method-init.go",
 		"signal.go",
 		"signalnotify.go",
 		"slice.go",
@@ -643,6 +644,20 @@ func TestTimerStopResetRace(t *testing.T) {
 	runTest("timer_stop_reset_race.go", optionsFromTarget("", sema), t, nil, nil)
 }
 
+func TestTimerChannelGC(t *testing.T) {
+	t.Parallel()
+	switch runtime.GOOS {
+	case "darwin", "linux":
+	default:
+		t.Skipf("host GOOS %s does not use the Boehm GC", runtime.GOOS)
+	}
+	options := optionsFromTarget("", sema)
+	// Enumeration must not race runtime allocations.
+	// BDWGC is built without GC_THREADS in builder/bdwgc.go.
+	options.Scheduler = "tasks"
+	runTest("timer_gc.go", options, t, nil, nil)
+}
+
 func TestESP32QEMU(t *testing.T) {
 	t.Parallel()
 
@@ -731,7 +746,7 @@ func runPlatTests(options compileopts.Options, tests []string, t *testing.T) {
 				// Does not pass due to high mark false positive rate.
 				continue
 
-			case "buildinfo.go", "json.go", "stdlib.go", "testing.go":
+			case "buildinfo.go", "json.go", "localtypes.go", "stdlib.go", "testing.go":
 				// Too big for AVR. Doesn't fit in flash/RAM.
 				continue
 
@@ -1554,32 +1569,45 @@ func TestWASIPanicTraceback(t *testing.T) {
 		t.Skip("skipping test in short mode")
 	}
 
-	options := optionsFromTarget("wasip1", sema)
-	config, err := builder.NewConfig(&options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	for _, test := range []struct {
+		mode  string
+		frame string
+	}{
+		{mode: "indirect", frame: "main.panicHere"},
+		{mode: "direct", frame: "main.inlinePanic"},
+		{mode: "cross-package", frame: "main.panicPointer"},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			options := optionsFromTarget("wasip1", sema)
+			options.GlobalValues = map[string]map[string]string{
+				"main": {"mode": test.mode},
+			}
+			config, err := builder.NewConfig(&options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := builder.Build("testdata/panic-traceback.go", ".wasm", t.TempDir(), config)
+			if err != nil {
+				t.Fatal("failed to build binary:", err)
+			}
+			data, err := os.ReadFile(result.Binary)
+			if err != nil {
+				t.Fatal("failed to read binary:", err)
+			}
 
-	result, err := builder.Build("testdata/panic-traceback.go", ".wasm", t.TempDir(), config)
-	if err != nil {
-		t.Fatal("failed to build binary:", err)
-	}
-	data, err := os.ReadFile(result.Binary)
-	if err != nil {
-		t.Fatal("failed to read binary:", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	r := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfigInterpreter())
-	defer r.Close(ctx)
-	wasi_snapshot_preview1.MustInstantiate(ctx, r)
-	_, err = r.InstantiateWithConfig(ctx, data, wazero.NewModuleConfig())
-	if err == nil {
-		t.Fatal("program unexpectedly exited successfully")
-	}
-	if !strings.Contains(err.Error(), "main.panicHere") {
-		t.Fatalf("panic traceback does not contain main.panicHere:\n%s", err)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			r := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfigInterpreter())
+			defer r.Close(ctx)
+			wasi_snapshot_preview1.MustInstantiate(ctx, r)
+			_, err = r.InstantiateWithConfig(ctx, data, wazero.NewModuleConfig())
+			if err == nil {
+				t.Fatal("program unexpectedly exited successfully")
+			}
+			if !strings.Contains(err.Error(), test.frame) {
+				t.Fatalf("panic traceback does not contain %s:\n%s", test.frame, err)
+			}
+		})
 	}
 }
 
@@ -1608,6 +1636,71 @@ func TestRuntimeFatal(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "recovered:") {
 		t.Fatalf("fatal runtime error was recovered:\n%s", output.String())
+	}
+}
+
+func TestRuntimeGOROOT(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		environment []string
+		want        string
+	}{
+		{"startup environment", []string{"GOROOT=/startup"}, "/startup"},
+		{"empty startup environment", []string{"GOROOT="}, goenv.Get("GOROOT")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := optionsFromTarget(*testTarget, sema)
+			config, err := builder.NewConfig(&options)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			output := &bytes.Buffer{}
+			_, err = buildAndRun("testdata/runtimegoroot.go", config, output, nil, test.environment, time.Minute, func(cmd *exec.Cmd, _ builder.BuildResult) error {
+				return cmd.Run()
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := test.want + "\n" + test.want + "\n"
+			if output.String() != want {
+				t.Fatalf("unexpected output:\n%s\nwant:\n%s", output.String(), want)
+			}
+		})
+	}
+}
+
+func TestRuntimeGODEBUG(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		environment []string
+		want        string
+	}{
+		{"compiled default", nil, "true \"\"\ntrue \"tarinsecurepath=1\"\ntrue \"\"\ntrue \"\"\n"},
+		{"environment override", []string{"GODEBUG=tarinsecurepath=1"}, "true \"tarinsecurepath=1\"\ntrue \"tarinsecurepath=1\"\ntrue \"\"\ntrue \"\"\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := optionsFromTarget(*testTarget, sema)
+			config, err := builder.NewConfig(&options)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			output := &bytes.Buffer{}
+			_, err = buildAndRun("testdata/runtimegodebug.go", config, output, nil, test.environment, time.Minute, func(cmd *exec.Cmd, _ builder.BuildResult) error {
+				return cmd.Run()
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if output.String() != test.want {
+				t.Fatalf("unexpected output:\n%s\nwant:\n%s", output.String(), test.want)
+			}
+		})
 	}
 }
 

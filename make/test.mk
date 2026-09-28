@@ -77,7 +77,6 @@ TEST_PACKAGES_FAST = \
 # archive/zip requires os.ReadAt, which is not yet supported on windows
 # bytes requires mmap
 # compress/flate appears to hang on wasi
-# crypto/aes needs reflect.Type.Method(), not yet implemented
 # debug/plan9obj requires os.ReadAt, which is not yet supported on windows
 # encoding/xml takes a minute on linux and gives a stack overflow on wasi
 # io/ioutil requires os.ReadDir, which is not yet supported on windows or wasi
@@ -99,10 +98,13 @@ TEST_PACKAGES_LINUX := \
 	debug/dwarf \
 	debug/gosym \
 	debug/plan9obj \
+	encoding/gob \
 	encoding/xml \
+	fmt \
+	go/build/constraint \
+	go/parser \
 	go/printer \
 	io/ioutil \
-	iter \
 	mime \
 	mime/multipart \
 	mime/quotedprintable \
@@ -111,9 +113,13 @@ TEST_PACKAGES_LINUX := \
 	net/netip \
 	net/textproto \
 	os/user \
+	path/filepath \
+	regexp \
 	slices \
 	strings \
 	testing/fstest \
+	testing/quick \
+	time \
 	$(nil)
 
 TEST_PACKAGES_DARWIN := $(TEST_PACKAGES_LINUX)
@@ -122,6 +128,7 @@ TEST_PACKAGES_DARWIN := $(TEST_PACKAGES_LINUX)
 TEST_PACKAGES_WINDOWS := \
 	compress/flate \
 	mime \
+	time \
 	$(nil)
 
 
@@ -202,22 +209,13 @@ ifeq ($(OS),Windows_NT)
 TEST_PACKAGES_HOST := $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_WINDOWS)
 endif
 
-TEST_SKIP_FLAG := -skip='TestExtraMethods|TestAsValidation|TestUnmarshalNestingLimitSlice|TestUnmarshalNestingLimitStruct'
+TEST_SKIP_FLAG := -skip='TestAsValidation|TestUnmarshalNestingLimitSlice|TestUnmarshalNestingLimitStruct'
 TEST_ADDITIONAL_FLAGS ?=
 
-# These packages spend almost all of their test time in a few tests that Go
-# marks as long running. -short omits those tests and keeps the rest.
-# encoding/xml gets the same treatment on its own line below.
-# See https://github.com/tinygo-org/tinygo/issues/5659
-TEST_PACKAGES_SHORT = \
-	archive/zip \
-	index/suffixarray \
-	$(nil)
-
-HOST_TEST_SHORT_PACKAGES := $(filter $(TEST_PACKAGES_SHORT),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
-HOST_TEST_PRINTER_PACKAGES := $(filter go/printer,$(TEST_PACKAGES_HOST))
 TEST_PACKAGES_ALLOC_SHA := crypto/sha256 crypto/sha512
-TEST_ALLOC_SHA_SKIP_FLAG := -skip='^(TestExtraMethods|TestAllocations|TestAllocatonsWithTypeAsserts)$$'
+TEST_ALLOC_SHA_SKIP_FLAG := -skip='^(TestAllocations|TestAllocatonsWithTypeAsserts)$$'
+TEST_PACKAGES_ALLOC_FMT := fmt
+TEST_ALLOC_FMT_SKIP_FLAG := -skip='^TestCountMallocs$$'
 TEST_PACKAGES_ALLOC_STRCONV := strconv
 TEST_ALLOC_STRCONV_SKIP_FLAG := -skip='^(TestCountMallocs|TestAllocationsFromBytes)$$'
 TEST_PACKAGES_ALLOC_UNICODE := unicode/utf16 unicode/utf8
@@ -229,7 +227,7 @@ TEST_ALLOC_MIME_SKIP_FLAG := -skip='^TestLookupMallocs$$'
 TEST_PACKAGES_ALLOC_TEXTPROTO := net/textproto
 TEST_ALLOC_TEXTPROTO_SKIP_FLAG := -skip='^TestCommonHeaders$$'
 TEST_PACKAGES_ALLOC_REFLECT := reflect
-TEST_ALLOC_REFLECT_SKIP_FLAG := -skip='^(TestMapIterSet|TestDeepEqualAllocs)$$'
+TEST_ALLOC_REFLECT_SKIP_FLAG :=
 TEST_PACKAGES_ALLOC_BYTES := bytes
 TEST_ALLOC_BYTES_SKIP_FLAG := -skip='^(TestNewBufferShallow|TestEqual|TestIndex|TestLastIndex|TestReplace)$$'
 TEST_PACKAGES_ALLOC_SLICES := slices
@@ -238,6 +236,7 @@ TEST_PACKAGES_ALLOC_STRINGS := strings
 TEST_ALLOC_STRINGS_SKIP_FLAG := -skip='^(TestBuilderAllocs|TestBuilderGrow|TestBuilderGrowSizeclasses|TestIndexRune|TestReplace)$$'
 TEST_PACKAGES_ALLOCS := \
 	$(TEST_PACKAGES_ALLOC_SHA) \
+	$(TEST_PACKAGES_ALLOC_FMT) \
 	$(TEST_PACKAGES_ALLOC_STRCONV) \
 	$(TEST_PACKAGES_ALLOC_UNICODE) \
 	$(TEST_PACKAGES_ALLOC_CONTEXT) \
@@ -249,8 +248,66 @@ TEST_PACKAGES_ALLOCS := \
 	$(TEST_PACKAGES_ALLOC_STRINGS) \
 	$(nil)
 
+HOST_TEST_SHA_PACKAGES := $(filter $(TEST_PACKAGES_ALLOC_SHA),$(TEST_PACKAGES_HOST))
+HOST_TEST_SHA_FLAGS := $(TEST_ALLOC_SHA_SKIP_FLAG)
+HOST_TEST_STRCONV_PACKAGES := $(filter $(TEST_PACKAGES_ALLOC_STRCONV),$(TEST_PACKAGES_HOST))
+HOST_TEST_STRCONV_FLAGS := $(TEST_ALLOC_STRCONV_SKIP_FLAG)
+HOST_TEST_UNICODE_PACKAGES := $(filter $(TEST_PACKAGES_ALLOC_UNICODE),$(TEST_PACKAGES_HOST))
+HOST_TEST_UNICODE_FLAGS := $(TEST_ALLOC_UNICODE_SKIP_FLAG)
+HOST_TEST_CONTEXT_PACKAGES := $(filter $(TEST_PACKAGES_ALLOC_CONTEXT),$(TEST_PACKAGES_HOST))
+HOST_TEST_CONTEXT_FLAGS := $(TEST_ALLOC_CONTEXT_SKIP_FLAG)
+HOST_TEST_MIME_PACKAGES := $(filter $(TEST_PACKAGES_ALLOC_MIME),$(TEST_PACKAGES_HOST))
+HOST_TEST_MIME_FLAGS := $(TEST_ALLOC_MIME_SKIP_FLAG)
+HOST_TEST_TEXTPROTO_PACKAGES := $(filter $(TEST_PACKAGES_ALLOC_TEXTPROTO),$(TEST_PACKAGES_HOST))
+HOST_TEST_TEXTPROTO_FLAGS := $(TEST_ALLOC_TEXTPROTO_SKIP_FLAG)
+HOST_TEST_REFLECT_PACKAGES := $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_HOST))
+HOST_TEST_REFLECT_FLAGS := $(TEST_ALLOC_REFLECT_SKIP_FLAG)
+HOST_TEST_BYTES_PACKAGES := $(filter $(TEST_PACKAGES_ALLOC_BYTES),$(TEST_PACKAGES_HOST))
+HOST_TEST_BYTES_FLAGS := $(TEST_ALLOC_BYTES_SKIP_FLAG)
+HOST_TEST_SLICES_PACKAGES := $(filter $(TEST_PACKAGES_ALLOC_SLICES),$(TEST_PACKAGES_HOST))
+HOST_TEST_SLICES_FLAGS := $(TEST_ALLOC_SLICES_SKIP_FLAG)
+HOST_TEST_STRINGS_PACKAGES := $(filter $(TEST_PACKAGES_ALLOC_STRINGS),$(TEST_PACKAGES_HOST))
+HOST_TEST_STRINGS_FLAGS := $(TEST_ALLOC_STRINGS_SKIP_FLAG)
+HOST_TEST_PRINTER_PACKAGES := $(filter go/printer,$(TEST_PACKAGES_HOST))
+HOST_TEST_GOB_PACKAGES := $(filter encoding/gob,$(TEST_PACKAGES_HOST))
+HOST_TEST_QUICK_PACKAGES := $(filter testing/quick,$(TEST_PACKAGES_HOST))
+HOST_TEST_LARGE_STACK_PACKAGES := $(filter go/build/constraint regexp,$(TEST_PACKAGES_HOST))
+HOST_TEST_DEEP_STACK_PACKAGES := $(filter path/filepath,$(TEST_PACKAGES_HOST))
+HOST_TEST_HUGE_STACK_PACKAGES := $(filter go/parser,$(TEST_PACKAGES_HOST))
+HOST_TEST_ARCHIVE_ZIP_PACKAGES := $(filter archive/zip,$(TEST_PACKAGES_HOST))
+HOST_TEST_XML_PACKAGES := $(filter encoding/xml,$(TEST_PACKAGES_HOST))
+HOST_TEST_NETIP_PACKAGES := $(filter net/netip,$(TEST_PACKAGES_HOST))
+HOST_TEST_NETIP_FLAGS := -skip='^TestAddrStringAllocs$$|^TestNoAllocs$$/^(Addr.IsGlobalUnicast|Addr.IsInterfaceLocalMulticast|Addr.IsLinkLocalMulticast|Addr.IsLinkLocalUnicast|Addr.IsPrivate)$$'
+HOST_TEST_JSON_PACKAGES := $(filter encoding/json encoding/json/jsontext encoding/json/v2,$(TEST_PACKAGES_HOST))
+HOST_TEST_SEPARATE_PACKAGES := \
+	$(HOST_TEST_ARCHIVE_ZIP_PACKAGES) \
+	$(HOST_TEST_PRINTER_PACKAGES) \
+	$(HOST_TEST_GOB_PACKAGES) \
+	$(HOST_TEST_QUICK_PACKAGES) \
+	$(HOST_TEST_LARGE_STACK_PACKAGES) \
+	$(HOST_TEST_DEEP_STACK_PACKAGES) \
+	$(HOST_TEST_HUGE_STACK_PACKAGES) \
+	$(HOST_TEST_SHA_PACKAGES) \
+	$(HOST_TEST_STRCONV_PACKAGES) \
+	$(HOST_TEST_UNICODE_PACKAGES) \
+	$(HOST_TEST_CONTEXT_PACKAGES) \
+	$(HOST_TEST_MIME_PACKAGES) \
+	$(HOST_TEST_TEXTPROTO_PACKAGES) \
+	$(HOST_TEST_REFLECT_PACKAGES) \
+	$(HOST_TEST_BYTES_PACKAGES) \
+	$(HOST_TEST_SLICES_PACKAGES) \
+	$(HOST_TEST_STRINGS_PACKAGES) \
+	$(filter $(TEST_PACKAGES_ALLOC_FMT) $(TEST_PACKAGES_ALLOC_MLDSA),$(TEST_PACKAGES_HOST)) \
+	$(HOST_TEST_XML_PACKAGES) \
+	$(HOST_TEST_NETIP_PACKAGES) \
+	$(HOST_TEST_JSON_PACKAGES) \
+	$(nil)
+
+run-tinygo-test = $(if $(strip $(1)),$(TINYGO) test $(2) $(strip $(1)))
+
 define run-tinygo-alloc-tests
 $(if $(filter $(TEST_PACKAGES_ALLOC_SHA),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_SHA_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_SHA),$(1)))
+$(if $(filter $(TEST_PACKAGES_ALLOC_FMT),$(1)),$(3) $(TINYGO) test $(2) -stack-size=1MB $(TEST_ALLOC_FMT_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_FMT),$(1)))
 $(if $(filter $(TEST_PACKAGES_ALLOC_STRCONV),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_STRCONV_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_STRCONV),$(1)))
 $(if $(filter $(TEST_PACKAGES_ALLOC_UNICODE),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_UNICODE_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_UNICODE),$(1)))
 $(if $(filter $(TEST_PACKAGES_ALLOC_CONTEXT),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_CONTEXT_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_CONTEXT),$(1)))
@@ -261,44 +318,57 @@ $(if $(filter $(TEST_PACKAGES_ALLOC_BYTES),$(1)),$(3) $(TINYGO) test $(2) $(TEST
 $(if $(filter $(TEST_PACKAGES_ALLOC_SLICES),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_SLICES_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_SLICES),$(1)))
 $(if $(filter $(TEST_PACKAGES_ALLOC_STRINGS),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_STRINGS_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_STRINGS),$(1)))
 endef
-HOST_TEST_NETIP_PACKAGES := $(filter net/netip,$(TEST_PACKAGES_HOST))
-HOST_TEST_NETIP_FLAGS := -skip='^TestAddrStringAllocs$$|^TestNoAllocs$$/^(Addr.IsGlobalUnicast|Addr.IsInterfaceLocalMulticast|Addr.IsLinkLocalMulticast|Addr.IsLinkLocalUnicast|Addr.IsPrivate)$$'
+
+define run-tinygo-host-groups
+$(call run-tinygo-test,$(HOST_TEST_PRINTER_PACKAGES),$(1) -stack-size=1MB)
+$(call run-tinygo-test,$(HOST_TEST_GOB_PACKAGES),$(1) -stack-size=1MB -skip='^(TestCountDecodeMallocs|TestCountEncodeMallocs)$$')
+$(call run-tinygo-test,$(HOST_TEST_QUICK_PACKAGES),$(1) -stack-size=1MB)
+$(call run-tinygo-test,$(HOST_TEST_LARGE_STACK_PACKAGES),$(1) -stack-size=1MB)
+$(call run-tinygo-test,$(HOST_TEST_DEEP_STACK_PACKAGES),$(1) -stack-size=4MB)
+$(call run-tinygo-test,$(HOST_TEST_HUGE_STACK_PACKAGES),$(1) -stack-size=256MB)
+$(call run-tinygo-test,$(HOST_TEST_SHA_PACKAGES),$(1) $(HOST_TEST_SHA_FLAGS))
+$(call run-tinygo-test,$(HOST_TEST_STRCONV_PACKAGES),$(1) $(HOST_TEST_STRCONV_FLAGS))
+$(call run-tinygo-test,$(HOST_TEST_UNICODE_PACKAGES),$(1) $(HOST_TEST_UNICODE_FLAGS))
+$(call run-tinygo-test,$(HOST_TEST_CONTEXT_PACKAGES),$(1) $(HOST_TEST_CONTEXT_FLAGS))
+$(call run-tinygo-test,$(HOST_TEST_MIME_PACKAGES),$(1) $(HOST_TEST_MIME_FLAGS))
+$(call run-tinygo-test,$(HOST_TEST_TEXTPROTO_PACKAGES),$(1) $(HOST_TEST_TEXTPROTO_FLAGS))
+$(call run-tinygo-test,$(HOST_TEST_REFLECT_PACKAGES),$(1) $(HOST_TEST_REFLECT_FLAGS))
+$(call run-tinygo-test,$(HOST_TEST_BYTES_PACKAGES),$(1) $(HOST_TEST_BYTES_FLAGS))
+$(call run-tinygo-test,$(HOST_TEST_SLICES_PACKAGES),$(1) $(HOST_TEST_SLICES_FLAGS))
+$(call run-tinygo-test,$(HOST_TEST_STRINGS_PACKAGES),$(1) $(HOST_TEST_STRINGS_FLAGS))
+$(call run-tinygo-alloc-tests,$(filter $(TEST_PACKAGES_ALLOC_FMT) $(TEST_PACKAGES_ALLOC_MLDSA),$(TEST_PACKAGES_HOST)),$(1))
+$(call run-tinygo-test,$(HOST_TEST_NETIP_PACKAGES),$(1) $(HOST_TEST_NETIP_FLAGS))
+$(call run-tinygo-test,$(HOST_TEST_JSON_PACKAGES),$(1) -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^#05$$|^TestTokenStringAllocations$$')
+endef
 
 # https://go.dev/src/internal/synctest/synctest_test.go creates 100 x 100
 # goroutines, which can exceed macOS's thread limit with the threads scheduler.
 ifeq ($(uname),Darwin)
 TEST_SYNCTEST_THREAD_LIMIT_SKIP := |TestWaitGroupManyBubbles
 endif
-HOST_TEST_XML_PACKAGES := $(filter encoding/xml,$(TEST_PACKAGES_HOST))
-
-run-tinygo-test = $(if $(strip $(1)),$(TINYGO) test $(2) $(strip $(1)))
 
 # Test known-working standard library packages.
 # TODO: parallelize, and only show failing tests (no implied -v flag).
 .PHONY: tinygo-test
 tinygo-test:
-	@# TestExtraMethods: used by many crypto packages and uses reflect.Type.Method which is not implemented.
 	@# TestUnmarshalNestingLimit{Slice,Struct}: encoding/asn1 nesting limit added in
 	@# https://github.com/golang/go/commit/6a6d115f9a7422b2fa081ba6f567eefb4a099462
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_SHORT) $(HOST_TEST_PRINTER_PACKAGES) $(TEST_PACKAGES_ALLOCS) $(HOST_TEST_NETIP_PACKAGES),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
-	$(call run-tinygo-test,$(HOST_TEST_SHORT_PACKAGES),$(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short)
-	$(call run-tinygo-test,$(HOST_TEST_PRINTER_PACKAGES),$(TEST_ADDITIONAL_FLAGS) -stack-size=1MB)
-	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW),$(TEST_ADDITIONAL_FLAGS))
-	$(call run-tinygo-test,$(HOST_TEST_NETIP_PACKAGES),$(TEST_ADDITIONAL_FLAGS) $(HOST_TEST_NETIP_FLAGS))
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out $(HOST_TEST_SEPARATE_PACKAGES),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
+	$(call run-tinygo-test,$(HOST_TEST_ARCHIVE_ZIP_PACKAGES),$(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -parallel=1)
+	$(call run-tinygo-host-groups,$(TEST_ADDITIONAL_FLAGS))
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestReflectFuncOf|TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount$(TEST_SYNCTEST_THREAD_LIMIT_SKIP))$$' internal/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$$' testing/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -run='^TestSynctestMarshal$$' encoding/json
-	$(call run-tinygo-test,$(HOST_TEST_XML_PACKAGES),$(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short -stack-size=16MB)
+	$(call run-tinygo-test,$(HOST_TEST_XML_PACKAGES),$(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -stack-size=16MB)
 	@# io/fs requires os.ReadDir, not yet supported on windows or wasi. It also
 	@# requires a large stack-size. Hence, io/fs is only run conditionally.
 	@# For more details, see the comments on issue #3143.
 	$(call run-tinygo-test,$(HOST_TEST_IOFS_PACKAGES),-stack-size=6MB)
 tinygo-test-fast:
-	$(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(HOST_TEST_PRINTER_PACKAGES) $(TEST_PACKAGES_ALLOCS) $(HOST_TEST_NETIP_PACKAGES),$(TEST_PACKAGES_HOST))
-	$(call run-tinygo-test,$(HOST_TEST_PRINTER_PACKAGES),-stack-size=1MB)
-	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_HOST))
-	$(call run-tinygo-test,$(HOST_TEST_NETIP_PACKAGES),$(HOST_TEST_NETIP_FLAGS))
-	$(call run-tinygo-test,$(HOST_TEST_XML_PACKAGES),$(TEST_SKIP_FLAG) -short -stack-size=16MB)
+	$(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out $(HOST_TEST_SEPARATE_PACKAGES),$(TEST_PACKAGES_HOST))
+	$(call run-tinygo-host-groups)
+	$(call run-tinygo-test,$(HOST_TEST_ARCHIVE_ZIP_PACKAGES),$(TEST_SKIP_FLAG) -parallel=1)
+	$(call run-tinygo-test,$(HOST_TEST_XML_PACKAGES),$(TEST_SKIP_FLAG) -stack-size=16MB)
 tinygo-bench:
 	$(TINYGO) test -bench . $(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW)
 tinygo-bench-fast:
@@ -352,7 +422,7 @@ tinygo-test-baremetal:
 	$(TINYGO) test -target riscv-qemu $(TEST_SKIP_FLAG) $(filter-out $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_BAREMETAL))
 	$(if $(filter $(TEST_PACKAGES_ALLOC_STRCONV),$(TEST_PACKAGES_BAREMETAL)),$(TINYGO) test -target riscv-qemu -skip='TestCountMallocs|TestAllocationsFromBytes' $(filter $(TEST_PACKAGES_ALLOC_STRCONV),$(TEST_PACKAGES_BAREMETAL)))
 	$(if $(filter $(TEST_PACKAGES_ALLOC_UNICODE),$(TEST_PACKAGES_BAREMETAL)),$(TINYGO) test -target riscv-qemu -skip='TestAllocationsDecode|TestRuneCountNonASCIIAllocation' $(filter $(TEST_PACKAGES_ALLOC_UNICODE),$(TEST_PACKAGES_BAREMETAL)))
-	$(if $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_BAREMETAL)),$(TINYGO) test -target riscv-qemu -skip='TestMapIterSet|TestDeepEqualAllocs' $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_BAREMETAL)))
+	$(if $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_BAREMETAL)),$(TINYGO) test -target riscv-qemu $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_BAREMETAL)))
 
 # Test external packages in a large corpus.
 test-corpus:

@@ -216,6 +216,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 		BuildMode:       config.BuildMode(),
 		CodeModel:       config.CodeModel(),
 		RelocationModel: config.RelocationModel(),
+		SpeedLevel:      speedLevel,
 		SizeLevel:       sizeLevel,
 		TinyGoVersion:   goenv.Version(),
 		TrimPath:        config.TrimPath(),
@@ -246,6 +247,9 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 	})
 	if err != nil {
 		return BuildResult{}, err
+	}
+	if _, ok := globalValues["runtime"]["godebugDefault"]; !ok {
+		globalValues["runtime"]["godebugDefault"] = lprogram.MainPkg().DefaultGODEBUG
 	}
 	result := BuildResult{
 		ModuleRoot: lprogram.MainPkg().Module.Dir,
@@ -622,7 +626,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 					}
 					fn.SetLinkage(llvm.LinkOnceODRLinkage)
 				}
-				err = llvm.LinkModules(mod, pkgMod)
+				err = linkPackageModule(mod, pkgMod)
 				if err != nil {
 					return fmt.Errorf("failed to link module: %w", err)
 				}
@@ -1185,6 +1189,28 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 	}
 
 	return result, nil
+}
+
+func linkPackageModule(mod, pkgMod llvm.Module) error {
+	attributes := make(map[string]llvmutil.FunctionUsageAttributes)
+	for fn := pkgMod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		attrs := llvmutil.ReadFunctionUsageAttributes(fn)
+		attrs = attrs.Merge(llvmutil.ReadFunctionUsageAttributes(mod.NamedFunction(fn.Name())))
+		if len(attrs) != 0 {
+			attributes[fn.Name()] = attrs
+		}
+	}
+	if err := llvm.LinkModules(mod, pkgMod); err != nil {
+		return err
+	}
+	for name, attrs := range attributes {
+		fn := mod.NamedFunction(name)
+		if fn.IsNil() {
+			continue
+		}
+		attrs.Apply(fn)
+	}
+	return nil
 }
 
 func linkOrCopyFile(src, dst string) error {

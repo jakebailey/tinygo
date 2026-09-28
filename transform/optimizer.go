@@ -49,6 +49,12 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 		}
 	}
 
+	if speedLevel == 0 {
+		if err := pruneRuntimeStartup(mod, true); err != nil {
+			return []error{err}
+		}
+	}
+
 	if speedLevel > 0 {
 		// Run some preparatory passes for the Go optimizer.
 		po := llvm.NewPassBuilderOptions()
@@ -64,11 +70,17 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 		if err != nil {
 			return []error{fmt.Errorf("could not build pass pipeline: %w", err)}
 		}
+		if err := pruneRuntimeStartup(mod, false); err != nil {
+			return []error{err}
+		}
 
 		// Run TinyGo-specific optimization passes.
 		OptimizeStringToBytes(mod)
 		maxStackSize := config.MaxStackAlloc()
 		OptimizeAllocs(mod, nil, maxStackSize, nil)
+		if err := pruneDeadCodeBeforeInterfaceLowering(mod); err != nil {
+			return []error{err}
+		}
 		err = LowerInterfaces(mod, config)
 		if err != nil {
 			return []error{err}
@@ -89,6 +101,9 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 			return []error{fmt.Errorf("could not build pass pipeline: %w", err)}
 		}
 
+		if err := mod.RunPasses("always-inline,function-attrs", llvm.TargetMachine{}, po); err != nil {
+			return []error{fmt.Errorf("could not inline before escape analysis: %w", err)}
+		}
 		// Run TinyGo-specific interprocedural optimizations.
 		if config.Options.PrintAllocs != nil && config.Options.PrintAllocsCover {
 			// The go coverage tool expects this header before any blocks.
@@ -111,6 +126,10 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 		OptimizeStringEqual(mod)
 
 	} else {
+		if err := pruneDeadCodeBeforeInterfaceLowering(mod); err != nil {
+			return []error{err}
+		}
+
 		// Must be run at any optimization level.
 		err := LowerInterfaces(mod, config)
 		if err != nil {
@@ -198,6 +217,87 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 	}
 
 	return nil
+}
+
+func pruneDeadCodeBeforeInterfaceLowering(mod llvm.Module) error {
+	pruneUnusedReflectMakeFunc(mod)
+	options := llvm.NewPassBuilderOptions()
+	defer options.Dispose()
+	if err := mod.RunPasses("globaldce", llvm.TargetMachine{}, options); err != nil {
+		return fmt.Errorf("could not run pre-interface globaldce pass: %w", err)
+	}
+	return nil
+}
+
+func pruneRuntimeStartup(mod llvm.Module, runInitialDCE bool) error {
+	options := llvm.NewPassBuilderOptions()
+	defer options.Dispose()
+	if runInitialDCE {
+		if err := mod.RunPasses("globaldce", llvm.TargetMachine{}, options); err != nil {
+			return fmt.Errorf("could not run pre-startup-pruning globaldce pass: %w", err)
+		}
+	}
+	if pruneUnusedRuntimeStartup(mod) {
+		if err := mod.RunPasses("globaldce", llvm.TargetMachine{}, options); err != nil {
+			return fmt.Errorf("could not run post-startup-pruning globaldce pass: %w", err)
+		}
+	}
+	return nil
+}
+
+func pruneUnusedRuntimeStartup(mod llvm.Module) bool {
+	changed := lowerRuntimeFeatureGate(mod,
+		"runtime.gorootEnvEnabled",
+		"tinygo.runtime.feature.goroot",
+		"runtime.GOROOT")
+	return lowerRuntimeFeatureGate(mod,
+		"runtime.godebugEnvEnabled",
+		"tinygo.runtime.feature.godebug",
+		"internal/godebug.setUpdate") || changed
+}
+
+func lowerRuntimeFeatureGate(mod llvm.Module, gateName, markerName, featureName string) bool {
+	marker := mod.NamedFunction(markerName)
+	enabled := !marker.IsNil() && hasUses(marker)
+	feature := mod.NamedFunction(featureName)
+	enabled = enabled || (!feature.IsNil() && hasUses(feature))
+
+	gate := mod.NamedFunction(gateName)
+	if gate.IsNil() {
+		return false
+	}
+
+	for _, use := range getUses(gate) {
+		if use.IsACallInst().IsNil() || use.CalledValue() != gate {
+			panic("unexpected use of runtime feature gate")
+		}
+		use.ReplaceAllUsesWith(llvm.ConstInt(use.Type(), boolToUint64(enabled), false))
+		use.EraseFromParentAsInstruction()
+	}
+	if hasUses(gate) {
+		panic("runtime feature gate still has uses")
+	}
+	gate.EraseFromParentAsFunction()
+	if !marker.IsNil() {
+		for _, use := range getUses(marker) {
+			if use.IsACallInst().IsNil() || use.CalledValue() != marker {
+				panic("unexpected use of runtime feature marker")
+			}
+			use.EraseFromParentAsInstruction()
+		}
+		if hasUses(marker) {
+			panic("runtime feature marker still has uses")
+		}
+		marker.EraseFromParentAsFunction()
+	}
+	return true
+}
+
+func boolToUint64(value bool) uint64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func blockGlobalAllocPromotion(mod llvm.Module) {

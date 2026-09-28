@@ -541,6 +541,134 @@ func TestDarwinCgoImportDynamicErrors(t *testing.T) {
 	}
 }
 
+func TestAutomaticInlining(t *testing.T) {
+	alwaysInlineKind := llvm.AttributeKindID("alwaysinline")
+	noInlineKind := llvm.AttributeKindID("noinline")
+	for _, opt := range []struct {
+		level        string
+		automatic    bool
+		fastPathOnly bool
+	}{
+		{level: "0"},
+		{level: "1"},
+		{level: "2", automatic: true},
+		{level: "s", fastPathOnly: true},
+		{level: "z", fastPathOnly: true},
+	} {
+		t.Run(opt.level, func(t *testing.T) {
+			options := &compileopts.Options{
+				Target: "wasm",
+				Opt:    opt.level,
+			}
+			mod, errs := testCompilePackage(t, options, "inline-heuristic.go")
+			if len(errs) != 0 {
+				for _, err := range errs {
+					t.Error(err)
+				}
+				return
+			}
+			defer mod.Dispose()
+
+			for _, test := range []struct {
+				name     string
+				noInline bool
+			}{
+				{name: "main.inlineFastPath"},
+				{name: "main.inlineSingleCall"},
+				{name: "main.inlineConstructor"},
+				{name: "main.inlineConstructorWrapper"},
+				{name: "main.inlineConstructorChecked"},
+				{name: "main.inlineConstructorExpensive"},
+				{name: "main.inlineNonAllocatingPointer"},
+				{name: "main.inlineComplexSlowPath"},
+				{name: "main.inlineExpensiveSlowPath"},
+				{name: "main.inlineTooExpensive"},
+				{name: "main.inlineRecursive"},
+				{name: "main.inlineMutualA"},
+				{name: "main.inlineMutualB"},
+				{name: "main.inlineWithDefer"},
+				{name: "main.inlineWithGo"},
+				{name: "main.inlineWithRecover", noInline: true},
+				{name: "main.inlineDisabled", noInline: true},
+			} {
+				fn := mod.NamedFunction(test.name)
+				if fn.IsNil() {
+					t.Fatalf("missing function %s", test.name)
+				}
+				if got := !fn.GetEnumFunctionAttribute(alwaysInlineKind).IsNil(); got {
+					t.Errorf("%s has function-wide alwaysinline", test.name)
+				}
+				if got := !fn.GetEnumFunctionAttribute(noInlineKind).IsNil(); got != test.noInline {
+					t.Errorf("%s noinline: got %v, want %v", test.name, got, test.noInline)
+				}
+			}
+
+			mainFn := mod.NamedFunction("main.main")
+			if mainFn.IsNil() {
+				t.Fatal("missing function main.main")
+			}
+			for fn := mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+				for block := fn.FirstBasicBlock(); !block.IsNil(); block = llvm.NextBasicBlock(block) {
+					for instruction := block.FirstInstruction(); !instruction.IsNil(); instruction = llvm.NextInstruction(instruction) {
+						if instruction.IsACallInst().IsNil() {
+							continue
+						}
+						callee := instruction.CalledValue()
+						if callee.IsAFunction().IsNil() || callee.GetEnumFunctionAttribute(noInlineKind).IsNil() {
+							continue
+						}
+						if !instruction.GetCallSiteEnumAttribute(-1, alwaysInlineKind).IsNil() {
+							t.Errorf("%s forces inlining of noinline function %s", fn.Name(), callee.Name())
+						}
+					}
+				}
+			}
+			callSites := make(map[string][]bool)
+			for _, block := range mainFn.BasicBlocks() {
+				for instruction := block.FirstInstruction(); !instruction.IsNil(); instruction = llvm.NextInstruction(instruction) {
+					if instruction.IsACallInst().IsNil() {
+						continue
+					}
+					callee := instruction.CalledValue()
+					if callee.IsAFunction().IsNil() {
+						continue
+					}
+					name := callee.Name()
+					callSites[name] = append(callSites[name],
+						!instruction.GetCallSiteEnumAttribute(-1, alwaysInlineKind).IsNil())
+				}
+			}
+			for _, test := range []struct {
+				name string
+				want []bool
+			}{
+				{name: "main.inlineFastPath", want: []bool{
+					opt.automatic || opt.fastPathOnly,
+					opt.automatic || opt.fastPathOnly,
+				}},
+				{name: "main.inlineSingleCall", want: []bool{opt.automatic}},
+				{name: "main.inlineConstructor", want: []bool{opt.automatic || opt.fastPathOnly}},
+				{name: "main.inlineConstructorWrapper", want: []bool{opt.automatic || opt.fastPathOnly}},
+				{name: "main.inlineConstructorChecked", want: []bool{opt.automatic || opt.fastPathOnly}},
+				{name: "main.inlineConstructorExpensive", want: []bool{false}},
+				{name: "main.inlineNonAllocatingPointer", want: []bool{opt.automatic}},
+				{name: "main.inlineComplexSlowPath", want: []bool{opt.automatic}},
+				{name: "main.inlineTooExpensive", want: []bool{false}},
+				{name: "main.inlineRecursive", want: []bool{false}},
+				{name: "main.inlineMutualA", want: []bool{false}},
+				{name: "main.inlineWithDefer", want: []bool{false}},
+				{name: "main.inlineWithGo", want: []bool{false}},
+				{name: "main.inlineWithRecover", want: []bool{false}},
+				{name: "main.inlineDisabled", want: []bool{false}},
+			} {
+				if got := callSites[test.name]; !slices.Equal(got, test.want) {
+					t.Errorf("%s call-site attributes: got %v, want %v", test.name, got, test.want)
+				}
+			}
+		})
+	}
+}
+
 // normalizeIR canonicalizes LLVM-version-specific IR spellings for comparison
 // and when regenerating golden files.
 func normalizeIR(s string) string {
@@ -753,6 +881,10 @@ func testCompilePackageWithDebug(t *testing.T, options *compileopts.Options, fil
 		Options: options,
 		Target:  target,
 	}
+	var speedLevel, sizeLevel int
+	if options.Opt != "" {
+		_, speedLevel, sizeLevel = config.OptLevel()
+	}
 	compilerConfig := &Config{
 		Triple:             config.Triple(),
 		Features:           config.Features(),
@@ -761,6 +893,8 @@ func testCompilePackageWithDebug(t *testing.T, options *compileopts.Options, fil
 		GOARCH:             config.GOARCH(),
 		CodeModel:          config.CodeModel(),
 		RelocationModel:    config.RelocationModel(),
+		SpeedLevel:         speedLevel,
+		SizeLevel:          sizeLevel,
 		Scheduler:          config.Scheduler(),
 		AutomaticStackSize: config.AutomaticStackSize(),
 		DefaultStackSize:   config.StackSize(),
@@ -792,4 +926,76 @@ func testCompilePackageWithDebug(t *testing.T, options *compileopts.Options, fil
 	ssaPkg := program.Package(pkg.Pkg)
 	ssaPkg.Build()
 	return CompilePackage(file, pkg, ssaPkg, machine, compilerConfig, false)
+}
+
+func TestReflectMethodRetentionMarkers(t *testing.T) {
+	mod, errs := testCompilePackage(t, &compileopts.Options{Target: "wasm"}, "reflect-method-dce.go")
+	if len(errs) != 0 {
+		for _, err := range errs {
+			t.Error(err)
+		}
+		return
+	}
+	defer mod.Dispose()
+
+	for _, tc := range []struct {
+		name  string
+		names string
+		all   bool
+	}{
+		{"constantValue", "Keep", false},
+		{"constantType", "Keep", false},
+		{"multipleNames", "Keep Other", false},
+		{"invalidName", "", false},
+		{"unexportedName", "", false},
+		{"dynamicValue", "", true},
+		{"dynamicType", "", true},
+		{"indexedValue", "", true},
+		{"indexedType", "", true},
+		{"boundValue", "", true},
+		{"escapedValue", "", true},
+		{"escapedType", "", true},
+		{"methodExpression", "", true},
+		{"iterateValue", "", true},
+		{"iterateType", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := mod.NamedFunction("main." + tc.name)
+			if fn.IsNil() {
+				t.Fatal("missing lookup function")
+			}
+			all := fn.GetStringAttributeAtIndex(-1, "tinygo-reflect-method")
+			names := fn.GetStringAttributeAtIndex(-1, "tinygo-reflect-method-names")
+			if got := !all.IsNil(); got != tc.all {
+				t.Errorf("all-method marker = %v, want %v", got, tc.all)
+			}
+			if !tc.all && names.IsNil() {
+				t.Fatal("missing constant-name marker")
+			}
+			if fn.GetStringAttributeAtIndex(-1, "tinygo-reflect-makefunc").IsNil() {
+				t.Error("missing bound-method adapter marker")
+			}
+			if !names.IsNil() {
+				if got := names.GetStringValue(); got != tc.names {
+					t.Errorf("method names = %q, want %q", got, tc.names)
+				}
+			}
+		})
+	}
+
+	wrappers := 0
+	for fn := mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		if !strings.HasPrefix(fn.Name(), "(*reflect.Value).") || fn.BasicBlocksCount() == 0 {
+			continue
+		}
+		wrappers++
+		for _, kind := range []string{"tinygo-reflect-method", "tinygo-reflect-method-names", "tinygo-reflect-makefunc"} {
+			if !fn.GetStringAttributeAtIndex(-1, kind).IsNil() {
+				t.Errorf("reflection wrapper %s has %s", fn.Name(), kind)
+			}
+		}
+	}
+	if wrappers == 0 {
+		t.Fatal("no reflection wrappers were compiled")
+	}
 }

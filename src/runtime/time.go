@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"internal/task"
 	"unsafe"
 )
 
@@ -16,11 +17,25 @@ type timer struct {
 	f   func(arg any, seq uintptr, delta int64)
 	arg any
 
-	synctest *synctestBubble
+	synctest           *synctestBubble
+	node               *timerNode
+	pausedNode         *timerNode
+	blocked            uint32
+	isChan             bool
+	stopped            bool
+	suppressedCallback bool
 }
 
 func (tim *timer) callCallback(delta int64) {
 	tim.f(tim.arg, 0, delta)
+}
+
+func (tim *timer) nextWhen(delta int64) int64 {
+	next := tim.when + tim.period*(1+delta/tim.period)
+	if next < 0 {
+		return 1<<63 - 1
+	}
+	return next
 }
 
 // This is the struct used internally in the runtime. The first two fields are
@@ -44,14 +59,20 @@ func newTimer(when, period int64, f func(arg any, seq uintptr, delta int64), arg
 			f:        f,
 			arg:      arg,
 			synctest: bubble,
+			isChan:   c != nil,
 		},
+	}
+	if c != nil {
+		(*channel)(c).timer = &tim.timer
 	}
 	scheduleLog("new timer")
 	node := &timerNode{
 		timer:    &tim.timer,
 		callback: timerCallback,
 	}
-	if bubble != nil {
+	if c != nil && (hasScheduler || hasParallelism) {
+		tim.timer.pausedNode = node
+	} else if bubble != nil {
 		bubble.addTimer(node)
 	} else {
 		addTimer(node)
@@ -65,14 +86,22 @@ func stopTimer(tim *timeTimer) bool {
 		tim.timer.synctest.checkTimerAccess("stop")
 	}
 	tim.timer.lock.Lock()
+	tim.timer.suppressedCallback = false
+	tim.timer.stopped = true
 	var removed bool
 	if tim.timer.synctest != nil {
-		removed = tim.timer.synctest.removeTimer(&tim.timer) != nil
+		removed = tim.timer.synctest.removeTimer(&tim.timer, true) != nil
 	} else {
-		removed = removeTimer(&tim.timer) != nil
+		removed = removeTimer(&tim.timer, true) != nil
 	}
+	if tim.timer.pausedNode != nil {
+		tim.timer.pausedNode = nil
+		removed = true
+	}
+	drained := timerChanDrain(tim.c)
+	suppressed := tim.timer.suppressedCallback
 	tim.timer.lock.Unlock()
-	return removed
+	return removed || drained || suppressed
 }
 
 //go:linkname resetTimer time.resetTimer
@@ -81,13 +110,20 @@ func resetTimer(t *timeTimer, when, period int64) bool {
 		t.timer.synctest.checkTimerAccess("reset")
 	}
 	t.timer.lock.Lock()
+	t.timer.suppressedCallback = false
 	var n *timerNode
 	if t.timer.synctest != nil {
-		n = t.timer.synctest.removeTimer(&t.timer)
+		n = t.timer.synctest.removeTimer(&t.timer, true)
 	} else {
-		n = removeTimer(&t.timer)
+		n = removeTimer(&t.timer, true)
+	}
+	if n == nil && t.timer.pausedNode != nil {
+		n = t.timer.pausedNode
+		t.timer.pausedNode = nil
 	}
 	removed := n != nil
+	drained := timerChanDrain(t.c)
+	suppressed := t.timer.suppressedCallback
 	if n == nil {
 		// Allocation can start GC, so do not hold the cores spin lock.
 		t.timer.lock.Unlock()
@@ -96,21 +132,30 @@ func resetTimer(t *timeTimer, when, period int64) bool {
 		// A concurrent reset can queue the timer during allocation.
 		// Remove it again so this reset takes effect after that operation.
 		if t.timer.synctest != nil {
-			n = t.timer.synctest.removeTimer(&t.timer)
+			n = t.timer.synctest.removeTimer(&t.timer, true)
 		} else {
-			n = removeTimer(&t.timer)
+			n = removeTimer(&t.timer, true)
+		}
+		if n == nil && t.timer.pausedNode != nil {
+			n = t.timer.pausedNode
+			t.timer.pausedNode = nil
 		}
 		removed = n != nil
 		if n == nil {
 			n = replacement
 		}
+		drained = timerChanDrain(t.c) || drained
+		suppressed = t.timer.suppressedCallback || suppressed
 	}
 	t.timer.when = when
 	t.timer.period = period
+	t.timer.stopped = false
 	n.timer = &t.timer
 	n.callback = timerCallback
 	var runNow bool
-	if t.timer.synctest != nil {
+	if t.timer.isChan && t.timer.blocked == 0 {
+		t.timer.pausedNode = n
+	} else if t.timer.synctest != nil {
 		runNow = t.timer.synctest.queueTimer(n)
 	} else {
 		addTimer(n)
@@ -119,7 +164,87 @@ func resetTimer(t *timeTimer, when, period int64) bool {
 	if runNow {
 		n.callback(n, 0)
 	}
-	return removed
+	return removed || drained || suppressed
+}
+
+func timerChanRun(tim *timer) {
+	if tim == nil {
+		return
+	}
+	tim.lock.Lock()
+	tn := tim.pausedNode
+	if tn == nil || tim.stopped {
+		tim.lock.Unlock()
+		return
+	}
+	now := nanotime()
+	if tim.synctest != nil {
+		now = tim.synctest.time()
+	}
+	if now >= tim.when {
+		var current *task.Task
+		var bubble unsafe.Pointer
+		if synctestIsEnabled() {
+			current = task.Current()
+			bubble = current.SynctestBubble
+			current.SynctestBubble = unsafe.Pointer(tim.synctest)
+		}
+		tim.callCallback(now - tim.when)
+		if current != nil {
+			current.SynctestBubble = bubble
+		}
+		if tim.period != 0 {
+			tim.when = tim.nextWhen(now - tim.when)
+		} else {
+			tim.pausedNode = nil
+		}
+	}
+	tim.lock.Unlock()
+}
+
+func timerChanBlock(tim *timer) {
+	if tim == nil {
+		return
+	}
+	tim.lock.Lock()
+	tim.blocked++
+	tn := tim.pausedNode
+	var runNow bool
+	if tn != nil && !tim.stopped {
+		tim.pausedNode = nil
+		if tim.synctest != nil {
+			runNow = tim.synctest.queueTimer(tn)
+		} else {
+			addTimer(tn)
+		}
+	}
+	tim.lock.Unlock()
+	if runNow {
+		tn.callback(tn, 0)
+	}
+}
+
+func timerChanUnblock(tim *timer) {
+	if tim == nil {
+		return
+	}
+	tim.lock.Lock()
+	if tim.blocked == 0 {
+		runtimeFatal("timer channel receive count underflow")
+	}
+	tim.blocked--
+	if tim.blocked == 0 {
+		var tn *timerNode
+		if tim.synctest != nil {
+			tn = tim.synctest.removeTimer(tim, false)
+		} else {
+			tn = removeTimer(tim, false)
+		}
+		if tn != nil {
+			tim.pausedNode = tn
+		}
+	}
+	tim.lock.Unlock()
 }
 
 //go:linkname time_runtimeNano time.runtimeNano
@@ -139,11 +264,17 @@ func time_runtimeNow() (sec int64, nsec int32, mono int64) {
 	return now()
 }
 
-// timerNode is an element in a linked list of timers.
+// timerNode is an element in the timer queue's treap and ordered list.
 type timerNode struct {
-	next     *timerNode
-	timer    *timer
-	callback func(node *timerNode, delta int64)
+	next          *timerNode
+	previous      *timerNode
+	treeLeft      *timerNode
+	treeRight     *timerNode
+	treeParent    *timerNode
+	queueSequence uint64
+	queuePriority uint64
+	timer         *timer
+	callback      func(node *timerNode, delta int64)
 
 	// The following fields are only used by schedulers that run timer
 	// callbacks concurrently with user goroutines (the threads and cores
@@ -174,17 +305,26 @@ func (t *timerNode) whenTicks() timeUnit {
 // If timerQueue doesn't get optimized away, small programs (that don't call
 // time.NewTimer etc) would still pay the cost of these timers.
 func timerCallback(tn *timerNode, delta int64) {
+	tn.timer.lock.Lock()
+
 	// Run timer function (implemented in the time package).
 	// The seq parameter to the f function is not used in the time
 	// package so is left zero.
-	tn.timer.callCallback(delta)
+	if tn.timer.isChan {
+		if !tn.stopped {
+			tn.timer.callCallback(delta)
+		}
+	} else {
+		tn.timer.lock.Unlock()
+		tn.timer.callCallback(delta)
+		tn.timer.lock.Lock()
+	}
 
 	// Finish firing the timer and re-add it if it is periodic.
-	tn.timer.lock.Lock()
 	if tn.timer.synctest != nil {
 		tn.timer.synctest.finishTimer(tn)
 	} else {
-		reAddTimer(tn)
+		reAddTimer(tn, delta)
 	}
 	tn.timer.lock.Unlock()
 }
