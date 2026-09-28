@@ -217,8 +217,15 @@ TEST_PACKAGES_SHORT = \
 
 TEST_PACKAGES_SHORT_HOST := $(filter $(TEST_PACKAGES_SHORT),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
 TEST_PACKAGES_PRINTER_HOST := $(filter go/printer,$(TEST_PACKAGES_HOST))
-TEST_PACKAGES_ALLOCS_HOST := $(filter slices strings,$(TEST_PACKAGES_HOST))
-TEST_ALLOCS_SKIP_FLAG := -skip='^(TestBuilderAllocs|TestBuilderGrow|TestGrow)$$'
+TEST_PACKAGES_ALLOC_MISC_HOST := $(filter crypto/sha256 crypto/sha512 strconv unicode/utf16 unicode/utf8 context mime net/textproto,$(TEST_PACKAGES_HOST))
+TEST_ALLOC_MISC_SKIP_FLAG := -skip='^(TestExtraMethods|TestAsValidation|TestUnmarshalNestingLimitSlice|TestUnmarshalNestingLimitStruct|TestAllocations|TestAllocatonsWithTypeAsserts|TestCountMallocs|TestAllocationsFromBytes|TestAllocationsDecode|TestRuneCountNonASCIIAllocation|TestAllocs|TestLookupMallocs|TestCommonHeaders)$$'
+TEST_PACKAGES_ALLOC_REFLECT_HOST := $(filter reflect,$(TEST_PACKAGES_HOST))
+TEST_ALLOC_REFLECT_SKIP_FLAG := -skip='^(TestExtraMethods|TestAsValidation|TestUnmarshalNestingLimitSlice|TestUnmarshalNestingLimitStruct|TestMapIterSet|TestDeepEqualAllocs)$$'
+TEST_PACKAGES_ALLOC_BYTES_HOST := $(filter bytes,$(TEST_PACKAGES_HOST))
+TEST_ALLOC_BYTES_SKIP_FLAG := -skip='^(TestExtraMethods|TestAsValidation|TestUnmarshalNestingLimitSlice|TestUnmarshalNestingLimitStruct|TestNewBufferShallow|TestEqual|TestIndex|TestLastIndex|TestReplace)$$'
+TEST_PACKAGES_ALLOC_SLICES_HOST := $(filter slices strings,$(TEST_PACKAGES_HOST))
+TEST_ALLOC_SLICES_SKIP_FLAG := -skip='^(TestExtraMethods|TestAsValidation|TestUnmarshalNestingLimitSlice|TestUnmarshalNestingLimitStruct|TestBuilderAllocs|TestBuilderGrow|TestBuilderGrowSizeclasses|TestGrow|TestInsert|TestConcat|TestIndexRune|TestReplace)$$'
+TEST_PACKAGES_ALLOCS_HOST := $(TEST_PACKAGES_ALLOC_MISC_HOST) $(TEST_PACKAGES_ALLOC_REFLECT_HOST) $(TEST_PACKAGES_ALLOC_BYTES_HOST) $(TEST_PACKAGES_ALLOC_SLICES_HOST)
 
 # Test known-working standard library packages.
 # TODO: parallelize, and only show failing tests (no implied -v flag).
@@ -234,8 +241,17 @@ endif
 ifneq ($(TEST_PACKAGES_PRINTER_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=1MB $(TEST_PACKAGES_PRINTER_HOST)
 endif
-ifneq ($(TEST_PACKAGES_ALLOCS_HOST),)
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_ALLOCS_SKIP_FLAG) $(TEST_PACKAGES_ALLOCS_HOST)
+ifneq ($(TEST_PACKAGES_ALLOC_MISC_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_ALLOC_MISC_SKIP_FLAG) $(TEST_PACKAGES_ALLOC_MISC_HOST)
+endif
+ifneq ($(TEST_PACKAGES_ALLOC_REFLECT_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_ALLOC_REFLECT_SKIP_FLAG) $(TEST_PACKAGES_ALLOC_REFLECT_HOST)
+endif
+ifneq ($(TEST_PACKAGES_ALLOC_BYTES_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_ALLOC_BYTES_SKIP_FLAG) $(TEST_PACKAGES_ALLOC_BYTES_HOST)
+endif
+ifneq ($(TEST_PACKAGES_ALLOC_SLICES_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_ALLOC_SLICES_SKIP_FLAG) $(TEST_PACKAGES_ALLOC_SLICES_HOST)
 endif
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestReflectFuncOf|TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount)$$' internal/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$$' testing/synctest
@@ -250,9 +266,24 @@ ifeq ($(TEST_IOFS),true)
 	$(TINYGO) test -stack-size=6MB io/fs
 endif
 tinygo-test-fast:
-	$(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out $(TEST_PACKAGES_ALLOCS_HOST),$(TEST_PACKAGES_HOST))
-ifneq ($(TEST_PACKAGES_ALLOCS_HOST),)
-	$(TINYGO) test $(TEST_ALLOCS_SKIP_FLAG) $(TEST_PACKAGES_ALLOCS_HOST)
+	$(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS_HOST),$(TEST_PACKAGES_HOST))
+ifneq ($(TEST_PACKAGES_PRINTER_HOST),)
+	$(TINYGO) test -stack-size=1MB $(TEST_PACKAGES_PRINTER_HOST)
+endif
+ifneq ($(TEST_PACKAGES_ALLOC_MISC_HOST),)
+	$(TINYGO) test $(TEST_ALLOC_MISC_SKIP_FLAG) $(TEST_PACKAGES_ALLOC_MISC_HOST)
+endif
+ifneq ($(TEST_PACKAGES_ALLOC_REFLECT_HOST),)
+	$(TINYGO) test $(TEST_ALLOC_REFLECT_SKIP_FLAG) $(TEST_PACKAGES_ALLOC_REFLECT_HOST)
+endif
+ifneq ($(TEST_PACKAGES_ALLOC_BYTES_HOST),)
+	$(TINYGO) test $(TEST_ALLOC_BYTES_SKIP_FLAG) $(TEST_PACKAGES_ALLOC_BYTES_HOST)
+endif
+ifneq ($(TEST_PACKAGES_ALLOC_SLICES_HOST),)
+	$(TINYGO) test $(TEST_ALLOC_SLICES_SKIP_FLAG) $(TEST_PACKAGES_ALLOC_SLICES_HOST)
+endif
+ifeq ($(TEST_ENCODING_XML),true)
+	$(TINYGO) test $(TEST_SKIP_FLAG) -short -stack-size=16MB encoding/xml
 endif
 tinygo-bench:
 	$(TINYGO) test -bench . $(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW)
