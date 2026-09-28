@@ -216,6 +216,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 		BuildMode:       config.BuildMode(),
 		CodeModel:       config.CodeModel(),
 		RelocationModel: config.RelocationModel(),
+		SpeedLevel:      speedLevel,
 		SizeLevel:       sizeLevel,
 		TinyGoVersion:   goenv.Version(),
 		TrimPath:        config.TrimPath(),
@@ -246,6 +247,9 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 	})
 	if err != nil {
 		return BuildResult{}, err
+	}
+	if _, ok := globalValues["runtime"]["godebugDefault"]; !ok {
+		globalValues["runtime"]["godebugDefault"] = lprogram.MainPkg().DefaultGODEBUG
 	}
 	result := BuildResult{
 		ModuleRoot: lprogram.MainPkg().Module.Dir,

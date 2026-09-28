@@ -7,7 +7,7 @@ target triple = "wasm32-unknown-wasi"
 %runtime.deferFrame = type { ptr, ptr, [0 x ptr], ptr, i8, %runtime._interface, ptr }
 %runtime._interface = type { ptr, ptr }
 %runtime.channelOp = type { ptr, ptr, i32, ptr }
-%runtime.chanSelectState = type { ptr, ptr }
+%runtime.chanSelectState = type { ptr, ptr, ptr }
 
 @tinygo_rewinding = external global i8
 @tinygo_panic_rewinding = external global i8
@@ -15,6 +15,7 @@ target triple = "wasm32-unknown-wasi"
 @"reflect/types.typeid:named:main.largeValue" = external constant i8
 @"runtime.hashmapType:[1025]byte:[1025]byte" = linkonce_odr unnamed_addr constant { ptr, ptr, ptr } { ptr inttoptr (i32 3 to ptr), ptr inttoptr (i32 3 to ptr), ptr inttoptr (i32 67108137 to ptr) }
 @llvm.used = appending global [15 x ptr] [ptr @"(main.largeReceiver).makeLargeValue", ptr @"(main.largeReceiver).readLargeValue", ptr @main.makeLargeValue, ptr @main.makeZeroLargeValue, ptr @main.readLargeValue, ptr @main.deferLargeValue, ptr @main.goLargeValue, ptr @main.makeLargeResults, ptr @main.makeTwoLargeResults, ptr @main.makeMixedLargeResults, ptr @main.chooseLargeValue, ptr @main.makePointerLargeValue, ptr @main.useLargeMap, ptr @main.useLargeChannel, ptr @main.selectLargeChannel]
+@tinygo.indirect-abi = appending global [15 x ptr] [ptr @"(main.largeReceiver).makeLargeValue", ptr @"(main.largeReceiver).readLargeValue", ptr @main.makeLargeValue, ptr @main.makeZeroLargeValue, ptr @main.readLargeValue, ptr @main.deferLargeValue, ptr @main.goLargeValue, ptr @main.makeLargeResults, ptr @main.makeTwoLargeResults, ptr @main.makeMixedLargeResults, ptr @main.chooseLargeValue, ptr @main.makePointerLargeValue, ptr @main.useLargeMap, ptr @main.useLargeChannel, ptr @main.selectLargeChannel]
 @"main$string" = internal unnamed_addr constant [31 x i8] c"blocking select matched no case", align 1
 @"main$pack" = internal unnamed_addr constant { %runtime._string } { %runtime._string { ptr @"main$string", i32 31 } }
 @"reflect/types.type:basic:string" = linkonce_odr constant { i8, ptr } { i8 81, ptr @"reflect/types.type:pointer:basic:string" }, align 4
@@ -487,7 +488,7 @@ declare void @runtime.hashmapBinarySet(ptr dereferenceable_or_null(52), ptr, ptr
 declare i1 @runtime.hashmapBinaryGet(ptr dereferenceable_or_null(52), ptr, ptr, i32, ptr) #0
 
 ; Function Attrs: nounwind
-define hidden i8 @main.useLargeChannel(ptr dereferenceable_or_null(40) %ch, ptr readonly dereferenceable_or_null(1025) %value, ptr %context) unnamed_addr #1 {
+define hidden i8 @main.useLargeChannel(ptr dereferenceable_or_null(44) %ch, ptr readonly dereferenceable_or_null(1025) %value, ptr %context) unnamed_addr #1 {
 entry:
   %chan.op1 = alloca %runtime.channelOp, align 8
   %chan.op = alloca %runtime.channelOp, align 8
@@ -524,15 +525,15 @@ if.then:                                          ; preds = %entry
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.lifetime.start.p0(ptr nocapture) #12
 
-declare void @runtime.chanSend(ptr dereferenceable_or_null(40), ptr, ptr dereferenceable_or_null(16), ptr) #0
+declare void @runtime.chanSend(ptr dereferenceable_or_null(44), ptr, ptr dereferenceable_or_null(16), ptr) #0
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.lifetime.end.p0(ptr nocapture) #12
 
-declare i1 @runtime.chanRecv(ptr dereferenceable_or_null(40), ptr, ptr dereferenceable_or_null(16), ptr) #0
+declare i1 @runtime.chanRecv(ptr dereferenceable_or_null(44), ptr, ptr dereferenceable_or_null(16), ptr) #0
 
 ; Function Attrs: nounwind
-define hidden i8 @main.selectLargeChannel(ptr dereferenceable_or_null(40) %ch, ptr readonly dereferenceable_or_null(1025) %value, ptr %context) unnamed_addr #1 {
+define hidden i8 @main.selectLargeChannel(ptr dereferenceable_or_null(44) %ch, ptr readonly dereferenceable_or_null(1025) %value, ptr %context) unnamed_addr #1 {
 entry:
   %select.block.alloca = alloca [2 x %runtime.channelOp], align 8
   %select.states.alloca = alloca [2 x %runtime.chanSelectState], align 8
@@ -543,10 +544,14 @@ entry:
   store ptr %ch, ptr %select.states.alloca, align 4
   %select.states.alloca.repack3 = getelementptr inbounds nuw i8, ptr %select.states.alloca, i32 4
   store ptr %value, ptr %select.states.alloca.repack3, align 4
-  %0 = getelementptr inbounds nuw i8, ptr %select.states.alloca, i32 8
+  %select.states.alloca.repack5 = getelementptr inbounds nuw i8, ptr %select.states.alloca, i32 8
+  store ptr null, ptr %select.states.alloca.repack5, align 4
+  %0 = getelementptr inbounds nuw i8, ptr %select.states.alloca, i32 12
   store ptr %ch, ptr %0, align 4
-  %.repack5 = getelementptr inbounds nuw i8, ptr %select.states.alloca, i32 12
-  store ptr null, ptr %.repack5, align 4
+  %.repack7 = getelementptr inbounds nuw i8, ptr %select.states.alloca, i32 16
+  store ptr null, ptr %.repack7, align 4
+  %.repack9 = getelementptr inbounds nuw i8, ptr %select.states.alloca, i32 20
+  store ptr null, ptr %.repack9, align 4
   call void @llvm.lifetime.start.p0(ptr nonnull %select.block.alloca)
   %select.result = call { i32, i1 } @runtime.chanSelect(ptr nonnull %select.recvbuf.alloca, ptr nonnull %select.states.alloca, i32 2, i32 2, ptr nonnull %select.block.alloca, i32 2, i32 2, ptr undef) #13
   call void @llvm.lifetime.end.p0(ptr nonnull %select.block.alloca)
