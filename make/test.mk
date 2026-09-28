@@ -192,17 +192,14 @@ report-stdlib-tests-pass:
 # Standard library packages that pass tests quickly on the current platform
 ifeq ($(uname),Darwin)
 TEST_PACKAGES_HOST := $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_DARWIN)
-TEST_IOFS := true
-TEST_ENCODING_XML := true
+HOST_TEST_IOFS_PACKAGES := io/fs
 endif
 ifeq ($(uname),Linux)
 TEST_PACKAGES_HOST := $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_LINUX)
-TEST_IOFS := true
-TEST_ENCODING_XML := true
+HOST_TEST_IOFS_PACKAGES := io/fs
 endif
 ifeq ($(OS),Windows_NT)
 TEST_PACKAGES_HOST := $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_WINDOWS)
-TEST_IOFS := false
 endif
 
 TEST_SKIP_FLAG := -skip='TestExtraMethods|TestAsValidation|TestUnmarshalNestingLimitSlice|TestUnmarshalNestingLimitStruct'
@@ -217,8 +214,8 @@ TEST_PACKAGES_SHORT = \
 	index/suffixarray \
 	$(nil)
 
-TEST_PACKAGES_SHORT_HOST := $(filter $(TEST_PACKAGES_SHORT),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
-TEST_PACKAGES_PRINTER_HOST := $(filter go/printer,$(TEST_PACKAGES_HOST))
+HOST_TEST_SHORT_PACKAGES := $(filter $(TEST_PACKAGES_SHORT),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
+HOST_TEST_PRINTER_PACKAGES := $(filter go/printer,$(TEST_PACKAGES_HOST))
 TEST_PACKAGES_ALLOC_SHA := crypto/sha256 crypto/sha512
 TEST_ALLOC_SHA_SKIP_FLAG := -skip='^(TestExtraMethods|TestAllocations|TestAllocatonsWithTypeAsserts)$$'
 TEST_PACKAGES_ALLOC_STRCONV := strconv
@@ -264,13 +261,17 @@ $(if $(filter $(TEST_PACKAGES_ALLOC_BYTES),$(1)),$(3) $(TINYGO) test $(2) $(TEST
 $(if $(filter $(TEST_PACKAGES_ALLOC_SLICES),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_SLICES_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_SLICES),$(1)))
 $(if $(filter $(TEST_PACKAGES_ALLOC_STRINGS),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_STRINGS_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_STRINGS),$(1)))
 endef
-TEST_PACKAGES_NETIP_HOST := $(filter net/netip,$(TEST_PACKAGES_HOST))
+HOST_TEST_NETIP_PACKAGES := $(filter net/netip,$(TEST_PACKAGES_HOST))
+HOST_TEST_NETIP_FLAGS := -skip='^TestAddrStringAllocs$$|^TestNoAllocs$$/^(Addr.IsGlobalUnicast|Addr.IsInterfaceLocalMulticast|Addr.IsLinkLocalMulticast|Addr.IsLinkLocalUnicast|Addr.IsPrivate)$$'
 
 # https://go.dev/src/internal/synctest/synctest_test.go creates 100 x 100
 # goroutines, which can exceed macOS's thread limit with the threads scheduler.
 ifeq ($(uname),Darwin)
 TEST_SYNCTEST_THREAD_LIMIT_SKIP := |TestWaitGroupManyBubbles
 endif
+HOST_TEST_XML_PACKAGES := $(filter encoding/xml,$(TEST_PACKAGES_HOST))
+
+run-tinygo-test = $(if $(strip $(1)),$(TINYGO) test $(2) $(strip $(1)))
 
 # Test known-working standard library packages.
 # TODO: parallelize, and only show failing tests (no implied -v flag).
@@ -279,38 +280,25 @@ tinygo-test:
 	@# TestExtraMethods: used by many crypto packages and uses reflect.Type.Method which is not implemented.
 	@# TestUnmarshalNestingLimit{Slice,Struct}: encoding/asn1 nesting limit added in
 	@# https://github.com/golang/go/commit/6a6d115f9a7422b2fa081ba6f567eefb4a099462
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_NETIP_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
-ifneq ($(TEST_PACKAGES_SHORT_HOST),)
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short $(TEST_PACKAGES_SHORT_HOST)
-endif
-ifneq ($(TEST_PACKAGES_PRINTER_HOST),)
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=1MB $(TEST_PACKAGES_PRINTER_HOST)
-endif
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_SHORT) $(HOST_TEST_PRINTER_PACKAGES) $(TEST_PACKAGES_ALLOCS) $(HOST_TEST_NETIP_PACKAGES),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
+	$(call run-tinygo-test,$(HOST_TEST_SHORT_PACKAGES),$(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short)
+	$(call run-tinygo-test,$(HOST_TEST_PRINTER_PACKAGES),$(TEST_ADDITIONAL_FLAGS) -stack-size=1MB)
 	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW),$(TEST_ADDITIONAL_FLAGS))
-ifneq ($(TEST_PACKAGES_NETIP_HOST),)
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^TestAddrStringAllocs$$|^TestNoAllocs$$/^(Addr.IsGlobalUnicast|Addr.IsInterfaceLocalMulticast|Addr.IsLinkLocalMulticast|Addr.IsLinkLocalUnicast|Addr.IsPrivate)$$' $(TEST_PACKAGES_NETIP_HOST)
-endif
+	$(call run-tinygo-test,$(HOST_TEST_NETIP_PACKAGES),$(TEST_ADDITIONAL_FLAGS) $(HOST_TEST_NETIP_FLAGS))
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestReflectFuncOf|TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount$(TEST_SYNCTEST_THREAD_LIMIT_SKIP))$$' internal/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$$' testing/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -run='^TestSynctestMarshal$$' encoding/json
-ifeq ($(TEST_ENCODING_XML),true)
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short -stack-size=16MB encoding/xml
-endif
+	$(call run-tinygo-test,$(HOST_TEST_XML_PACKAGES),$(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short -stack-size=16MB)
 	@# io/fs requires os.ReadDir, not yet supported on windows or wasi. It also
 	@# requires a large stack-size. Hence, io/fs is only run conditionally.
 	@# For more details, see the comments on issue #3143.
-ifeq ($(TEST_IOFS),true)
-	$(TINYGO) test -stack-size=6MB io/fs
-endif
+	$(call run-tinygo-test,$(HOST_TEST_IOFS_PACKAGES),-stack-size=6MB)
 tinygo-test-fast:
-	$(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_HOST))
-ifneq ($(TEST_PACKAGES_PRINTER_HOST),)
-	$(TINYGO) test -stack-size=1MB $(TEST_PACKAGES_PRINTER_HOST)
-endif
+	$(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(HOST_TEST_PRINTER_PACKAGES) $(TEST_PACKAGES_ALLOCS) $(HOST_TEST_NETIP_PACKAGES),$(TEST_PACKAGES_HOST))
+	$(call run-tinygo-test,$(HOST_TEST_PRINTER_PACKAGES),-stack-size=1MB)
 	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_HOST))
-ifeq ($(TEST_ENCODING_XML),true)
-	$(TINYGO) test $(TEST_SKIP_FLAG) -short -stack-size=16MB encoding/xml
-endif
+	$(call run-tinygo-test,$(HOST_TEST_NETIP_PACKAGES),$(HOST_TEST_NETIP_FLAGS))
+	$(call run-tinygo-test,$(HOST_TEST_XML_PACKAGES),$(TEST_SKIP_FLAG) -short -stack-size=16MB)
 tinygo-bench:
 	$(TINYGO) test -bench . $(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW)
 tinygo-bench-fast:
