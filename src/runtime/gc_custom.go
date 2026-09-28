@@ -21,7 +21,7 @@ package runtime
 // - func markRoots(start, end uintptr)
 // - func GC()
 // - func SetFinalizer(obj interface{}, finalizer interface{})
-// - func ReadMemStats(ms *runtime.MemStats)
+// - func ReadMemStats(ms *runtime.MemStats), including cumulative Mallocs
 //
 // The compiler provides the global root ranges used by markRoots.
 
@@ -56,6 +56,12 @@ func SetFinalizer(obj interface{}, finalizer interface{})
 
 // ReadMemStats populates m with memory statistics.
 func ReadMemStats(ms *MemStats)
+
+func mallocs() uint64 {
+	var stats MemStats
+	ReadMemStats(&stats)
+	return stats.Mallocs
+}
 
 func setHeapEnd(newHeapEnd uintptr) {
 	// Heap is in custom GC so ignore for when called from wasm initialization.
