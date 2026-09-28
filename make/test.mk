@@ -99,14 +99,12 @@ TEST_PACKAGES_LINUX := \
 	debug/gosym \
 	debug/plan9obj \
 	encoding/gob \
-	encoding/json \
-	encoding/json/jsontext \
-	encoding/json/v2 \
 	encoding/xml \
 	fmt \
+	go/build/constraint \
+	go/parser \
 	go/printer \
 	io/ioutil \
-	iter \
 	mime \
 	mime/multipart \
 	mime/quotedprintable \
@@ -115,10 +113,13 @@ TEST_PACKAGES_LINUX := \
 	net/netip \
 	net/textproto \
 	os/user \
+	path/filepath \
+	regexp \
 	slices \
 	strings \
 	testing/fstest \
 	testing/quick \
+	time \
 	$(nil)
 
 TEST_PACKAGES_DARWIN := $(TEST_PACKAGES_LINUX)
@@ -127,6 +128,7 @@ TEST_PACKAGES_DARWIN := $(TEST_PACKAGES_LINUX)
 TEST_PACKAGES_WINDOWS := \
 	compress/flate \
 	mime \
+	time \
 	$(nil)
 
 
@@ -187,11 +189,11 @@ TEST_PACKAGES_NOBOUNDARYSLICES = \
 # Report platforms on which each standard library package is known to pass tests
 report-stdlib-tests-pass:
 	$(eval jointmp := $(shell echo /tmp/join.$$$$))
-	@for t in $(TEST_PACKAGES_DARWIN); do echo "$$t darwin"; done | LC_ALL=C sort > $(jointmp).darwin
-	@for t in $(TEST_PACKAGES_LINUX); do echo "$$t linux"; done | LC_ALL=C sort > $(jointmp).linux
-	@for t in $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW); do echo "$$t darwin linux wasi windows"; done | LC_ALL=C sort > $(jointmp).portable
-	@LC_ALL=C join -a1 -a2 $(jointmp).darwin $(jointmp).linux | \
-	LC_ALL=C join -a1 -a2 - $(jointmp).portable
+	@for t in $(TEST_PACKAGES_DARWIN); do echo "$$t darwin"; done | sort > $(jointmp).darwin
+	@for t in $(TEST_PACKAGES_LINUX); do echo "$$t linux"; done | sort > $(jointmp).linux
+	@for t in $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW); do echo "$$t darwin linux wasi windows"; done | sort > $(jointmp).portable
+	@join -a1 -a2 $(jointmp).darwin $(jointmp).linux | \
+	join -a1 -a2 - $(jointmp).portable
 	@rm $(jointmp).*
 
 # Standard library packages that pass tests quickly on the current platform
@@ -213,16 +215,12 @@ endif
 TEST_SKIP_FLAG := -skip='TestAsValidation|TestUnmarshalNestingLimitSlice|TestUnmarshalNestingLimitStruct'
 TEST_ADDITIONAL_FLAGS ?=
 
-# These packages spend almost all of their test time in a few tests that Go
-# marks as long running. -short omits those tests and keeps the rest.
-# encoding/xml gets the same treatment on its own line below.
-# See https://github.com/tinygo-org/tinygo/issues/5659
-TEST_PACKAGES_SHORT = \
-	archive/zip \
-	$(nil)
-
-TEST_PACKAGES_SHORT_HOST := $(filter $(TEST_PACKAGES_SHORT),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
 TEST_PACKAGES_PRINTER_HOST := $(filter go/printer,$(TEST_PACKAGES_HOST))
+TEST_PACKAGES_GOB_HOST := $(filter encoding/gob,$(TEST_PACKAGES_HOST))
+TEST_PACKAGES_QUICK_HOST := $(filter testing/quick,$(TEST_PACKAGES_HOST))
+TEST_PACKAGES_LARGE_STACK_HOST := $(filter go/build/constraint regexp,$(TEST_PACKAGES_HOST))
+TEST_PACKAGES_DEEP_STACK_HOST := $(filter path/filepath,$(TEST_PACKAGES_HOST))
+TEST_PACKAGES_HUGE_STACK_HOST := $(filter go/parser,$(TEST_PACKAGES_HOST))
 TEST_PACKAGES_ALLOC_SHA := crypto/sha256 crypto/sha512
 TEST_ALLOC_SHA_SKIP_FLAG := -skip='^(TestAllocations|TestAllocatonsWithTypeAsserts)$$'
 TEST_PACKAGES_ALLOC_FMT := fmt
@@ -272,6 +270,7 @@ $(if $(filter $(TEST_PACKAGES_ALLOC_BYTES),$(1)),$(3) $(TINYGO) test $(2) $(TEST
 $(if $(filter $(TEST_PACKAGES_ALLOC_SLICES),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_SLICES_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_SLICES),$(1)))
 $(if $(filter $(TEST_PACKAGES_ALLOC_STRINGS),$(1)),$(3) $(TINYGO) test $(2) $(TEST_ALLOC_STRINGS_SKIP_FLAG) $(filter $(TEST_PACKAGES_ALLOC_STRINGS),$(1)))
 endef
+TEST_ARCHIVE_ZIP_HOST := $(filter archive/zip,$(TEST_PACKAGES_HOST))
 TEST_PACKAGES_NETIP_HOST := $(filter net/netip,$(TEST_PACKAGES_HOST))
 TEST_PACKAGES_JSON_HOST := $(filter encoding/json encoding/json/jsontext encoding/json/v2,$(TEST_PACKAGES_HOST))
 
@@ -280,8 +279,6 @@ TEST_PACKAGES_JSON_HOST := $(filter encoding/json encoding/json/jsontext encodin
 ifeq ($(uname),Darwin)
 TEST_SYNCTEST_THREAD_LIMIT_SKIP := |TestWaitGroupManyBubbles
 endif
-TEST_PACKAGES_QUICK_HOST := $(filter testing/quick,$(TEST_PACKAGES_HOST))
-TEST_PACKAGES_GOB_HOST := $(filter encoding/gob,$(TEST_PACKAGES_HOST))
 
 # Test known-working standard library packages.
 # TODO: parallelize, and only show failing tests (no implied -v flag).
@@ -289,22 +286,31 @@ TEST_PACKAGES_GOB_HOST := $(filter encoding/gob,$(TEST_PACKAGES_HOST))
 tinygo-test:
 	@# TestUnmarshalNestingLimit{Slice,Struct}: encoding/asn1 nesting limit added in
 	@# https://github.com/golang/go/commit/6a6d115f9a7422b2fa081ba6f567eefb4a099462
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out encoding/gob encoding/xml $(TEST_PACKAGES_SHORT) $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_NETIP_HOST) $(TEST_PACKAGES_QUICK_HOST) $(TEST_PACKAGES_JSON_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
-ifneq ($(TEST_PACKAGES_SHORT_HOST),)
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short $(TEST_PACKAGES_SHORT_HOST)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) $(filter-out archive/zip encoding/gob encoding/xml $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_QUICK_HOST) $(TEST_PACKAGES_LARGE_STACK_HOST) $(TEST_PACKAGES_DEEP_STACK_HOST) $(TEST_PACKAGES_HUGE_STACK_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_NETIP_HOST) $(TEST_PACKAGES_JSON_HOST),$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW))
+ifneq ($(TEST_ARCHIVE_ZIP_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -parallel=1 archive/zip
 endif
 ifneq ($(TEST_PACKAGES_PRINTER_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=1MB $(TEST_PACKAGES_PRINTER_HOST)
 endif
-	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW),$(TEST_ADDITIONAL_FLAGS))
-ifneq ($(TEST_PACKAGES_NETIP_HOST),)
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^TestAddrStringAllocs$$|^TestNoAllocs$$/^(Addr.IsGlobalUnicast|Addr.IsInterfaceLocalMulticast|Addr.IsLinkLocalMulticast|Addr.IsLinkLocalUnicast|Addr.IsPrivate)$$' $(TEST_PACKAGES_NETIP_HOST)
+ifneq ($(TEST_PACKAGES_GOB_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=1MB -skip='^(TestCountDecodeMallocs|TestCountMallocs)$$' $(TEST_PACKAGES_GOB_HOST)
 endif
 ifneq ($(TEST_PACKAGES_QUICK_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=1MB -skip='^TestCountMallocs$$' $(TEST_PACKAGES_QUICK_HOST)
 endif
-ifneq ($(TEST_PACKAGES_GOB_HOST),)
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=1MB -skip='^(TestCountDecodeMallocs|TestCountMallocs)$$' $(TEST_PACKAGES_GOB_HOST)
+ifneq ($(TEST_PACKAGES_LARGE_STACK_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=1MB $(TEST_PACKAGES_LARGE_STACK_HOST)
+endif
+ifneq ($(TEST_PACKAGES_DEEP_STACK_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=4MB $(TEST_PACKAGES_DEEP_STACK_HOST)
+endif
+ifneq ($(TEST_PACKAGES_HUGE_STACK_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=256MB $(TEST_PACKAGES_HUGE_STACK_HOST)
+endif
+	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW),$(TEST_ADDITIONAL_FLAGS))
+ifneq ($(TEST_PACKAGES_NETIP_HOST),)
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^TestAddrStringAllocs$$|^TestNoAllocs$$/^(Addr.IsGlobalUnicast|Addr.IsInterfaceLocalMulticast|Addr.IsLinkLocalMulticast|Addr.IsLinkLocalUnicast|Addr.IsPrivate)$$' $(TEST_PACKAGES_NETIP_HOST)
 endif
 ifneq ($(TEST_PACKAGES_JSON_HOST),)
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^#05$$|^TestTokenStringAllocations$$' $(TEST_PACKAGES_JSON_HOST)
@@ -313,7 +319,7 @@ endif
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -skip='^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$$' testing/synctest
 	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) -run='^TestSynctestMarshal$$' encoding/json
 ifeq ($(TEST_ENCODING_XML),true)
-	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -short -stack-size=16MB encoding/xml
+	$(TINYGO) test $(TEST_ADDITIONAL_FLAGS) $(TEST_SKIP_FLAG) -stack-size=16MB encoding/xml
 endif
 	@# io/fs requires os.ReadDir, not yet supported on windows or wasi. It also
 	@# requires a large stack-size. Hence, io/fs is only run conditionally.
@@ -322,16 +328,37 @@ ifeq ($(TEST_IOFS),true)
 	$(TINYGO) test -stack-size=6MB io/fs
 endif
 tinygo-test-fast:
-	$(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out encoding/xml $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_JSON_HOST),$(TEST_PACKAGES_HOST))
+	$(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out archive/zip encoding/gob encoding/xml $(TEST_PACKAGES_PRINTER_HOST) $(TEST_PACKAGES_QUICK_HOST) $(TEST_PACKAGES_LARGE_STACK_HOST) $(TEST_PACKAGES_DEEP_STACK_HOST) $(TEST_PACKAGES_HUGE_STACK_HOST) $(TEST_PACKAGES_ALLOCS) $(TEST_PACKAGES_NETIP_HOST) $(TEST_PACKAGES_JSON_HOST),$(TEST_PACKAGES_HOST))
 ifneq ($(TEST_PACKAGES_PRINTER_HOST),)
 	$(TINYGO) test -stack-size=1MB $(TEST_PACKAGES_PRINTER_HOST)
 endif
+ifneq ($(TEST_PACKAGES_GOB_HOST),)
+	$(TINYGO) test -stack-size=1MB -skip='^(TestCountDecodeMallocs|TestCountMallocs)$$' $(TEST_PACKAGES_GOB_HOST)
+endif
+ifneq ($(TEST_PACKAGES_QUICK_HOST),)
+	$(TINYGO) test -stack-size=1MB -skip='^TestCountMallocs$$' $(TEST_PACKAGES_QUICK_HOST)
+endif
+ifneq ($(TEST_PACKAGES_LARGE_STACK_HOST),)
+	$(TINYGO) test -stack-size=1MB $(TEST_PACKAGES_LARGE_STACK_HOST)
+endif
+ifneq ($(TEST_PACKAGES_DEEP_STACK_HOST),)
+	$(TINYGO) test -stack-size=4MB $(TEST_PACKAGES_DEEP_STACK_HOST)
+endif
+ifneq ($(TEST_PACKAGES_HUGE_STACK_HOST),)
+	$(TINYGO) test -stack-size=256MB $(TEST_PACKAGES_HUGE_STACK_HOST)
+endif
 	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_HOST))
-ifeq ($(TEST_ENCODING_XML),true)
-	$(TINYGO) test $(TEST_SKIP_FLAG) -short -stack-size=16MB encoding/xml
+ifneq ($(TEST_PACKAGES_NETIP_HOST),)
+	$(TINYGO) test -skip='^TestAddrStringAllocs$$|^TestNoAllocs$$/^(Addr.IsGlobalUnicast|Addr.IsInterfaceLocalMulticast|Addr.IsLinkLocalMulticast|Addr.IsLinkLocalUnicast|Addr.IsPrivate)$$' $(TEST_PACKAGES_NETIP_HOST)
 endif
 ifneq ($(TEST_PACKAGES_JSON_HOST),)
-	$(TINYGO) test -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestUnsupportedValues$$/^#05$$|^TestTokenStringAllocations$$' $(TEST_PACKAGES_JSON_HOST)
+	$(TINYGO) test -stack-size=20MB -skip='^TestHTTPDecoding$$|^TestTokenStringAllocations$$' $(TEST_PACKAGES_JSON_HOST)
+endif
+ifneq ($(TEST_ARCHIVE_ZIP_HOST),)
+	$(TINYGO) test $(TEST_SKIP_FLAG) -parallel=1 archive/zip
+endif
+ifeq ($(TEST_ENCODING_XML),true)
+	$(TINYGO) test $(TEST_SKIP_FLAG) -stack-size=16MB encoding/xml
 endif
 tinygo-bench:
 	$(TINYGO) test -bench . $(TEST_PACKAGES_HOST) $(TEST_PACKAGES_SLOW)
@@ -340,24 +367,18 @@ tinygo-bench-fast:
 
 # Same thing, except for wasi rather than the current platform.
 tinygo-test-wasm:
-	$(TINYGO) test -target wasm $(TEST_SKIP_FLAG) $(filter-out $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_WASM))
-	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_WASM),-target wasm)
+	$(TINYGO) test -target wasm $(TEST_SKIP_FLAG) $(TEST_PACKAGES_WASM)
 tinygo-test-wasi:
-	$(TINYGO) test -target wasip1 $(TEST_SKIP_FLAG) $(filter-out $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW)) ./tests/runtime_wasi
-	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW),-target wasip1)
+	$(TINYGO) test -target wasip1 $(TEST_SKIP_FLAG) $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW) ./tests/runtime_wasi
 tinygo-test-wasip1:
-	GOOS=wasip1 GOARCH=wasm $(TINYGO) test $(TEST_SKIP_FLAG) $(filter-out $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW)) ./tests/runtime_wasi
-	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW),,GOOS=wasip1 GOARCH=wasm)
+	GOOS=wasip1 GOARCH=wasm $(TINYGO) test $(TEST_SKIP_FLAG) $(TEST_PACKAGES_FAST) $(TEST_PACKAGES_SLOW) ./tests/runtime_wasi
 tinygo-test-wasip1-fast:
-	$(TINYGO) test -target=wasip1 $(TEST_SKIP_FLAG) $(filter-out $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_FAST_WASI)) ./tests/runtime_wasi
-	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_FAST_WASI),-target=wasip1)
+	$(TINYGO) test -target=wasip1 $(TEST_SKIP_FLAG) $(TEST_PACKAGES_FAST_WASI) ./tests/runtime_wasi
 
 tinygo-test-wasip2-slow:
-	$(TINYGO) test -target=wasip2 $(TEST_SKIP_FLAG) $(filter-out $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_SLOW))
-	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_SLOW),-target=wasip2)
+	$(TINYGO) test -target=wasip2 $(TEST_SKIP_FLAG) $(TEST_PACKAGES_SLOW)
 tinygo-test-wasip2-fast:
-	$(TINYGO) test -target=wasip2 $(TEST_SKIP_FLAG) $(filter-out $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_FAST_WASIP2)) ./tests/runtime_wasi
-	$(call run-tinygo-alloc-tests,$(TEST_PACKAGES_FAST_WASIP2),-target=wasip2)
+	$(TINYGO) test -target=wasip2 $(TEST_SKIP_FLAG) $(TEST_PACKAGES_FAST_WASIP2) ./tests/runtime_wasi
 
 tinygo-test-wasip2-sum-slow:
 	TINYGO=$(TINYGO) \

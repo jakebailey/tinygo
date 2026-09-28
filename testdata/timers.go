@@ -62,4 +62,40 @@ func main() {
 	<-timer.C
 	println("waited on timer at 750ms")
 	time.Sleep(time.Millisecond * 500)
+	testLazyTimers()
+}
+
+func testLazyTimers() {
+	for i := 0; i < 100; i++ {
+		select {
+		case <-time.After(-time.Nanosecond):
+		default:
+			panic("expired timer was not ready")
+		}
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+	select {
+	case <-ticker.C:
+	default:
+		panic("expired ticker was not ready")
+	}
+	ticker.Stop()
+
+	timer := time.NewTimer(time.Hour)
+	started := make(chan struct{}, 2)
+	done := make(chan struct{}, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			started <- struct{}{}
+			<-timer.C
+			done <- struct{}{}
+		}()
+	}
+	<-started
+	<-started
+	timer.Reset(time.Millisecond)
+	<-done
+	timer.Reset(time.Millisecond)
+	<-done
 }

@@ -4,7 +4,6 @@ import (
 	"debug/dwarf"
 	"errors"
 	"fmt"
-	"go/ast"
 	"go/constant"
 	"go/token"
 	"go/types"
@@ -99,7 +98,7 @@ type compilerContext struct {
 	functionABIs     map[functionABIKey]functionABI
 	inlineCosts      map[*ssa.Function]inlineCost
 	inlineCycles     map[*ssa.Function]bool
-	astComments      map[string]*ast.CommentGroup
+	astComments      map[string]astGlobalInfo
 	cgoImportDynamic map[string]string // //go:cgo_import_dynamic local name -> remote symbol
 	embedGlobals     map[string][]*loader.EmbedFile
 	pkg              *types.Package
@@ -128,7 +127,7 @@ func newCompilerContext(moduleName string, machine llvm.TargetMachine, config *C
 		functionABIs:     map[functionABIKey]functionABI{},
 		inlineCosts:      map[*ssa.Function]inlineCost{},
 		inlineCycles:     map[*ssa.Function]bool{},
-		astComments:      map[string]*ast.CommentGroup{},
+		astComments:      map[string]astGlobalInfo{},
 		cgoImportDynamic: map[string]string{},
 	}
 
@@ -2437,6 +2436,7 @@ func (b *builder) markReflectMakeFuncUseFor(call *ssa.CallCommon, target llvm.Va
 // This is also where compiler intrinsics are implemented.
 func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) {
 	b.markReflectMakeFuncUse(instr)
+	b.markRuntimeFeatureUse(instr)
 
 	// See if this is an intrinsic function that is handled specially.
 	if fn := instr.StaticCallee(); fn != nil {
