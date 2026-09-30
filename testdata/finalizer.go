@@ -227,6 +227,27 @@ func testInvalidFinalizer(name string) {
 		runtime.SetFinalizer(p, 1)
 	case "non-pointer":
 		runtime.SetFinalizer(1, func(int) {})
+	case "interior-pointer":
+		q := new(struct {
+			pad    uintptr
+			target *object
+		})
+		runtime.SetFinalizer(&q.target, func(**object) {})
+		runtime.KeepAlive(q)
+	case "interior-large":
+		q := new(struct {
+			pad    uintptr
+			target [16]byte
+		})
+		runtime.SetFinalizer(&q.target, func(*[16]byte) {})
+		runtime.KeepAlive(q)
+	case "interior-duplicate":
+		q := new([128]byte)
+		runtime.SetFinalizer(&q[1], func(*byte) {})
+		runtime.SetFinalizer(&q[2], func(*byte) {})
+		runtime.SetFinalizer(&q[2], nil)
+		runtime.SetFinalizer(&q[1], func(*byte) {})
+		runtime.KeepAlive(q)
 	}
 	runtime.KeepAlive(p)
 }

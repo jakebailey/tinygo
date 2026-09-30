@@ -158,9 +158,11 @@ func launchArgGoroutine(done chan struct{}) {
 
 func testFinishedGoroutineArgs() {
 	done := make(chan struct{})
-	for i := 0; i < batch; i++ {
-		launchArgGoroutine(done)
-	}
+	go func() {
+		for i := 0; i < batch; i++ {
+			launchArgGoroutine(done)
+		}
+	}()
 	for i := 0; i < batch; i++ {
 		<-done
 	}

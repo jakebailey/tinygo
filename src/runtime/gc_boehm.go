@@ -39,10 +39,11 @@ var (
 )
 
 type boehmFinalizer struct {
-	next *boehmFinalizer
-	fn   interface{}
-	typ  *reflectlite.RawType
-	ptr  unsafe.Pointer // keeps the object alive after Boehm dequeues its callback
+	next   *boehmFinalizer
+	offset uintptr
+	fn     interface{}
+	typ    *reflectlite.RawType
+	ptr    unsafe.Pointer // keeps the object alive after Boehm dequeues its callback
 }
 
 var (
@@ -259,28 +260,53 @@ func SetFinalizer(obj interface{}, finalizer interface{}) {
 		entry = &boehmFinalizer{fn: finalizer, typ: typ}
 	}
 	gcLock.Lock()
-	// Only the base of a collectible allocation can be finalized.
-	if libgc_base(uintptr(objPtr)) != uintptr(objPtr) {
+	base := libgc_base(uintptr(objPtr))
+	if base == 0 {
 		gcLock.Unlock()
 		return
 	}
-	old := libgc_register_finalizer(uintptr(objPtr), uintptr(unsafe.Pointer(entry)))
+	if base != uintptr(objPtr) && !reflectlite.FinalizerAllowsInterior(typ) {
+		runtimeFatal("runtime.SetFinalizer: pointer not at beginning of allocated block")
+	}
+	offset := uintptr(objPtr) - base
+	old := libgc_register_finalizer(base, uintptr(unsafe.Pointer(entry)))
 	if old == ^uintptr(0) {
 		runtimeFatal("gc: cannot register finalizer")
 	}
-	if old != 0 {
-		if entry != nil {
-			runtimeFatal("runtime.SetFinalizer: finalizer already set")
+	head := (*boehmFinalizer)(unsafe.Pointer(old))
+	if entry != nil {
+		for n := head; n != nil; n = n.next {
+			if n.offset == offset {
+				runtimeFatal("runtime.SetFinalizer: finalizer already set")
+			}
 		}
-		(*boehmFinalizer)(unsafe.Pointer(old)).fn = nil
-	}
-	if entry != nil && old == 0 {
+		entry.offset = offset
+		entry.next = head
 		numFinalizers++
 		finalizersSinceGC++
-	} else if entry == nil && old != 0 {
-		numFinalizers--
-		if finalizersSinceGC != 0 {
-			finalizersSinceGC--
+	} else {
+		var prev *boehmFinalizer
+		for n := head; n != nil; n = n.next {
+			if n.offset == offset {
+				if prev == nil {
+					head = n.next
+				} else {
+					prev.next = n.next
+				}
+				*n = boehmFinalizer{}
+				numFinalizers--
+				if finalizersSinceGC != 0 {
+					finalizersSinceGC--
+				}
+				break
+			}
+			prev = n
+		}
+		if head != nil {
+			if libgc_register_finalizer(base, uintptr(unsafe.Pointer(head))) == ^uintptr(0) {
+				runtimeFatal("gc: cannot register finalizer")
+			}
+			KeepAlive(head)
 		}
 	}
 	spawn := entry != nil && !hasParallelism && !finalizerRunnerStarted
@@ -297,13 +323,14 @@ func SetFinalizer(obj interface{}, finalizer interface{}) {
 
 //export tinygo_runtime_bdwgc_finalizer
 func boehmQueueFinalizer(obj unsafe.Pointer, data unsafe.Pointer) {
-	n := (*boehmFinalizer)(data)
-	numFinalizers--
-	if n.fn != nil {
-		n.ptr = obj
+	for n := (*boehmFinalizer)(data); n != nil; {
+		next := n.next
+		numFinalizers--
+		n.ptr = unsafe.Add(obj, n.offset)
 		n.next = finalizerPending
 		finalizerPending = n
 		finalizerQueued = true
+		n = next
 	}
 }
 
@@ -374,7 +401,9 @@ func drainFinalizers() {
 		if n == nil {
 			break
 		}
-		callFinalizer(n.ptr, n.typ, n.fn)
+		ptr, typ, fn := n.ptr, n.typ, n.fn
+		*n = boehmFinalizer{}
+		callFinalizer(ptr, typ, fn)
 	}
 	finalizerDraining = false
 }

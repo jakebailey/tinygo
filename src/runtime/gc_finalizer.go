@@ -162,6 +162,10 @@ func registerFinalizer(addr uintptr, typ *reflectlite.RawType, fn interface{}) {
 					finalizersSinceGC--
 				}
 			} else {
+				other := decodeFinalizerPtr(n.obj)
+				if tracked && isOnHeap(other) && blockFromAddr(other) == blockFromAddr(addr) {
+					finalizerBitSet(addr)
+				}
 				prev = &n.next
 			}
 		}
@@ -260,7 +264,7 @@ func scanFinalizers() {
 
 		// The object is unreachable. Splice its entry out of the registered list
 		// and into the pending queue (alloc-free), so its finalizer runs once.
-		base, _, _ := blockAllocation(addr)
+		base, _ := blockAllocation(addr)
 		clearWeakPointers(base)
 		*prev = n.next
 		numFinalizers--
@@ -324,7 +328,9 @@ func drainFinalizers() {
 		if n == nil {
 			break
 		}
-		callFinalizer(objPtr, n.typ, n.fn)
+		typ, fn := n.typ, n.fn
+		*n = finalizerEntry{}
+		callFinalizer(objPtr, typ, fn)
 	}
 	finalizerDraining = false
 }

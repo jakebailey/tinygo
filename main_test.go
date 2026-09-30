@@ -1602,6 +1602,9 @@ func TestFinalizerInvalid(t *testing.T) {
 				{"type", "incompatible finalizer signature"},
 				{"non-function", "second argument is not a function"},
 				{"non-pointer", "first argument is not a pointer"},
+				{"interior-pointer", "pointer not at beginning of allocated block"},
+				{"interior-large", "pointer not at beginning of allocated block"},
+				{"interior-duplicate", "finalizer already set"},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					output := &bytes.Buffer{}
@@ -1618,6 +1621,23 @@ func TestFinalizerInvalid(t *testing.T) {
 						t.Fatalf("output does not contain %q:\n%s", tc.want, output.String())
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestInteriorFinalizerInvalidReference(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"interior-pointer", "interior-large", "interior-duplicate"} {
+		t.Run(name, func(t *testing.T) {
+			want := "pointer not at beginning of allocated block"
+			if name == "interior-duplicate" {
+				want = "finalizer already set"
+			}
+			cmd := exec.Command(goenv.Get("GOROOT")+"/bin/go", "run", "./testdata/finalizer.go", name)
+			output, err := cmd.CombinedOutput()
+			if err == nil || !bytes.Contains(output, []byte(want)) {
+				t.Fatalf("Go registration result: %v\n%s", err, output)
 			}
 		})
 	}
