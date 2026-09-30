@@ -110,6 +110,7 @@ var (
 	graphFinalized atomic.Int32
 	childFinalized atomic.Int32
 	cycleFinalized atomic.Int32
+	cycleCleaned   atomic.Int32
 	graphKeepAlive []*graphNode
 )
 
@@ -141,6 +142,8 @@ func registerCycleFinalizers() {
 	second.next = first
 	runtime.SetFinalizer(first, func(*graphNode) { cycleFinalized.Add(1) })
 	runtime.SetFinalizer(second, func(*graphNode) { cycleFinalized.Add(1) })
+	runtime.AddCleanup(first, func(int) { cycleCleaned.Add(1) }, 0)
+	runtime.AddCleanup(second, func(int) { cycleCleaned.Add(1) }, 0)
 }
 
 func testFinalizerGraph() {
@@ -157,7 +160,7 @@ func testFinalizerGraph() {
 	if graphFinalized.Load() != 1 || childFinalized.Load() != 1 {
 		panic("finalizers did not run in dependency order")
 	}
-	if cycleFinalized.Load() != 0 {
+	if cycleFinalized.Load() != 0 || cycleCleaned.Load() != 0 {
 		panic("finalized a cycle without a dependency order")
 	}
 }
