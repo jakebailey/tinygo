@@ -32,7 +32,6 @@ package runtime
 
 import (
 	"internal/gclayout"
-	"internal/reflectlite"
 	"internal/task"
 	"runtime/interrupt"
 	"unsafe"
@@ -947,24 +946,10 @@ var count4LUT = [16]uint8{
 }
 
 func SetFinalizer(obj interface{}, finalizer interface{}) {
-	// Validate the arguments up front, like the standard library does, so misuse
-	// fails fast at registration instead of corrupting state when the finalizer
-	// is later invoked. reflectlite cannot inspect a func's signature, so the
-	// exact func(*T) match is not checked; the closure ABI is uniform for any
-	// single pointer argument, which is why callFinalizer can reinterpret it.
-	if reflectlite.ValueOf(obj).Kind() != reflectlite.Pointer {
-		runtimeFatal("runtime.SetFinalizer: first argument is not a pointer")
-	}
-	if finalizer != nil && reflectlite.ValueOf(finalizer).Kind() != reflectlite.Func {
-		runtimeFatal("runtime.SetFinalizer: second argument is not a function")
-	}
+	typ := checkFinalizer(obj, finalizer)
 
 	// For an interface holding a pointer, the value word is the pointer itself.
 	objPtr := (*_interface)(unsafe.Pointer(&obj)).value
-	if objPtr == nil {
-		// A nil pointer has nothing to finalize.
-		return
-	}
 
 	gcLock.Lock()
 	addr := uintptr(objPtr)
@@ -979,6 +964,6 @@ func SetFinalizer(obj interface{}, finalizer interface{}) {
 		runtimeFatal("runtime.SetFinalizer: manual allocation")
 	}
 
-	registerFinalizer(uintptr(objPtr), finalizer)
+	registerFinalizer(uintptr(objPtr), typ, finalizer)
 	KeepAlive(obj)
 }
