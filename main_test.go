@@ -523,6 +523,7 @@ func TestBuild(t *testing.T) {
 			"finalizeridle.go",
 			"finalizerlarge.go",
 			"finalizerinvariants.go",
+			"cleanup/",
 		} {
 			name := name
 			t.Run(name, func(t *testing.T) {
@@ -544,7 +545,7 @@ func TestBuild(t *testing.T) {
 			gc := gc
 			for _, scheduler := range []string{"asyncify", "none"} {
 				scheduler := scheduler
-				tests := []string{"finalizerlarge.go", "finalizer.go"}
+				tests := []string{"finalizerlarge.go", "finalizer.go", "cleanup/"}
 				for _, name := range tests {
 					name := name
 					t.Run(gc+"/"+scheduler+"/"+name, func(t *testing.T) {
@@ -570,7 +571,7 @@ func TestBuild(t *testing.T) {
 		t.Parallel()
 		for _, gc := range []string{"boehm", "precise", "conservative"} {
 			gc := gc
-			tests := []string{"finalizerlarge.go", "finalizer.go"}
+			tests := []string{"finalizerlarge.go", "finalizer.go", "cleanup/"}
 			for _, name := range tests {
 				name := name
 				t.Run(gc+"/"+name, func(t *testing.T) {
@@ -585,6 +586,32 @@ func TestBuild(t *testing.T) {
 						args = []string{"types"}
 					}
 					runTest(name, options, t, args, nil)
+				})
+			}
+		}
+	})
+
+	t.Run("other-finalizer-schedulers", func(t *testing.T) {
+		t.Parallel()
+		for _, target := range []string{"", "riscv-qemu"} {
+			target := target
+			if target != "" && *testOnlyCurrentOS {
+				continue
+			}
+			if target == "" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+				continue
+			}
+			for _, gc := range []string{"precise", "conservative"} {
+				gc := gc
+				t.Run(target+"/"+gc, func(t *testing.T) {
+					t.Parallel()
+					options := optionsFromTarget(target, sema)
+					options.GC = gc
+					options.Tags = append(options.Tags, "runtime_asserts")
+					if target == "" {
+						options.Scheduler = "tasks"
+					}
+					runTest("cleanup/", options, t, nil, nil)
 				})
 			}
 		}

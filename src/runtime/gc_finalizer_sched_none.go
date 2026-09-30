@@ -6,3 +6,7 @@ package runtime
 func spawnFinalizerRunner() {}
 
 func initFinalizerScheduler() {}
+
+func spawnCleanupRunner() {}
+
+func initCleanupScheduler() {}

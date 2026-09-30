@@ -219,6 +219,21 @@ type objHeader struct {
 	layout gcLayout
 }
 
+func blockAllocation(addr uintptr) (base, size uintptr, header *objHeader) {
+	if !isOnHeap(addr) || blockFromAddr(addr).state() == blockStateFree {
+		return
+	}
+	head := blockFromAddr(addr).findHead()
+	first := head
+	for first > 0 && (first-1).state() == blockStateTail {
+		first--
+	}
+	base = first.address()
+	size = uintptr(head-first)*bytesPerBlock + bytesPerBlock - unsafe.Sizeof(objHeader{})
+	header = (*objHeader)(unsafe.Add(head.pointer(), bytesPerBlock-unsafe.Sizeof(objHeader{})))
+	return
+}
+
 // freeRange is a node on the outer list of range lengths.
 // The free ranges are structured as two nested singly-linked lists:
 // - The outer level (freeRange) has one entry for each unique range length.
@@ -645,6 +660,9 @@ func runGC() (freeBytes uintptr) {
 	// finalizers. This runs while the world is still stopped, after marking is
 	// complete and before sweep frees anything.
 	scanFinalizers()
+	if scanCleanups() {
+		finalizersQueued = true
+	}
 
 	// If we're using threads, resume all other threads before starting the
 	// sweep.
