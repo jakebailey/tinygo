@@ -5,8 +5,7 @@ package runtime
 import "unsafe"
 
 func cleanupObjectBounds(ptr unsafe.Pointer) (uintptr, uintptr) {
-	base, size, _ := blockAllocation(uintptr(ptr))
-	return base, size
+	return blockAllocation(uintptr(ptr))
 }
 
 func initCleanup(entry *cleanupEntry, ptr unsafe.Pointer) (bool, string) {

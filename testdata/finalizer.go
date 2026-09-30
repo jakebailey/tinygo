@@ -322,6 +322,13 @@ func testInvalidFinalizer(name string) {
 		})
 		runtime.SetFinalizer(&q.target, func(*[16]byte) {})
 		runtime.KeepAlive(q)
+	case "interior-duplicate":
+		q := new([128]byte)
+		runtime.SetFinalizer(&q[1], func(*byte) {})
+		runtime.SetFinalizer(&q[2], func(*byte) {})
+		runtime.SetFinalizer(&q[2], nil)
+		runtime.SetFinalizer(&q[1], func(*byte) {})
+		runtime.KeepAlive(q)
 	}
 	runtime.KeepAlive(p)
 }
