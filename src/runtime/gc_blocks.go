@@ -660,6 +660,7 @@ func runGC() (freeBytes uintptr) {
 	// finalizers. This runs while the world is still stopped, after marking is
 	// complete and before sweep frees anything.
 	scanFinalizers()
+	scanWeakPointers()
 	if scanCleanups() {
 		finalizersQueued = true
 	}
