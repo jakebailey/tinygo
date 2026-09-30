@@ -341,7 +341,7 @@ func finalizerPressureGC() bool {
 func wakeFinalizer() {
 	if hasScheduler || hasParallelism {
 		gcLock.Lock()
-		spawn := !finalizerRunnerStarted
+		spawn := finalizerPending != nil && !finalizerRunnerStarted
 		if spawn {
 			finalizerRunnerStarted = true
 		}
