@@ -358,8 +358,8 @@ func dequeueFinalizer() (*finalizerEntry, unsafe.Pointer) {
 // It wakes the finalizer runner when the GC queues work.
 func finalizerPressureGC() bool {
 	gcLock.Lock()
-	trigger := finalizerGCTrigger(numFinalizers)
-	if trigger == 0 || finalizersSinceGC < trigger {
+	trigger := finalizerGCTrigger(numFinalizers + numCleanups)
+	if trigger == 0 || finalizersSinceGC+cleanupsSinceGC < trigger {
 		gcLock.Unlock()
 		return false
 	}
@@ -376,6 +376,7 @@ func finalizerPressureGC() bool {
 // wakeFinalizer starts a runner if needed, or drains inline with scheduler.none.
 // Call it after releasing gcLock because spawnFinalizerRunner allocates.
 func wakeFinalizer() {
+	wakeCleanup()
 	if hasScheduler || hasParallelism {
 		gcLock.Lock()
 		spawn := finalizerPending != nil && !finalizerRunnerStarted
