@@ -21,6 +21,8 @@ var (
 	resurrected                             atomic.Pointer[node]
 	parentDone, childDone, resurrectedDone  atomic.Int32
 	cleaned, stopped                        atomic.Int32
+	interiorDone                            [3]atomic.Int32
+	interiorCleaned                         atomic.Int32
 	stackSink                               int
 	static                                  node
 )
@@ -143,8 +145,41 @@ func release() {
 	require(resurrected.Load() == nil, "resurrection root not cleared")
 }
 
+//go:noinline
+func registerInteriorFinalizers() {
+	p := &node{value: 41}
+	p.data[1], p.data[2] = 42, 43
+	runtime.SetFinalizer(p, func(*node) { panic("cleared base finalizer ran") })
+	runtime.SetFinalizer(&p.value, func(*int) { panic("cleared interior finalizer ran") })
+	runtime.SetFinalizer(&p.data[1], func(v *byte) {
+		require(*v == 42, "wrong interior byte finalizer argument")
+		interiorDone[2].Add(1)
+	})
+	runtime.SetFinalizer(&p.data[2], func(*byte) { panic("cleared byte finalizer ran") })
+	runtime.SetFinalizer(&p.value, nil)
+	runtime.SetFinalizer(&p.data[2], nil)
+	runtime.SetFinalizer(&p.data[3], nil)
+	runtime.SetFinalizer(p, nil)
+	runtime.SetFinalizer(&p.value, func(v *int) {
+		require(*v == 41, "wrong interior int finalizer argument")
+		interiorDone[1].Add(1)
+	})
+	runtime.SetFinalizer(p, func(v *node) {
+		require(v.value == 41, "wrong base finalizer argument")
+		interiorDone[0].Add(1)
+	})
+	runtime.AddCleanup(p, func(int) {
+		for i := range interiorDone {
+			require(interiorDone[i].Load() == 1, "cleanup preceded an interior finalizer")
+		}
+		interiorCleaned.Add(1)
+	}, 0)
+}
+
 func main() {
 	fresh(testIdentity)
+	fresh(registerInteriorFinalizers)
+	wait(func() bool { return interiorCleaned.Load() == 1 })
 	fresh(register)
 	copy := oldWeak
 	wait(func() bool {
