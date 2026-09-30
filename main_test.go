@@ -400,6 +400,21 @@ func TestTrimPathTestPackages(t *testing.T) {
 	}
 }
 
+func TestGCConformanceReference(t *testing.T) {
+	t.Parallel()
+	_, minor, err := goenv.GetGorootVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minor < 24 {
+		t.Skip("weak pointers and cleanups require Go 1.24")
+	}
+	cmd := exec.Command(goenv.Get("GOROOT")+"/bin/go", "test", "./testdata/gcconformance", "-count=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Go conformance cases failed: %v\n%s", err, output)
+	}
+}
+
 func TestBuild(t *testing.T) {
 	t.Parallel()
 
@@ -546,6 +561,9 @@ func TestBuild(t *testing.T) {
 			for _, scheduler := range []string{"asyncify", "none"} {
 				scheduler := scheduler
 				tests := []string{"finalizerlarge.go", "finalizer.go", "cleanup/"}
+				if minor >= 24 {
+					tests = append(tests, "gcconformance/")
+				}
 				for _, name := range tests {
 					name := name
 					t.Run(gc+"/"+scheduler+"/"+name, func(t *testing.T) {
@@ -572,6 +590,9 @@ func TestBuild(t *testing.T) {
 		for _, gc := range []string{"boehm", "precise", "conservative"} {
 			gc := gc
 			tests := []string{"finalizerlarge.go", "finalizer.go", "cleanup/"}
+			if minor >= 24 {
+				tests = append(tests, "gcconformance/")
+			}
 			for _, name := range tests {
 				name := name
 				t.Run(gc+"/"+name, func(t *testing.T) {
@@ -612,6 +633,9 @@ func TestBuild(t *testing.T) {
 						options.Scheduler = "tasks"
 					}
 					runTest("cleanup/", options, t, nil, nil)
+					if minor >= 24 {
+						runTest("gcconformance/", options, t, nil, nil)
+					}
 				})
 			}
 		}
