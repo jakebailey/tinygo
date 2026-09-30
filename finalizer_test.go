@@ -9,7 +9,23 @@ import (
 	"time"
 
 	"github.com/tinygo-org/tinygo/builder"
+	"github.com/tinygo-org/tinygo/goenv"
 )
+
+func TestGCConformanceReference(t *testing.T) {
+	t.Parallel()
+	_, minor, err := goenv.GetGorootVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minor < 24 {
+		t.Skip("weak pointers and cleanups require Go 1.24")
+	}
+	cmd := exec.Command(goenv.Get("GOROOT")+"/bin/go", "test", "./testdata/gcconformance", "-count=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Go conformance cases failed: %v\n%s", err, output)
+	}
+}
 
 func TestBoehmFinalizerInterior(t *testing.T) {
 	t.Parallel()
