@@ -337,9 +337,10 @@ func boehmInvokeFinalizers() bool {
 	}
 	queued := finalizerQueued
 	finalizerQueued = false
-	if numCleanups != 0 {
+	if numCleanups != 0 || numWeakPointers != 0 {
 		if cycle := libgc_get_gc_no(); cycle != boehmLastGC {
 			boehmLastGC = cycle
+			scanWeakPointers()
 			queued = scanCleanups() || queued
 		}
 	}
