@@ -34,4 +34,5 @@ func (t *Task) Resume() {
 	t.state.resume()
 	t.gcData.swap()
 	currentTask = nil
+	t.releaseStack()
 }
