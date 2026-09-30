@@ -32,6 +32,7 @@ package runtime
 
 import (
 	"internal/gclayout"
+	"internal/reflectlite"
 	"internal/task"
 	"runtime/interrupt"
 	"unsafe"
@@ -219,7 +220,7 @@ type objHeader struct {
 	layout gcLayout
 }
 
-func blockAllocation(addr uintptr) (base, size uintptr, header *objHeader) {
+func blockAllocation(addr uintptr) (base, size uintptr) {
 	if !isOnHeap(addr) || blockFromAddr(addr).state() == blockStateFree {
 		return
 	}
@@ -230,7 +231,6 @@ func blockAllocation(addr uintptr) (base, size uintptr, header *objHeader) {
 	}
 	base = first.address()
 	size = uintptr(head-first)*bytesPerBlock + bytesPerBlock - unsafe.Sizeof(objHeader{})
-	header = (*objHeader)(unsafe.Add(head.pointer(), bytesPerBlock-unsafe.Sizeof(objHeader{})))
 	return
 }
 
@@ -972,13 +972,21 @@ func SetFinalizer(obj interface{}, finalizer interface{}) {
 
 	gcLock.Lock()
 	addr := uintptr(objPtr)
-	manual := false
-	if isOnHeap(addr) {
-		head := blockFromAddr(addr).findHead()
-		header := (*objHeader)(unsafe.Add(head.pointer(), bytesPerBlock-unsafe.Sizeof(objHeader{})))
-		manual = header.next == 1
+	base, _ := blockAllocation(addr)
+	if base == 0 {
+		gcLock.Unlock()
+		if isOnHeap(addr) {
+			runtimeFatal("runtime.SetFinalizer: pointer not in allocated block")
+		}
+		return
 	}
+	head := blockFromAddr(addr).findHead()
+	header := (*objHeader)(unsafe.Add(head.pointer(), bytesPerBlock-unsafe.Sizeof(objHeader{})))
+	manual := header.next == 1
 	gcLock.Unlock()
+	if base != addr && !reflectlite.FinalizerAllowsInterior(typ) {
+		runtimeFatal("runtime.SetFinalizer: pointer not at beginning of allocated block")
+	}
 	if manual && finalizer != nil {
 		runtimeFatal("runtime.SetFinalizer: manual allocation")
 	}
