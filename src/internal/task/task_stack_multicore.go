@@ -44,6 +44,7 @@ func (t *Task) Resume() {
 	t.gcData.swap()
 	t.state.resume()
 	t.gcData.swap()
+	t.releaseStack()
 }
 
 //go:linkname lockScheduler runtime.lockScheduler
