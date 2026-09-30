@@ -2483,7 +2483,7 @@ func (b *builder) getValue(expr ssa.Value, pos token.Pos) llvm.Value {
 			return llvm.Undef(b.getLLVMType(expr.Type()))
 		}
 		_, fn := b.getFunction(expr)
-		return b.createFuncValue(fn, llvm.Undef(b.dataPtrType), expr.Signature)
+		return b.createFuncValue(fn, llvm.ConstNull(b.dataPtrType), expr.Signature)
 	case *ssa.Global:
 		value := b.getGlobal(expr)
 		if value.IsNil() {
