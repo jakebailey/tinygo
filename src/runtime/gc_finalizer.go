@@ -5,7 +5,10 @@ package runtime
 // Finalizers retain their dependencies before becoming eligible to run.
 // See https://pkg.go.dev/runtime#SetFinalizer for ordering and cycle semantics.
 
-import "unsafe"
+import (
+	"internal/reflectlite"
+	"unsafe"
+)
 
 // finalizerEntry is one registered finalizer. The same node type is reused for
 // the pending queue: when an object dies, its entry is spliced out of the
@@ -18,7 +21,8 @@ type finalizerEntry struct {
 	// fn is the finalizer func value. It is kept alive because the registered
 	// list (a package global) is a GC root, so the boxed closure and any
 	// captured state survive until the finalizer runs.
-	fn interface{}
+	fn  interface{}
+	typ *reflectlite.RawType
 }
 
 // Finalizer storage and runners are created lazily by registerFinalizer.
@@ -127,7 +131,7 @@ func assertFinalizerTable() {
 // is the only allocation and it happens here, on the caller, never during GC.
 // gcLock also serializes table access against scanFinalizers, which runs under
 // gcLock during a GC on another core/thread.
-func registerFinalizer(addr uintptr, fn interface{}) {
+func registerFinalizer(addr uintptr, typ *reflectlite.RawType, fn interface{}) {
 	enc := encodeFinalizerPtr(addr)
 
 	if fn == nil {
@@ -167,7 +171,7 @@ func registerFinalizer(addr uintptr, fn interface{}) {
 
 	// Allocate before taking gcLock because allocation also takes this lock.
 	// Release gcLock only when the bitmap must grow.
-	entry := &finalizerEntry{obj: enc, fn: fn}
+	entry := &finalizerEntry{obj: enc, fn: fn, typ: typ}
 	gcLock.Lock()
 	if shortfall := finalizerBitsShortfall(); shortfall != 0 {
 		gcLock.Unlock()
@@ -185,19 +189,7 @@ func registerFinalizer(addr uintptr, fn interface{}) {
 	// Always scan addresses that the bitmap does not cover.
 	for n := finalizers; (!tracked || finalizerBitGet(addr)) && n != nil; n = n.next {
 		if n.obj == enc {
-			// Replace the finalizer for an already-registered object, so it
-			// still runs only once (Go SetFinalizer replace semantics).
-			n.fn = fn
-			// A finalizer is registered, so make sure the runner exists. The
-			// flag is serialized by gcLock; the spawn itself allocates, so it
-			// must run after the lock is released.
-			spawn := !finalizerRunnerStarted
-			finalizerRunnerStarted = true
-			gcLock.Unlock()
-			if spawn {
-				spawnFinalizerRunner()
-			}
-			return
+			runtimeFatal("runtime.SetFinalizer: finalizer already set")
 		}
 	}
 	entry.next = finalizers
@@ -330,7 +322,7 @@ func drainFinalizers() {
 		if n == nil {
 			break
 		}
-		callFinalizer(objPtr, n.fn)
+		callFinalizer(objPtr, n.typ, n.fn)
 	}
 	finalizerDraining = false
 }

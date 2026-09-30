@@ -1,6 +1,11 @@
 package main
 
-import "runtime"
+import (
+	"os"
+	"runtime"
+	"sync/atomic"
+	"time"
+)
 
 type T struct{ x int }
 
@@ -53,6 +58,7 @@ func allocRegisterClear() {
 func allocRegisterReplace() {
 	p := &T{x: 2}
 	runtime.SetFinalizer(p, func(*T) { f1Ran++ })
+	runtime.SetFinalizer(p, nil)
 	runtime.SetFinalizer(p, func(*T) { f2Ran++ })
 }
 
@@ -94,8 +100,6 @@ func testClear() {
 	}
 }
 
-// testReplace checks that re-registering replaces the finalizer: only the latest
-// one runs, and only once.
 func testReplace() {
 	allocRegisterReplace()
 	for i := 0; i < 100 && f2Ran == 0; i++ {
@@ -112,8 +116,117 @@ func testReplace() {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		if os.Args[1] == "types" {
+			testFinalizerTypes()
+		} else {
+			testInvalidFinalizer(os.Args[1])
+		}
+		println("ok")
+		return
+	}
 	testFires()
 	testClear()
 	testReplace()
 	println("ok")
+}
+
+type object struct {
+	value int
+	data  [128]byte
+}
+
+func (p *object) read() int { return p.value }
+
+func (p *object) finish() { check(p) }
+
+type reader interface{ read() int }
+type pointer *object
+type finalizer func(*object) [2048]int
+
+var completed atomic.Int32
+
+func check(p *object) {
+	if p.value != 42 {
+		panic("wrong finalizer argument")
+	}
+	completed.Add(1)
+}
+
+//go:noinline
+func register(i int) {
+	p := &object{value: 42}
+	switch i {
+	case 0:
+		runtime.SetFinalizer(p, func(p *object) { check(p) })
+	case 1:
+		runtime.SetFinalizer(pointer(p), func(p *object) { check(p) })
+	case 2:
+		runtime.SetFinalizer(p, func(p pointer) { check(p) })
+	case 3:
+		runtime.SetFinalizer(p, func(v interface{}) [4]int64 {
+			check(v.(*object))
+			return [4]int64{}
+		})
+	case 4:
+		runtime.SetFinalizer(p, func(v reader) (int, string) {
+			if v.read() != 42 {
+				panic("wrong finalizer interface")
+			}
+			check(v.(*object))
+			return 1, "ignored"
+		})
+	case 5:
+		runtime.SetFinalizer(p, finalizer(func(v *object) [2048]int {
+			check(v)
+			return [2048]int{}
+		}))
+	case 6:
+		runtime.SetFinalizer(p, func(v *object) {
+			check(v)
+			runtime.SetFinalizer(v, func(v *object) { check(v) })
+		})
+	case 7:
+		runtime.SetFinalizer(p, (*object).finish)
+	}
+}
+
+func testFinalizerTypes() {
+	for i := 0; i < 8; i++ {
+		register(i)
+	}
+	for i := 0; i < 100 && completed.Load() != 9; i++ {
+		sink += scrubStack(40)
+		runtime.GC()
+		runtime.Gosched()
+		if runtime.GOARCH != "wasm" {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if completed.Load() != 9 {
+		println("completed:", completed.Load())
+		panic("finalizer call adapters did not run")
+	}
+}
+
+func testInvalidFinalizer(name string) {
+	p := new(object)
+	switch name {
+	case "duplicate":
+		runtime.SetFinalizer(p, func(*object) {})
+		runtime.SetFinalizer(p, func(*object) {})
+	case "nil":
+		runtime.SetFinalizer((*object)(nil), func(*object) {})
+	case "count":
+		runtime.SetFinalizer(p, func() {})
+	case "variadic":
+		runtime.SetFinalizer(p, func(...*object) {})
+	case "type":
+		runtime.SetFinalizer(p, func(*int) {})
+	case "non-function":
+		runtime.SetFinalizer(p, 1)
+	case "non-pointer":
+		runtime.SetFinalizer(1, func(int) {})
+	}
+	runtime.KeepAlive(p)
 }

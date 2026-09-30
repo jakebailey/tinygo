@@ -41,6 +41,7 @@ var (
 type boehmFinalizer struct {
 	next *boehmFinalizer
 	fn   interface{}
+	typ  *reflectlite.RawType
 	ptr  unsafe.Pointer // keeps the object alive after Boehm dequeues its callback
 }
 
@@ -249,20 +250,12 @@ func setHeapEnd(newHeapEnd uintptr) {
 }
 
 func SetFinalizer(obj interface{}, finalizer interface{}) {
-	if reflectlite.ValueOf(obj).Kind() != reflectlite.Pointer {
-		runtimeFatal("runtime.SetFinalizer: first argument is not a pointer")
-	}
-	if finalizer != nil && reflectlite.ValueOf(finalizer).Kind() != reflectlite.Func {
-		runtimeFatal("runtime.SetFinalizer: second argument is not a function")
-	}
+	typ := checkFinalizer(obj, finalizer)
 	objPtr := (*_interface)(unsafe.Pointer(&obj)).value
-	if objPtr == nil {
-		return
-	}
 
 	var entry *boehmFinalizer
 	if finalizer != nil {
-		entry = &boehmFinalizer{fn: finalizer}
+		entry = &boehmFinalizer{fn: finalizer, typ: typ}
 	}
 	gcLock.Lock()
 	// Only the base of a collectible allocation can be finalized.
@@ -275,6 +268,9 @@ func SetFinalizer(obj interface{}, finalizer interface{}) {
 		runtimeFatal("gc: cannot register finalizer")
 	}
 	if old != 0 {
+		if entry != nil {
+			runtimeFatal("runtime.SetFinalizer: finalizer already set")
+		}
 		(*boehmFinalizer)(unsafe.Pointer(old)).fn = nil
 	}
 	if entry != nil && old == 0 {
@@ -369,7 +365,7 @@ func drainFinalizers() {
 		if n == nil {
 			break
 		}
-		callFinalizer(n.ptr, n.fn)
+		callFinalizer(n.ptr, n.typ, n.fn)
 	}
 	finalizerDraining = false
 }

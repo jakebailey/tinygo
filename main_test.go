@@ -448,7 +448,7 @@ func TestBuild(t *testing.T) {
 			gc := gc
 			for _, scheduler := range []string{"asyncify", "none"} {
 				scheduler := scheduler
-				tests := []string{"finalizerlarge.go"}
+				tests := []string{"finalizerlarge.go", "finalizer.go"}
 				for _, name := range tests {
 					name := name
 					t.Run(gc+"/"+scheduler+"/"+name, func(t *testing.T) {
@@ -460,6 +460,8 @@ func TestBuild(t *testing.T) {
 						var args []string
 						if name == "finalizerlarge.go" {
 							args = []string{"graph"}
+						} else if name == "finalizer.go" {
+							args = []string{"types"}
 						}
 						runTest(name, options, t, args, nil)
 					})
@@ -472,7 +474,7 @@ func TestBuild(t *testing.T) {
 		t.Parallel()
 		for _, gc := range []string{"boehm", "precise", "conservative"} {
 			gc := gc
-			tests := []string{"finalizerlarge.go"}
+			tests := []string{"finalizerlarge.go", "finalizer.go"}
 			for _, name := range tests {
 				name := name
 				t.Run(gc+"/"+name, func(t *testing.T) {
@@ -483,6 +485,8 @@ func TestBuild(t *testing.T) {
 					var args []string
 					if name == "finalizerlarge.go" {
 						args = []string{"graph"}
+					} else if name == "finalizer.go" {
+						args = []string{"types"}
 					}
 					runTest(name, options, t, args, nil)
 				})
@@ -1520,6 +1524,51 @@ func checkOutputData(t *testing.T, expectedOutput, actual []byte) {
 	if !bytes.Equal(actual, expectedOutput) {
 		t.Errorf("output did not match (expected %d bytes, got %d bytes):", len(expectedOutput), len(actual))
 		t.Error(string(Diff("expected", expectedOutput, "actual", actual)))
+	}
+}
+
+func TestFinalizerInvalid(t *testing.T) {
+	t.Parallel()
+	for _, gc := range []string{"boehm", "precise", "conservative"} {
+		gc := gc
+		t.Run(gc, func(t *testing.T) {
+			t.Parallel()
+			options := optionsFromTarget("", sema)
+			options.GC = gc
+			options.Tags = append(options.Tags, "runtime_asserts")
+			config, err := builder.NewConfig(&options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct {
+				name string
+				want string
+			}{
+				{"duplicate", "finalizer already set"},
+				{"nil", "pointer not in allocated block"},
+				{"count", "incompatible finalizer signature"},
+				{"variadic", "incompatible finalizer signature"},
+				{"type", "incompatible finalizer signature"},
+				{"non-function", "second argument is not a function"},
+				{"non-pointer", "first argument is not a pointer"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					output := &bytes.Buffer{}
+					_, err := buildAndRun("testdata/finalizer.go", config, output, []string{tc.name}, nil, time.Minute, func(cmd *exec.Cmd, result builder.BuildResult) error {
+						cmd.Stdout, cmd.Stderr = nil, nil
+						data, err := cmd.CombinedOutput()
+						output.Write(data)
+						return err
+					})
+					if err == nil {
+						t.Fatal("invalid finalizer registration succeeded")
+					}
+					if !strings.Contains(output.String(), tc.want) {
+						t.Fatalf("output does not contain %q:\n%s", tc.want, output.String())
+					}
+				})
+			}
+		})
 	}
 }
 
