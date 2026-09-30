@@ -117,8 +117,13 @@ func TestFinalizerRunnerRegistration(t *testing.T) {
 	}{
 		{"wasm", "boehm", "asyncify"},
 		{"wasm", "conservative", "asyncify"},
+		{"wasm", "precise", "asyncify"},
 		{"", "boehm", "tasks"},
 		{"", "boehm", "threads"},
+		{"", "conservative", "tasks"},
+		{"", "conservative", "threads"},
+		{"", "precise", "tasks"},
+		{"", "precise", "threads"},
 	} {
 		if test.target == "" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 			continue
@@ -530,6 +535,54 @@ func TestBuild(t *testing.T) {
 				}
 				runTest(name, testOptions, t, nil, nil)
 			})
+		}
+	})
+
+	t.Run("finalizer-semantics", func(t *testing.T) {
+		t.Parallel()
+		for _, gc := range []string{"boehm", "precise", "conservative"} {
+			gc := gc
+			for _, scheduler := range []string{"asyncify", "none"} {
+				scheduler := scheduler
+				tests := []string{"finalizerlarge.go"}
+				for _, name := range tests {
+					name := name
+					t.Run(gc+"/"+scheduler+"/"+name, func(t *testing.T) {
+						t.Parallel()
+						options := optionsFromTarget("wasm", sema)
+						options.GC = gc
+						options.Scheduler = scheduler
+						options.Tags = append(options.Tags, "runtime_asserts")
+						var args []string
+						if name == "finalizerlarge.go" {
+							args = []string{"graph"}
+						}
+						runTest(name, options, t, args, nil)
+					})
+				}
+			}
+		}
+	})
+
+	t.Run("host-finalizer-semantics", func(t *testing.T) {
+		t.Parallel()
+		for _, gc := range []string{"boehm", "precise", "conservative"} {
+			gc := gc
+			tests := []string{"finalizerlarge.go"}
+			for _, name := range tests {
+				name := name
+				t.Run(gc+"/"+name, func(t *testing.T) {
+					t.Parallel()
+					options := optionsFromTarget("", sema)
+					options.GC = gc
+					options.Tags = append(options.Tags, "runtime_asserts")
+					var args []string
+					if name == "finalizerlarge.go" {
+						args = []string{"graph"}
+					}
+					runTest(name, options, t, args, nil)
+				})
+			}
 		}
 	})
 

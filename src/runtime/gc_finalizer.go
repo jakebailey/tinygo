@@ -2,22 +2,10 @@
 
 package runtime
 
-// This file implements a minimal runtime.SetFinalizer for the block-based
-// garbage collector. It supports the common, contract-correct case only:
-//
-//   - SetFinalizer(ptr, func(ptrType)) registers a finalizer that runs once,
-//     after the object becomes unreachable.
-//   - SetFinalizer(ptr, nil) clears any finalizer for the object.
-//
-// It intentionally does not implement full Go finalizer semantics (ordering
-// guarantees, cycles, AddCleanup, ...). The whole feature is zero-cost when no
-// finalizer is ever registered: the table stays empty, scanFinalizers returns
-// immediately, and no background goroutine is spawned.
+// Finalizers retain their dependencies before becoming eligible to run.
+// See https://pkg.go.dev/runtime#SetFinalizer for ordering and cycle semantics.
 
-import (
-	"internal/task"
-	"unsafe"
-)
+import "unsafe"
 
 // finalizerEntry is one registered finalizer. The same node type is reused for
 // the pending queue: when an object dies, its entry is spliced out of the
@@ -33,21 +21,18 @@ type finalizerEntry struct {
 	fn interface{}
 }
 
+// Finalizer storage and runners are created lazily by registerFinalizer.
+// With no registered or pending finalizers, scanFinalizers returns immediately.
 var (
 	finalizers        *finalizerEntry // registered finalizers; a GC root that keeps fn values alive
 	finalizerPending  *finalizerEntry // finalizers whose object died, waiting to run
 	numFinalizers     uintptr         // number of registered finalizers; fast-path gate for scanFinalizers
 	finalizersSinceGC uintptr         // tracks registration pressure for the scheduler trigger
 	finalizersQueued  bool            // set when scanFinalizers queued at least one finalizer to run
-	finalizerFutex    task.Futex      // wakes the finalizerRunner goroutine after a GC queues work
 	finalizerDraining bool            // guards against re-entrant inline draining (scheduler.none)
 
-	// finalizerRunnerStarted records whether the background finalizerRunner
-	// goroutine has been spawned yet. The runner is spawned lazily, on the first
-	// SetFinalizer, so builds that never register a finalizer let the linker DCE
-	// the runner and drain machinery. Read/written only under gcLock, so no
-	// atomics are needed. Unused under scheduler.none (spawnFinalizerRunner is a
-	// no-op there, and the linker drops the flag).
+	// finalizerRunnerStarted prevents concurrent runners. Access it under gcLock.
+	// finalizerRunner clears it when the pending queue is empty.
 	finalizerRunnerStarted bool
 )
 
@@ -203,15 +188,8 @@ func registerFinalizer(addr uintptr, fn interface{}) {
 			// Replace the finalizer for an already-registered object, so it
 			// still runs only once (Go SetFinalizer replace semantics).
 			n.fn = fn
-			// A finalizer is registered, so make sure the runner exists. The
-			// flag is serialized by gcLock; the spawn itself allocates, so it
-			// must run after the lock is released.
-			spawn := !finalizerRunnerStarted
-			finalizerRunnerStarted = true
+			initFinalizerScheduler()
 			gcLock.Unlock()
-			if spawn {
-				spawnFinalizerRunner()
-			}
 			return
 		}
 	}
@@ -222,15 +200,8 @@ func registerFinalizer(addr uintptr, fn interface{}) {
 	}
 	numFinalizers++
 	finalizersSinceGC++
-	// A finalizer is registered, so make sure the runner exists. The flag is
-	// serialized by gcLock; the spawn itself allocates, so it must run after the
-	// lock is released.
-	spawn := !finalizerRunnerStarted
-	finalizerRunnerStarted = true
+	initFinalizerScheduler()
 	gcLock.Unlock()
-	if spawn {
-		spawnFinalizerRunner()
-	}
 }
 
 // scanFinalizers detects finalizable objects that became unreachable in the
@@ -244,6 +215,26 @@ func scanFinalizers() {
 	if numFinalizers == 0 && finalizerPending == nil {
 		return
 	}
+
+	for n := finalizerPending; n != nil; n = n.next {
+		markRoot(0, decodeFinalizerPtr(n.obj))
+	}
+	finishMark()
+
+	// Scan dependencies without marking the finalizable object itself.
+	// A path back to the object prevents finalization, as in Go.
+	for n := finalizers; n != nil; n = n.next {
+		addr := decodeFinalizerPtr(n.obj)
+		if !isOnHeap(addr) {
+			continue
+		}
+		head := blockFromAddr(addr).findHead()
+		if head.state() != blockStateMark {
+			header := (*objHeader)(unsafe.Add(head.pointer(), bytesPerBlock-unsafe.Sizeof(objHeader{})))
+			scanObject(header)
+		}
+	}
+	finishMark()
 
 	// Detect newly-unreachable objects and move their finalizers to the pending
 	// queue.
@@ -367,29 +358,35 @@ func dequeueFinalizer() (*finalizerEntry, unsafe.Pointer) {
 // finalizerPressureGC runs a GC when registrations indicate external memory pressure.
 // It wakes the finalizer runner when the GC queues work.
 func finalizerPressureGC() bool {
+	gcLock.Lock()
 	trigger := finalizerGCTrigger(numFinalizers)
 	if trigger == 0 || finalizersSinceGC < trigger {
+		gcLock.Unlock()
 		return false
 	}
-	gcLock.Lock()
 	runGC()
+	queued := finalizersQueued
+	finalizersQueued = false
 	gcLock.Unlock()
-	if finalizersQueued {
-		finalizersQueued = false
+	if queued {
 		wakeFinalizer()
 	}
 	return true
 }
 
-// wakeFinalizer is called after a GC (with gcLock already released) that queued
-// finalizers. On schedulers with goroutines it wakes the finalizerRunner; on
-// scheduler.none it drains inline.
+// wakeFinalizer starts a runner if needed, or drains inline with scheduler.none.
+// Call it after releasing gcLock because spawnFinalizerRunner allocates.
 func wakeFinalizer() {
 	if hasScheduler || hasParallelism {
-		// A finalizerRunner exists. Bump the futex before waking so a runner
-		// caught between draining and waiting doesn't miss this wakeup.
-		finalizerFutex.Add(1)
-		finalizerFutex.Wake()
+		gcLock.Lock()
+		spawn := finalizerPending != nil && !finalizerRunnerStarted
+		if spawn {
+			finalizerRunnerStarted = true
+		}
+		gcLock.Unlock()
+		if spawn {
+			spawnFinalizerRunner()
+		}
 	} else {
 		// scheduler.none: no goroutines, so drain inline. Finalizers must not
 		// block here; this is safe because gcLock has already been released.
@@ -397,18 +394,17 @@ func wakeFinalizer() {
 	}
 }
 
-// finalizerRunner is the background goroutine that runs finalizers off the
-// allocating goroutine's stack. It drains all pending finalizers, then blocks on
-// the futex until the next GC queues more. It is spawned lazily by
-// spawnFinalizerRunner on the first SetFinalizer, so builds that never register a
-// finalizer let the linker eliminate it and the drain machinery entirely.
+// finalizerRunner runs callbacks off the allocating goroutine's stack.
+// Exit when idle so the runner's stack cannot retain finalized objects.
 func finalizerRunner() {
 	for {
-		// Sample the futex before draining. A wake that lands after we drain but
-		// before Wait then leaves the counter changed, so Wait returns at once
-		// instead of losing the wakeup (at worst one harmless spurious re-drain).
-		val := finalizerFutex.Load()
 		drainFinalizers()
-		finalizerFutex.Wait(val)
+		gcLock.Lock()
+		if finalizerPending == nil {
+			finalizerRunnerStarted = false
+			gcLock.Unlock()
+			return
+		}
+		gcLock.Unlock()
 	}
 }

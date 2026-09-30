@@ -494,11 +494,12 @@ func alloc(size uintptr, layout unsafe.Pointer) unsafe.Pointer {
 	header.layout = parseGCLayout(layout)
 
 	// We've claimed this allocation, now we can unlock the heap.
+	queued := finalizersQueued
+	finalizersQueued = false
 	gcLock.Unlock()
 
 	// If the GC above queued any finalizers, run them now that gcLock is free.
-	if finalizersQueued {
-		finalizersQueued = false
+	if queued {
 		wakeFinalizer()
 	}
 
@@ -586,11 +587,12 @@ func freeTaskStack(addr uintptr) {
 func GC() {
 	gcLock.Lock()
 	runGC()
+	queued := finalizersQueued
+	finalizersQueued = false
 	gcLock.Unlock()
 
 	// If the GC queued any finalizers, run them now that gcLock is free.
-	if finalizersQueued {
-		finalizersQueued = false
+	if queued {
 		wakeFinalizer()
 	}
 }
@@ -714,30 +716,34 @@ func finishMark() {
 		}
 		scanList = (*objHeader)(unsafe.Pointer(obj.next))
 
-		// Check if the object may contain pointers.
-		if obj.layout.pointerFree() {
-			// This object doesn't contain any pointers.
-			// This is a fast path for objects like make([]int, 4096).
-			// It skips the length calculation.
-			continue
-		}
-
-		// Find the last block in the object.
-		// This block contains the header.
-		lastBlock := blockFromAddr(uintptr(unsafe.Pointer(obj)))
-
-		// Find the first block in the allocation.
-		firstBlock := lastBlock
-		for firstBlock > 0 && (firstBlock-1).state() == blockStateTail {
-			firstBlock--
-		}
-
-		// Compute the size of the allocation.
-		bodySize := uintptr(lastBlock-firstBlock)*bytesPerBlock + (bytesPerBlock - unsafe.Sizeof(objHeader{}))
-
-		// Scan the object.
-		obj.layout.scan(firstBlock.address(), bodySize)
+		scanObject(obj)
 	}
+}
+
+func scanObject(obj *objHeader) {
+	// Check if the object may contain pointers.
+	if obj.layout.pointerFree() {
+		// This object doesn't contain any pointers.
+		// This is a fast path for objects like make([]int, 4096).
+		// It skips the length calculation.
+		return
+	}
+
+	// Find the last block in the object.
+	// This block contains the header.
+	lastBlock := blockFromAddr(uintptr(unsafe.Pointer(obj)))
+
+	// Find the first block in the allocation.
+	firstBlock := lastBlock
+	for firstBlock > 0 && (firstBlock-1).state() == blockStateTail {
+		firstBlock--
+	}
+
+	// Compute the size of the allocation.
+	bodySize := uintptr(lastBlock-firstBlock)*bytesPerBlock + (bytesPerBlock - unsafe.Sizeof(objHeader{}))
+
+	// Scan the object.
+	obj.layout.scan(firstBlock.address(), bodySize)
 }
 
 // mark a GC root at the address addr.
@@ -974,4 +980,5 @@ func SetFinalizer(obj interface{}, finalizer interface{}) {
 	}
 
 	registerFinalizer(uintptr(objPtr), finalizer)
+	KeepAlive(obj)
 }
