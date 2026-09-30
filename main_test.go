@@ -1903,3 +1903,29 @@ func TestInitAllDWARF(t *testing.T) {
 		}
 	}
 }
+
+func TestRetiredStack(t *testing.T) {
+	t.Parallel()
+	for _, target := range []string{"", "riscv-qemu"} {
+		target := target
+		if target != "" && *testOnlyCurrentOS {
+			continue
+		}
+		if target == "" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+			continue
+		}
+		for _, gc := range []string{"precise", "conservative"} {
+			gc := gc
+			t.Run(target+"/"+gc, func(t *testing.T) {
+				t.Parallel()
+				options := optionsFromTarget(target, sema)
+				options.GC = gc
+				options.Tags = append(options.Tags, "runtime_asserts")
+				if target == "" {
+					options.Scheduler = "tasks"
+				}
+				runTest("retiredstack/", options, t, nil, nil)
+			})
+		}
+	}
+}
