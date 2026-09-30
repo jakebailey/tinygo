@@ -27,9 +27,25 @@ type state struct {
 	// When initializing the goroutine, the stackCanary constant is stored there.
 	// If the stack overflowed, the word will likely no longer equal stackCanary.
 	canaryPtr *uintptr
+	stackSize uintptr
 }
 
-const hasReleasableStack = false
+const hasReleasableStack = true
+
+func (t *Task) releaseStack() {
+	if !t.Exited {
+		return
+	}
+	// PauseLocked returns with the scheduler lock held (task_stack_multicore.go).
+	// Clear roots without taking gcLock and let GC reclaim the allocation.
+	memzero(unsafe.Pointer(t.state.canaryPtr), t.state.stackSize)
+	t.state = state{}
+	t.gcData = gcData{}
+	t.DeferFrame = nil
+}
+
+//go:linkname memzero runtime.memzero
+func memzero(ptr unsafe.Pointer, size uintptr)
 
 //export tinygo_task_exit
 func taskExit() {
@@ -46,6 +62,7 @@ func (s *state) initialize(fn uintptr, args unsafe.Pointer, stackSize uintptr) {
 	// points to the first word of the stack. If it has changed between now and
 	// the next stack switch, there was a stack overflow.
 	s.canaryPtr = (*uintptr)(stack)
+	s.stackSize = stackSize
 	*s.canaryPtr = stackCanary
 
 	// Get a pointer to the top of the stack, where the initial register values
