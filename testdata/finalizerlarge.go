@@ -107,8 +107,9 @@ type graphNode struct {
 }
 
 var (
-	graphFinalized int
-	cycleFinalized int
+	graphFinalized atomic.Int32
+	childFinalized atomic.Int32
+	cycleFinalized atomic.Int32
 	graphKeepAlive []*graphNode
 )
 
@@ -116,14 +117,19 @@ var (
 func registerGraphFinalizer() {
 	child := &graphNode{tag: 0x12345678}
 	parent := &graphNode{next: child}
+	runtime.SetFinalizer(child, func(p *graphNode) {
+		p.tag = 0
+		childFinalized.Add(1)
+	})
 	runtime.SetFinalizer(parent, func(p *graphNode) {
+		runtime.GC()
 		for i := 0; i < 8192; i++ {
 			graphKeepAlive = append(graphKeepAlive, &graphNode{tag: uint32(i)})
 		}
 		if p.next.tag != 0x12345678 {
 			panic("finalizer lost a referenced object")
 		}
-		graphFinalized++
+		graphFinalized.Add(1)
 	})
 }
 
@@ -133,19 +139,25 @@ func registerCycleFinalizers() {
 	second := new(graphNode)
 	first.next = second
 	second.next = first
-	runtime.SetFinalizer(first, func(*graphNode) { cycleFinalized++ })
-	runtime.SetFinalizer(second, func(*graphNode) { cycleFinalized++ })
+	runtime.SetFinalizer(first, func(*graphNode) { cycleFinalized.Add(1) })
+	runtime.SetFinalizer(second, func(*graphNode) { cycleFinalized.Add(1) })
 }
 
 func testFinalizerGraph() {
 	registerGraphFinalizer()
 	registerCycleFinalizers()
-	for i := 0; i < 100 && (graphFinalized != 1 || cycleFinalized != 2); i++ {
+	for i := 0; i < 100 && (graphFinalized.Load() != 1 || childFinalized.Load() != 1); i++ {
 		largeFinalizerSink += scrubLargeFinalizerStack(40)
 		runtime.GC()
 		runtime.Gosched()
+		if runtime.GOARCH != "wasm" {
+			time.Sleep(time.Millisecond)
+		}
 	}
-	if graphFinalized != 1 || cycleFinalized != 2 {
-		panic("finalizers did not run for the graph and cycle")
+	if graphFinalized.Load() != 1 || childFinalized.Load() != 1 {
+		panic("finalizers did not run in dependency order")
+	}
+	if cycleFinalized.Load() != 0 {
+		panic("finalized a cycle without a dependency order")
 	}
 }
