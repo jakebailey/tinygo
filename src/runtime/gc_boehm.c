@@ -18,8 +18,8 @@ static void GC_CALLBACK finalizer_callback(void *obj, void *data) {
 
 uintptr_t tinygo_runtime_bdwgc_register_finalizer(uintptr_t obj, uintptr_t data) {
     void *old_data = (void *)(uintptr_t)-1;
-    GC_register_finalizer_no_order((void *)obj, data ? finalizer_callback : NULL,
-                                   (void *)data, NULL, &old_data);
+    GC_register_finalizer((void *)obj, data ? finalizer_callback : NULL,
+                          (void *)data, NULL, &old_data);
     return (uintptr_t)old_data;
 }
 
@@ -87,8 +87,6 @@ static void GC_CALLBACK warn_proc(const char *msg, GC_word arg) {
 void tinygo_runtime_bdwgc_init(void) {
     GC_set_push_other_roots(callback);
     GC_set_finalize_on_demand(1);
-    // See gc.h GC_set_java_finalization for unordered finalizer reachability.
-    GC_set_java_finalization(1);
 #if defined(__wasm__)
     // There are a lot of warnings on WebAssembly in the form:
     //
