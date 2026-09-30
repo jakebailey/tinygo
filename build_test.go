@@ -167,7 +167,7 @@ func TestBuild(t *testing.T) {
 			gc := gc
 			for _, scheduler := range []string{"asyncify", "none"} {
 				scheduler := scheduler
-				tests := []string{"finalizerlarge.go"}
+				tests := []string{"finalizerlarge.go", "finalizer.go"}
 				for _, name := range tests {
 					name := name
 					t.Run(gc+"/"+scheduler+"/"+name, func(t *testing.T) {
@@ -179,6 +179,8 @@ func TestBuild(t *testing.T) {
 						var args []string
 						if name == "finalizerlarge.go" {
 							args = []string{"graph"}
+						} else if name == "finalizer.go" {
+							args = []string{"types"}
 						}
 						runTest(name, options, t, args, nil)
 					})
@@ -191,7 +193,7 @@ func TestBuild(t *testing.T) {
 		t.Parallel()
 		for _, gc := range []string{"boehm", "precise", "conservative"} {
 			gc := gc
-			tests := []string{"finalizerlarge.go"}
+			tests := []string{"finalizerlarge.go", "finalizer.go"}
 			for _, name := range tests {
 				name := name
 				t.Run(gc+"/"+name, func(t *testing.T) {
@@ -202,6 +204,8 @@ func TestBuild(t *testing.T) {
 					var args []string
 					if name == "finalizerlarge.go" {
 						args = []string{"graph"}
+					} else if name == "finalizer.go" {
+						args = []string{"types"}
 					}
 					runTest(name, options, t, args, nil)
 				})

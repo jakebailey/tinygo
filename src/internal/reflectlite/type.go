@@ -232,6 +232,14 @@ func FinalizerAllowsInterior(t *RawType) bool {
 	return elem.Size() < 16 && elem.gcLayout() == gclayout.NoPtrs.AsPtr()
 }
 
+func FinalizerForType(t *RawType) (*RawType, func(interface{}, unsafe.Pointer)) {
+	f := (*funcType)(unsafe.Pointer(t.underlying()))
+	if f.finalizerArg == nil {
+		return nil, nil
+	}
+	return f.finalizerArg, f.finalizerCall
+}
+
 // All types that have an element type: named, chan, slice, array, map (but not
 // pointer because it doesn't have ptrTo).
 type elemType struct {
@@ -373,10 +381,12 @@ type structField struct {
 // Parameter types are followed by result types in inOut.
 type funcType struct {
 	RawType
-	numIn  uint8
-	numOut uint16
-	ptrTo  *RawType
-	inOut  [0]*RawType
+	numIn         uint8
+	numOut        uint16
+	ptrTo         *RawType
+	finalizerArg  *RawType
+	finalizerCall func(interface{}, unsafe.Pointer)
+	inOut         [0]*RawType
 }
 
 const funcTypeVariadic = 0x8000
@@ -1131,12 +1141,15 @@ func haveIdenticalUnderlyingType(t, u *RawType, compareTags bool) bool {
 // AssignableTo returns whether a value of type t can be assigned to a variable
 // of type u.
 func (t *RawType) AssignableTo(u Type) bool {
-	u_raw := u.(*RawType)
+	return RawAssignableTo(t, u.(*RawType))
+}
+
+func RawAssignableTo(t, u_raw *RawType) bool {
 	if t == u_raw {
 		return true
 	}
 
-	if u.Kind() == Interface {
+	if u_raw.Kind() == Interface {
 		// T is an interface type and x implements T.
 		u_itf := (*interfaceType)(unsafe.Pointer(u_raw.underlying()))
 		return typeImplementsMethodSet(unsafe.Pointer(t), unsafe.Pointer(&u_itf.methods))

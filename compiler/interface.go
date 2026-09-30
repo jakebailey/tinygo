@@ -451,6 +451,8 @@ func (c *context) getTypeCode(typ types.Type) llvm.Value {
 				types.NewVar(token.NoPos, nil, "numIn", types.Typ[types.Uint8]),
 				types.NewVar(token.NoPos, nil, "numOut", types.Typ[types.Uint16]), // high bit = variadic
 				types.NewVar(token.NoPos, nil, "ptrTo", types.Typ[types.UnsafePointer]),
+				types.NewVar(token.NoPos, nil, "finalizerArg", types.Typ[types.UnsafePointer]),
+				types.NewVar(token.NoPos, nil, "finalizerCall", c.finalizerCallSignature()),
 				types.NewVar(token.NoPos, nil, "inOut", types.NewArray(types.Typ[types.UnsafePointer], int64(numIn+numOut))),
 			)
 		}
@@ -665,10 +667,13 @@ func (c *context) getTypeCode(typ types.Type) llvm.Value {
 			for v := range results.Variables() {
 				inOut = append(inOut, c.getTypeCode(v.Type()))
 			}
+			arg, call := c.getFinalizerCall(typ, globalName, isLocal)
 			typeFields = []llvm.Value{
 				llvm.ConstInt(c.i8, uint64(params.Len()), false),
 				llvm.ConstInt(c.i16, numOut, false),
 				c.getTypeCode(types.NewPointer(typ)),
+				arg,
+				call,
 				llvm.ConstArray(c.dataPtrType, inOut),
 			}
 		}
