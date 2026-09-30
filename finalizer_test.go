@@ -74,8 +74,13 @@ func TestFinalizerRunnerRegistration(t *testing.T) {
 	}{
 		{"wasm", "boehm", "asyncify"},
 		{"wasm", "conservative", "asyncify"},
+		{"wasm", "precise", "asyncify"},
 		{"", "boehm", "tasks"},
 		{"", "boehm", "threads"},
+		{"", "conservative", "tasks"},
+		{"", "conservative", "threads"},
+		{"", "precise", "tasks"},
+		{"", "precise", "threads"},
 	} {
 		if test.target == "" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 			continue
