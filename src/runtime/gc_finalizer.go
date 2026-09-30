@@ -260,6 +260,8 @@ func scanFinalizers() {
 
 		// The object is unreachable. Splice its entry out of the registered list
 		// and into the pending queue (alloc-free), so its finalizer runs once.
+		base, _, _ := blockAllocation(addr)
+		clearWeakPointers(base)
 		*prev = n.next
 		numFinalizers--
 		// Clear the bit so a later object at this address starts clean.
