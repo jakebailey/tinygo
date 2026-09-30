@@ -5,7 +5,7 @@ package runtime
 import "unsafe"
 
 func initWeakPointer(entry *weakHandle, ptr unsafe.Pointer) {
-	if base, _, _ := blockAllocation(uintptr(ptr)); base != 0 {
+	if base, _ := blockAllocation(uintptr(ptr)); base != 0 {
 		entry.base = ^base
 	}
 }
