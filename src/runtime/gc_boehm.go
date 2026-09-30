@@ -52,6 +52,7 @@ var (
 	finalizerQueued        bool
 	finalizerDraining      bool
 	finalizerRunnerStarted bool
+	boehmLastGC            uintptr
 )
 
 func initHeap() {
@@ -313,13 +314,19 @@ func boehmInvokeFinalizers() bool {
 	}
 	queued := finalizerQueued
 	finalizerQueued = false
+	if numCleanups != 0 {
+		if cycle := libgc_get_gc_no(); cycle != boehmLastGC {
+			boehmLastGC = cycle
+			queued = scanCleanups() || queued
+		}
+	}
 	return queued
 }
 
 func finalizerPressureGC() bool {
 	gcLock.Lock()
-	trigger := finalizerGCTrigger(numFinalizers)
-	if trigger == 0 || finalizersSinceGC < trigger {
+	trigger := finalizerGCTrigger(numFinalizers + numCleanups)
+	if trigger == 0 || finalizersSinceGC+cleanupsSinceGC < trigger {
 		gcLock.Unlock()
 		return false
 	}
@@ -335,6 +342,7 @@ func finalizerPressureGC() bool {
 }
 
 func wakeFinalizer() {
+	wakeCleanup()
 	if hasScheduler || hasParallelism {
 		gcLock.Lock()
 		spawn := finalizerPending != nil && !finalizerRunnerStarted

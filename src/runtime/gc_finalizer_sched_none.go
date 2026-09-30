@@ -4,3 +4,7 @@ package runtime
 
 // scheduler.none has no goroutines; finalizers drain inline in wakeFinalizer.
 func spawnFinalizerRunner() {}
+
+func spawnCleanupRunner() {}
+
+func initCleanupScheduler() {}
