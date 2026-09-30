@@ -98,6 +98,51 @@ func TestFinalizerRunnerRegistration(t *testing.T) {
 	}
 }
 
+func TestFinalizerInvalid(t *testing.T) {
+	t.Parallel()
+	for _, gc := range []string{"boehm", "precise", "conservative"} {
+		gc := gc
+		t.Run(gc, func(t *testing.T) {
+			t.Parallel()
+			options := optionsFromTarget("", sema)
+			options.GC = gc
+			options.Tags = append(options.Tags, "runtime_asserts")
+			config, err := builder.NewConfig(&options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct {
+				name string
+				want string
+			}{
+				{"duplicate", "finalizer already set"},
+				{"nil", "pointer not in allocated block"},
+				{"count", "incompatible finalizer signature"},
+				{"variadic", "incompatible finalizer signature"},
+				{"type", "incompatible finalizer signature"},
+				{"non-function", "second argument is not a function"},
+				{"non-pointer", "first argument is not a pointer"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					output := &bytes.Buffer{}
+					_, err := buildAndRun("testdata/finalizer.go", config, output, []string{tc.name}, nil, time.Minute, func(cmd *exec.Cmd, result *builder.BuildResult) error {
+						cmd.Stdout, cmd.Stderr = nil, nil
+						data, err := cmd.CombinedOutput()
+						output.Write(data)
+						return err
+					})
+					if err == nil {
+						t.Fatal("invalid finalizer registration succeeded")
+					}
+					if !strings.Contains(output.String(), tc.want) {
+						t.Fatalf("output does not contain %q:\n%s", tc.want, output.String())
+					}
+				})
+			}
+		})
+	}
+}
+
 // Test that a panic in a finalizer run inline by scheduler=none cannot be
 // recovered by the code that triggered the GC.
 func TestFinalizerPanic(t *testing.T) {
