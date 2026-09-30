@@ -42,6 +42,7 @@ type boehmFinalizer struct {
 	next   *boehmFinalizer
 	offset uintptr
 	fn     interface{}
+	typ    *reflectlite.RawType
 	ptr    unsafe.Pointer // keeps the object alive after Boehm dequeues its callback
 }
 
@@ -250,21 +251,12 @@ func setHeapEnd(newHeapEnd uintptr) {
 }
 
 func SetFinalizer(obj interface{}, finalizer interface{}) {
-	value := reflectlite.ValueOf(obj)
-	if value.Kind() != reflectlite.Pointer {
-		runtimeFatal("runtime.SetFinalizer: first argument is not a pointer")
-	}
-	if finalizer != nil && reflectlite.ValueOf(finalizer).Kind() != reflectlite.Func {
-		runtimeFatal("runtime.SetFinalizer: second argument is not a function")
-	}
+	typ := checkFinalizer(obj, finalizer)
 	objPtr := (*_interface)(unsafe.Pointer(&obj)).value
-	if objPtr == nil {
-		return
-	}
 
 	var entry *boehmFinalizer
 	if finalizer != nil {
-		entry = &boehmFinalizer{fn: finalizer}
+		entry = &boehmFinalizer{fn: finalizer, typ: typ}
 	}
 	gcLock.Lock()
 	base := libgc_base(uintptr(objPtr))
@@ -272,7 +264,7 @@ func SetFinalizer(obj interface{}, finalizer interface{}) {
 		gcLock.Unlock()
 		return
 	}
-	if base != uintptr(objPtr) && !reflectlite.FinalizerAllowsInterior(value.RawType()) {
+	if base != uintptr(objPtr) && !reflectlite.FinalizerAllowsInterior(typ) {
 		runtimeFatal("runtime.SetFinalizer: pointer not at beginning of allocated block")
 	}
 	offset := uintptr(objPtr) - base
@@ -281,39 +273,40 @@ func SetFinalizer(obj interface{}, finalizer interface{}) {
 		runtimeFatal("gc: cannot register finalizer")
 	}
 	head := (*boehmFinalizer)(unsafe.Pointer(old))
-	replaced := false
-	var prev *boehmFinalizer
-	for n := head; n != nil; n = n.next {
-		if n.offset == offset {
-			if prev == nil {
-				head = n.next
-			} else {
-				prev.next = n.next
+	if entry != nil {
+		for n := head; n != nil; n = n.next {
+			if n.offset == offset {
+				runtimeFatal("runtime.SetFinalizer: finalizer already set")
 			}
-			*n = boehmFinalizer{}
-			replaced = true
-			if entry == nil {
+		}
+		entry.offset = offset
+		entry.next = head
+		numFinalizers++
+		finalizersSinceGC++
+	} else {
+		var prev *boehmFinalizer
+		for n := head; n != nil; n = n.next {
+			if n.offset == offset {
+				if prev == nil {
+					head = n.next
+				} else {
+					prev.next = n.next
+				}
+				*n = boehmFinalizer{}
 				numFinalizers--
 				if finalizersSinceGC != 0 {
 					finalizersSinceGC--
 				}
+				break
 			}
-			break
+			prev = n
 		}
-		prev = n
-	}
-	if entry != nil {
-		entry.offset = offset
-		entry.next = head
-		if !replaced {
-			numFinalizers++
-			finalizersSinceGC++
+		if head != nil {
+			if libgc_register_finalizer(base, uintptr(unsafe.Pointer(head))) == ^uintptr(0) {
+				runtimeFatal("gc: cannot register finalizer")
+			}
+			KeepAlive(head)
 		}
-	} else if head != nil {
-		if libgc_register_finalizer(base, uintptr(unsafe.Pointer(head))) == ^uintptr(0) {
-			runtimeFatal("gc: cannot register finalizer")
-		}
-		KeepAlive(head)
 	}
 	if entry != nil {
 		initFinalizerScheduler()
@@ -395,9 +388,9 @@ func drainFinalizers() {
 		if n == nil {
 			break
 		}
-		ptr, fn := n.ptr, n.fn
+		ptr, typ, fn := n.ptr, n.typ, n.fn
 		*n = boehmFinalizer{}
-		callFinalizer(ptr, fn)
+		callFinalizer(ptr, typ, fn)
 	}
 	finalizerDraining = false
 }
