@@ -34,6 +34,7 @@ func dropCleared() {
 func dropReplaced(id int) {
 	p := &obj{}
 	runtime.SetFinalizer(p, func(*obj) { replacedRan.Add(1) })
+	runtime.SetFinalizer(p, nil)
 	runtime.SetFinalizer(p, func(*obj) {
 		if seen[id].Add(1) > 1 {
 			ranTwice.Add(1)
