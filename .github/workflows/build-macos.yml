@@ -13,133 +13,13 @@ concurrency:
 
 jobs:
   build-macos:
-    # Build the release tarball. The jobs below download it, so that they do not
-    # have to build the compiler again.
     name: build-macos
     strategy:
+      fail-fast: false
       matrix:
         # macos-14: arm64 (oldest supported version as of 18-11-2025)
         # macos-15-intel: amd64 (last intel version to be supported by github runners)
         # See https://github.com/actions/runner-images/issues/13046
-        os: [macos-14, macos-15-intel]
-        include:
-          - os: macos-14
-            goarch: arm64
-          - os: macos-15-intel
-            goarch: amd64
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Install Dependencies
-        run: |
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install qemu binaryen
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: true
-      - name: Extract TinyGo version
-        id: version
-        run: ./.github/workflows/tinygo-extract-version.sh | tee -a "$GITHUB_OUTPUT"
-      - name: Install Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.27.1'
-          cache: true
-      - uses: ./.github/actions/setup-llvm-macos
-        with:
-          os: ${{ matrix.os }}
-      - name: make gen-device
-        run: make -j3 gen-device
-      - name: Build TinyGo release tarball
-        run: make release -j3
-      - name: Make release artifact
-        run: cp -p build/release.tar.gz build/tinygo${{ steps.version.outputs.version }}.darwin-${{ matrix.goarch }}.tar.gz
-      - name: Publish release artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: darwin-${{ matrix.goarch }}-double-zipped-${{ steps.version.outputs.version }}
-          path: build/tinygo${{ steps.version.outputs.version }}.darwin-${{ matrix.goarch }}.tar.gz
-          archive: false
-
-  test-macos:
-    # The compiler test suite. It needs LLVM, thus it cannot use the release
-    # tarball. It restores the LLVM cache and runs at the same time as
-    # build-macos. Only build-macos saves that cache.
-    name: test-macos
-    strategy:
-      matrix:
-        os: [macos-14, macos-15-intel]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Install Dependencies
-        run: |
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install qemu binaryen
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: true
-      - name: Install Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.27.1'
-          cache: true
-      - uses: ./.github/actions/setup-llvm-macos
-        with:
-          os: ${{ matrix.os }}
-          save-cache: "false"
-      - name: make gen-device
-        run: make -j3 gen-device
-      - name: Test TinyGo
-        run: make test GOTESTFLAGS="-only-current-os"
-
-  stdlib-test-macos:
-    # Test the standard library, compiled and run on the host itself.
-    name: stdlib-test-macos
-    needs: build-macos
-    strategy:
-      matrix:
-        os: [macos-14, macos-15-intel]
-        include:
-          - os: macos-14
-            goarch: arm64
-          - os: macos-15-intel
-            goarch: amd64
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-      - name: Extract TinyGo version
-        id: version
-        run: ./.github/workflows/tinygo-extract-version.sh | tee -a "$GITHUB_OUTPUT"
-      - name: Install Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.27.1'
-          cache: true
-      - name: Download TinyGo build
-        uses: actions/download-artifact@v8
-        with:
-          # An artifact uploaded with "archive: false" takes the name of the
-          # file, not the name given to upload-artifact. See the comment on
-          # "Collect the release files" in release.yml.
-          name: tinygo${{ steps.version.outputs.version }}.darwin-${{ matrix.goarch }}.tar.gz
-          path: build/
-          skip-decompress: true
-      - name: Unpack TinyGo build
-        run: |
-          tarball=$(find build -type f -name 'tinygo*.darwin-*.tar.gz' | head -1)
-          test -n "$tarball"
-          tar -xzf "$tarball" -C build
-      - name: Test stdlib packages
-        run: make tinygo-test TINYGO=$(PWD)/build/tinygo/bin/tinygo
-
-  smoke-test-macos:
-    # Cross compilation gives the same result on every host. Thus only one macOS
-    # runner does the full set, and the other one does the host dependent part
-    # plus a canary. See the smoketest-linux comment in linux.yml.
-    name: smoke-test-macos
-    needs: build-macos
-    strategy:
-      matrix:
         os: [macos-14, macos-15-intel]
         include:
           - os: macos-14
@@ -152,9 +32,11 @@ jobs:
     steps:
       - name: Install Dependencies
         run: |
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install binaryen
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install qemu binaryen
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          submodules: true
       - name: Extract TinyGo version
         id: version
         run: ./.github/workflows/tinygo-extract-version.sh | tee -a "$GITHUB_OUTPUT"
@@ -163,22 +45,41 @@ jobs:
         with:
           go-version: '1.27.1'
           cache: true
-      - name: Download TinyGo build
-        uses: actions/download-artifact@v8
+      - uses: ./.github/actions/setup-llvm-macos
         with:
-          # An artifact uploaded with "archive: false" takes the name of the
-          # file, not the name given to upload-artifact. See the comment on
-          # "Collect the release files" in release.yml.
-          name: tinygo${{ steps.version.outputs.version }}.darwin-${{ matrix.goarch }}.tar.gz
-          path: build/
-          skip-decompress: true
+          os: ${{ matrix.os }}
+      - name: make gen-device
+        id: gen-device
+        run: make -j3 gen-device
+      - name: Build TinyGo release tarball
+        id: release
+        run: make release -j3
+      - name: Make release artifact
+        id: artifact
+        if: ${{ !cancelled() && steps.release.outcome == 'success' }}
+        run: cp -p build/release.tar.gz build/tinygo${{ steps.version.outputs.version }}.darwin-${{ matrix.goarch }}.tar.gz
+      - name: Publish release artifact
+        if: ${{ !cancelled() && steps.artifact.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: darwin-${{ matrix.goarch }}-double-zipped-${{ steps.version.outputs.version }}
+          path: build/tinygo${{ steps.version.outputs.version }}.darwin-${{ matrix.goarch }}.tar.gz
+          archive: false
+      - name: Test TinyGo
+        if: ${{ !cancelled() && steps.gen-device.outcome == 'success' }}
+        run: make test GOTESTFLAGS="-only-current-os"
       - name: Unpack TinyGo build
+        id: unpack
+        if: ${{ !cancelled() && steps.release.outcome == 'success' }}
         run: |
-          tarball=$(find build -type f -name 'tinygo*.darwin-*.tar.gz' | head -1)
-          test -n "$tarball"
-          tar -xzf "$tarball" -C build
+          mkdir -p build/release-test
+          tar -xzf build/release.tar.gz -C build/release-test
+      - name: Test stdlib packages
+        if: ${{ !cancelled() && steps.unpack.outcome == 'success' }}
+        run: make tinygo-test TINYGO=$(PWD)/build/release-test/tinygo/bin/tinygo
       - name: Smoke tests
-        run: make ${{ matrix.smoketest }} TINYGO=$(PWD)/build/tinygo/bin/tinygo
+        if: ${{ !cancelled() && steps.unpack.outcome == 'success' }}
+        run: make ${{ matrix.smoketest }} TINYGO=$(PWD)/build/release-test/tinygo/bin/tinygo
 
   test-macos-homebrew:
     name: homebrew-install
