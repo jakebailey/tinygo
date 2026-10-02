@@ -19,6 +19,11 @@ import (
 func TestBuild(t *testing.T) {
 	t.Parallel()
 
+	_, minor, err := goenv.GetGorootVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []string{
 		"alias.go",
 		"atomic.go",
@@ -146,6 +151,7 @@ func TestBuild(t *testing.T) {
 			"finalizeridle.go",
 			"finalizerlarge.go",
 			"finalizerinvariants.go",
+			"cleanup/",
 		} {
 			name := name
 			t.Run(name, func(t *testing.T) {
@@ -158,6 +164,93 @@ func TestBuild(t *testing.T) {
 				}
 				runTest(name, testOptions, t, nil, nil)
 			})
+		}
+	})
+
+	t.Run("finalizer-semantics", func(t *testing.T) {
+		t.Parallel()
+		for _, gc := range []string{"boehm", "precise", "conservative"} {
+			gc := gc
+			for _, scheduler := range []string{"asyncify", "none"} {
+				scheduler := scheduler
+				tests := []string{"finalizerlarge.go", "finalizer.go", "cleanup/"}
+				if minor >= 24 {
+					tests = append(tests, "gcconformance/")
+				}
+				for _, name := range tests {
+					name := name
+					t.Run(gc+"/"+scheduler+"/"+name, func(t *testing.T) {
+						t.Parallel()
+						options := optionsFromTarget("wasm", sema)
+						options.GC = gc
+						options.Scheduler = scheduler
+						options.Tags = append(options.Tags, "runtime_asserts")
+						var args []string
+						if name == "finalizerlarge.go" {
+							args = []string{"graph"}
+						} else if name == "finalizer.go" {
+							args = []string{"types"}
+						}
+						runTest(name, options, t, args, nil)
+					})
+				}
+			}
+		}
+	})
+
+	t.Run("host-finalizer-semantics", func(t *testing.T) {
+		t.Parallel()
+		for _, gc := range []string{"boehm", "precise", "conservative"} {
+			gc := gc
+			tests := []string{"finalizerlarge.go", "finalizer.go", "cleanup/"}
+			if minor >= 24 {
+				tests = append(tests, "gcconformance/")
+			}
+			for _, name := range tests {
+				name := name
+				t.Run(gc+"/"+name, func(t *testing.T) {
+					t.Parallel()
+					options := optionsFromTarget("", sema)
+					options.GC = gc
+					options.Tags = append(options.Tags, "runtime_asserts")
+					var args []string
+					if name == "finalizerlarge.go" {
+						args = []string{"graph"}
+					} else if name == "finalizer.go" {
+						args = []string{"types"}
+					}
+					runTest(name, options, t, args, nil)
+				})
+			}
+		}
+	})
+
+	t.Run("other-finalizer-schedulers", func(t *testing.T) {
+		t.Parallel()
+		for _, target := range []string{"", "riscv-qemu"} {
+			target := target
+			if *testTarget != "" && target != *testTarget {
+				continue
+			}
+			if target == "" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+				continue
+			}
+			for _, gc := range []string{"precise", "conservative"} {
+				gc := gc
+				t.Run(target+"/"+gc, func(t *testing.T) {
+					t.Parallel()
+					options := optionsFromTarget(target, sema)
+					options.GC = gc
+					options.Tags = append(options.Tags, "runtime_asserts")
+					if target == "" {
+						options.Scheduler = "tasks"
+					}
+					runTest("cleanup/", options, t, nil, nil)
+					if minor >= 24 {
+						runTest("gcconformance/", options, t, nil, nil)
+					}
+				})
+			}
 		}
 	})
 
