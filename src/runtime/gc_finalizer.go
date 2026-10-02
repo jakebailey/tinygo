@@ -2,20 +2,11 @@
 
 package runtime
 
-// This file implements a minimal runtime.SetFinalizer for the block-based
-// garbage collector. It supports the common, contract-correct case only:
-//
-//   - SetFinalizer(ptr, func(ptrType)) registers a finalizer that runs once,
-//     after the object becomes unreachable.
-//   - SetFinalizer(ptr, nil) clears any finalizer for the object.
-//
-// It intentionally does not implement full Go finalizer semantics (ordering
-// guarantees, cycles, AddCleanup, ...). The whole feature is zero-cost when no
-// finalizer is ever registered: the table stays empty, scanFinalizers returns
-// immediately, and no background goroutine is spawned.
+// Finalizers retain their dependencies before becoming eligible to run.
+// See https://pkg.go.dev/runtime#SetFinalizer for ordering and cycle semantics.
 
 import (
-	"internal/task"
+	"internal/reflectlite"
 	"unsafe"
 )
 
@@ -30,44 +21,24 @@ type finalizerEntry struct {
 	// fn is the finalizer func value. It is kept alive because the registered
 	// list (a package global) is a GC root, so the boxed closure and any
 	// captured state survive until the finalizer runs.
-	fn interface{}
+	fn  interface{}
+	typ *reflectlite.RawType
 }
 
-// finalizerGCThreshold starts pressure GC when registrations indicate external memory pressure.
-// Larger tables use a proportional threshold. Zero disables this trigger.
-const finalizerGCThreshold = 32
-
+// Finalizer storage and runners are created lazily by registerFinalizer.
+// With no registered or pending finalizers, scanFinalizers returns immediately.
 var (
 	finalizers        *finalizerEntry // registered finalizers; a GC root that keeps fn values alive
 	finalizerPending  *finalizerEntry // finalizers whose object died, waiting to run
 	numFinalizers     uintptr         // number of registered finalizers; fast-path gate for scanFinalizers
 	finalizersSinceGC uintptr         // tracks registration pressure for the scheduler trigger
 	finalizersQueued  bool            // set when scanFinalizers queued at least one finalizer to run
-	finalizerFutex    task.Futex      // wakes the finalizerRunner goroutine after a GC queues work
 	finalizerDraining bool            // guards against re-entrant inline draining (scheduler.none)
 
-	// finalizerRunnerStarted records whether the background finalizerRunner
-	// goroutine has been spawned yet. The runner is spawned lazily, on the first
-	// SetFinalizer, so builds that never register a finalizer let the linker DCE
-	// the runner and drain machinery. Read/written only under gcLock, so no
-	// atomics are needed. Unused under scheduler.none (spawnFinalizerRunner is a
-	// no-op there, and the linker drops the flag).
+	// finalizerRunnerStarted prevents concurrent runners. Access it under gcLock.
+	// finalizerRunner clears it when the pending queue is empty.
 	finalizerRunnerStarted bool
 )
-
-const finalizerGCDivisor = 2
-
-// finalizerGCTrigger scales the threshold so scan work stays proportional to registrations.
-// It uses finalizerGCThreshold as the minimum.
-func finalizerGCTrigger() uintptr {
-	if finalizerGCThreshold == 0 {
-		return 0
-	}
-	if proportional := numFinalizers / finalizerGCDivisor; proportional > finalizerGCThreshold {
-		return proportional
-	}
-	return finalizerGCThreshold
-}
 
 // finalizerBits records finalizer registrations by heap block for fast lookup.
 // Hold gcLock for every access because heap growth can replace the slice.
@@ -160,7 +131,7 @@ func assertFinalizerTable() {
 // is the only allocation and it happens here, on the caller, never during GC.
 // gcLock also serializes table access against scanFinalizers, which runs under
 // gcLock during a GC on another core/thread.
-func registerFinalizer(addr uintptr, fn interface{}) {
+func registerFinalizer(addr uintptr, typ *reflectlite.RawType, fn interface{}) {
 	enc := encodeFinalizerPtr(addr)
 
 	if fn == nil {
@@ -191,6 +162,10 @@ func registerFinalizer(addr uintptr, fn interface{}) {
 					finalizersSinceGC--
 				}
 			} else {
+				other := decodeFinalizerPtr(n.obj)
+				if tracked && isOnHeap(other) && blockFromAddr(other) == blockFromAddr(addr) {
+					finalizerBitSet(addr)
+				}
 				prev = &n.next
 			}
 		}
@@ -200,7 +175,7 @@ func registerFinalizer(addr uintptr, fn interface{}) {
 
 	// Allocate before taking gcLock because allocation also takes this lock.
 	// Release gcLock only when the bitmap must grow.
-	entry := &finalizerEntry{obj: enc, fn: fn}
+	entry := &finalizerEntry{obj: enc, fn: fn, typ: typ}
 	gcLock.Lock()
 	if shortfall := finalizerBitsShortfall(); shortfall != 0 {
 		gcLock.Unlock()
@@ -218,19 +193,7 @@ func registerFinalizer(addr uintptr, fn interface{}) {
 	// Always scan addresses that the bitmap does not cover.
 	for n := finalizers; (!tracked || finalizerBitGet(addr)) && n != nil; n = n.next {
 		if n.obj == enc {
-			// Replace the finalizer for an already-registered object, so it
-			// still runs only once (Go SetFinalizer replace semantics).
-			n.fn = fn
-			// A finalizer is registered, so make sure the runner exists. The
-			// flag is serialized by gcLock; the spawn itself allocates, so it
-			// must run after the lock is released.
-			spawn := !finalizerRunnerStarted
-			finalizerRunnerStarted = true
-			gcLock.Unlock()
-			if spawn {
-				spawnFinalizerRunner()
-			}
-			return
+			runtimeFatal("runtime.SetFinalizer: finalizer already set")
 		}
 	}
 	entry.next = finalizers
@@ -240,15 +203,8 @@ func registerFinalizer(addr uintptr, fn interface{}) {
 	}
 	numFinalizers++
 	finalizersSinceGC++
-	// A finalizer is registered, so make sure the runner exists. The flag is
-	// serialized by gcLock; the spawn itself allocates, so it must run after the
-	// lock is released.
-	spawn := !finalizerRunnerStarted
-	finalizerRunnerStarted = true
+	initFinalizerScheduler()
 	gcLock.Unlock()
-	if spawn {
-		spawnFinalizerRunner()
-	}
 }
 
 // scanFinalizers detects finalizable objects that became unreachable in the
@@ -262,6 +218,26 @@ func scanFinalizers() {
 	if numFinalizers == 0 && finalizerPending == nil {
 		return
 	}
+
+	for n := finalizerPending; n != nil; n = n.next {
+		markRoot(0, decodeFinalizerPtr(n.obj))
+	}
+	finishMark()
+
+	// Scan dependencies without marking the finalizable object itself.
+	// A path back to the object prevents finalization, as in Go.
+	for n := finalizers; n != nil; n = n.next {
+		addr := decodeFinalizerPtr(n.obj)
+		if !isOnHeap(addr) {
+			continue
+		}
+		head := blockFromAddr(addr).findHead()
+		if head.state() != blockStateMark {
+			header := (*objHeader)(unsafe.Add(head.pointer(), bytesPerBlock-unsafe.Sizeof(objHeader{})))
+			scanObject(header)
+		}
+	}
+	finishMark()
 
 	// Detect newly-unreachable objects and move their finalizers to the pending
 	// queue.
@@ -281,6 +257,8 @@ func scanFinalizers() {
 
 		// The object is unreachable. Splice its entry out of the registered list
 		// and into the pending queue (alloc-free), so its finalizer runs once.
+		base, _ := blockAllocation(addr)
+		clearWeakPointers(base)
 		*prev = n.next
 		numFinalizers--
 		// Clear the bit so a later object at this address starts clean.
@@ -328,18 +306,6 @@ func scanFinalizers() {
 	}
 }
 
-// callFinalizer invokes a finalizer func value on the given object pointer.
-func callFinalizer(objPtr unsafe.Pointer, fn interface{}) {
-	// SetFinalizer already validated that fn is a func. A finalizer is
-	// contractually func(ptrType), and func(*T) and func(unsafe.Pointer) are
-	// ABI-identical in TinyGo (one pointer arg + trailing context, no result).
-	// reflect.Value.Call is unimplemented, so reinterpret the boxed closure and
-	// call it via the same closure-ABI indirect call the runtime uses elsewhere.
-	fnBox := (*_interface)(unsafe.Pointer(&fn)).value
-	f := *(*func(unsafe.Pointer))(fnBox)
-	f(objPtr)
-}
-
 // drainFinalizers runs every queued finalizer, with gcLock released so the
 // finalizers may allocate.
 func drainFinalizers() {
@@ -355,7 +321,9 @@ func drainFinalizers() {
 		if n == nil {
 			break
 		}
-		callFinalizer(objPtr, n.fn)
+		typ, fn := n.typ, n.fn
+		*n = finalizerEntry{}
+		callFinalizer(objPtr, typ, fn)
 	}
 	finalizerDraining = false
 }
@@ -397,29 +365,36 @@ func dequeueFinalizer() (*finalizerEntry, unsafe.Pointer) {
 // finalizerPressureGC runs a GC when registrations indicate external memory pressure.
 // It wakes the finalizer runner when the GC queues work.
 func finalizerPressureGC() bool {
-	trigger := finalizerGCTrigger()
-	if trigger == 0 || finalizersSinceGC < trigger {
+	gcLock.Lock()
+	trigger := finalizerGCTrigger(numFinalizers + numCleanups)
+	if trigger == 0 || finalizersSinceGC+cleanupsSinceGC < trigger {
+		gcLock.Unlock()
 		return false
 	}
-	gcLock.Lock()
 	runGC()
+	queued := finalizersQueued
+	finalizersQueued = false
 	gcLock.Unlock()
-	if finalizersQueued {
-		finalizersQueued = false
+	if queued {
 		wakeFinalizer()
 	}
 	return true
 }
 
-// wakeFinalizer is called after a GC (with gcLock already released) that queued
-// finalizers. On schedulers with goroutines it wakes the finalizerRunner; on
-// scheduler.none it drains inline.
+// wakeFinalizer starts a runner if needed, or drains inline with scheduler.none.
+// Call it after releasing gcLock because spawnFinalizerRunner allocates.
 func wakeFinalizer() {
+	wakeCleanup()
 	if hasScheduler || hasParallelism {
-		// A finalizerRunner exists. Bump the futex before waking so a runner
-		// caught between draining and waiting doesn't miss this wakeup.
-		finalizerFutex.Add(1)
-		finalizerFutex.Wake()
+		gcLock.Lock()
+		spawn := finalizerPending != nil && !finalizerRunnerStarted
+		if spawn {
+			finalizerRunnerStarted = true
+		}
+		gcLock.Unlock()
+		if spawn {
+			spawnFinalizerRunner()
+		}
 	} else {
 		// scheduler.none: no goroutines, so drain inline. Finalizers must not
 		// block here; this is safe because gcLock has already been released.
@@ -427,18 +402,17 @@ func wakeFinalizer() {
 	}
 }
 
-// finalizerRunner is the background goroutine that runs finalizers off the
-// allocating goroutine's stack. It drains all pending finalizers, then blocks on
-// the futex until the next GC queues more. It is spawned lazily by
-// spawnFinalizerRunner on the first SetFinalizer, so builds that never register a
-// finalizer let the linker eliminate it and the drain machinery entirely.
+// finalizerRunner runs callbacks off the allocating goroutine's stack.
+// Exit when idle so the runner's stack cannot retain finalized objects.
 func finalizerRunner() {
 	for {
-		// Sample the futex before draining. A wake that lands after we drain but
-		// before Wait then leaves the counter changed, so Wait returns at once
-		// instead of losing the wakeup (at worst one harmless spurious re-drain).
-		val := finalizerFutex.Load()
 		drainFinalizers()
-		finalizerFutex.Wait(val)
+		gcLock.Lock()
+		if finalizerPending == nil {
+			finalizerRunnerStarted = false
+			gcLock.Unlock()
+			return
+		}
+		gcLock.Unlock()
 	}
 }

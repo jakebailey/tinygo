@@ -317,6 +317,8 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 		case *types.Signature:
 			typeFieldTypes = append(typeFieldTypes,
 				types.NewVar(token.NoPos, nil, "ptrTo", types.Typ[types.UnsafePointer]),
+				types.NewVar(token.NoPos, nil, "finalizerArg", types.Typ[types.UnsafePointer]),
+				types.NewVar(token.NoPos, nil, "finalizerCall", c.finalizerCallSignature()),
 			)
 			// TODO: signature params and return values
 		}
@@ -513,7 +515,8 @@ func (c *compilerContext) getTypeCode(typ types.Type) llvm.Value {
 				methodSetValue,
 			}
 		case *types.Signature:
-			typeFields = []llvm.Value{c.getTypeCode(types.NewPointer(typ))}
+			arg, call := c.getFinalizerCall(typ, globalName, isLocal)
+			typeFields = []llvm.Value{c.getTypeCode(types.NewPointer(typ)), arg, call}
 			// TODO: params, return values, etc
 		}
 		// Prepend the common RawType field.

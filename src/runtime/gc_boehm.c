@@ -10,6 +10,30 @@
 #include <gc/gc_typed.h>
 
 void tinygo_runtime_bdwgc_callback(void);
+void tinygo_runtime_bdwgc_finalizer(void *, void *);
+void tinygo_runtime_bdwgc_weak_finalizer(void *);
+
+static void GC_CALLBACK finalizer_callback(void *obj, void *data) {
+    tinygo_runtime_bdwgc_finalizer(obj, data);
+}
+
+uintptr_t tinygo_runtime_bdwgc_register_finalizer(uintptr_t obj, uintptr_t data) {
+    void *old_data = (void *)(uintptr_t)-1;
+    GC_register_finalizer((void *)obj, data ? finalizer_callback : NULL,
+                          (void *)data, NULL, &old_data);
+    return (uintptr_t)old_data;
+}
+
+static void GC_CALLBACK weak_finalizer_callback(void *obj) {
+    tinygo_runtime_bdwgc_weak_finalizer(obj);
+}
+
+int tinygo_runtime_bdwgc_register_weak(void **link, void *obj) {
+    // Preserve finalizer dependencies, but clear the object's own weak pointers.
+    // See https://pkg.go.dev/weak#Pointer.
+    GC_set_await_finalize_proc(weak_finalizer_callback);
+    return GC_register_long_link(link, obj);
+}
 
 struct descriptor_cache_entry {
     uintptr_t layout;
@@ -74,6 +98,7 @@ static void GC_CALLBACK warn_proc(const char *msg, GC_word arg) {
 
 void tinygo_runtime_bdwgc_init(void) {
     GC_set_push_other_roots(callback);
+    GC_set_finalize_on_demand(1);
 #if defined(__wasm__)
     // There are a lot of warnings on WebAssembly in the form:
     //
