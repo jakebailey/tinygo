@@ -223,6 +223,7 @@ func (b *builder) createSelect(expr *ssa.Select) llvm.Value {
 	// determine the receive buffer size and alignment.
 	recvbufSize := uint64(0)
 	recvbufAlign := 0
+	recvbufHasPointers := false
 	var selectStates []llvm.Value
 	chanSelectStateType := b.getLLVMRuntimeType("chanSelectState")
 	for _, state := range expr.States {
@@ -233,6 +234,7 @@ func (b *builder) createSelect(expr *ssa.Select) llvm.Value {
 		case types.RecvOnly:
 			// Make sure the receive buffer is big enough and has the correct alignment.
 			llvmType := b.getLLVMType(state.Chan.Type().Underlying().(*types.Chan).Elem())
+			recvbufHasPointers = recvbufHasPointers || typeHasPointers(llvmType)
 			if size := b.targetData.TypeAllocSize(llvmType); size > recvbufSize {
 				recvbufSize = size
 			}
@@ -254,7 +256,10 @@ func (b *builder) createSelect(expr *ssa.Select) llvm.Value {
 	recvbuf := llvm.Undef(b.dataPtrType)
 	if recvbufSize != 0 {
 		allocaType := llvm.ArrayType(b.ctx.Int8Type(), int(recvbufSize))
-		recvbufAlloca, _ := b.createTemporaryAlloca(allocaType, "select.recvbuf.alloca")
+		recvbufAlloca, _ := llvmutil.CreateTemporaryAlloca(b.Builder, b.mod, allocaType, "select.recvbuf.alloca")
+		if b.NeedsStackObjects && !recvbufHasPointers {
+			llvmutil.MarkPointerFreeAlloca(recvbufAlloca)
+		}
 		recvbufAlloca.SetAlignment(recvbufAlign)
 		recvbuf = b.CreateGEP(allocaType, recvbufAlloca, []llvm.Value{
 			llvm.ConstInt(b.ctx.Int32Type(), 0, false),

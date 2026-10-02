@@ -21,6 +21,48 @@ func TestAllocs(t *testing.T) {
 	})
 }
 
+func TestPromotedAllocationLayout(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name        string
+		layout      uint64
+		pointerFree bool
+	}{
+		{"pointer-free", 3, true},
+		{"pointer-bearing", 7, false},
+		{"unknown", 0, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+			buf, err := llvm.NewMemoryBufferFromFile("testdata/allocs.ll")
+			if err != nil {
+				t.Fatal(err)
+			}
+			mod, err := ctx.ParseIR(buf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer mod.Dispose()
+			llvm.AddGlobal(mod, llvm.PointerType(ctx.Int8Type(), 0), "runtime.stackChainStart")
+			fn := mod.NamedFunction("testInt")
+			call := fn.FirstBasicBlock().FirstInstruction()
+			call.SetOperand(1, llvm.ConstIntToPtr(llvm.ConstInt(ctx.Int32Type(), test.layout, false), call.Operand(1).Type()))
+			transform.OptimizeAllocs(mod, nil, 256, nil)
+			if err := llvm.VerifyModule(mod, llvm.ReturnStatusAction); err != nil {
+				t.Fatal(err)
+			}
+			alloca := fn.FirstBasicBlock().FirstInstruction()
+			if alloca.IsAAllocaInst().IsNil() {
+				t.Fatalf("allocation was not promoted:\n%s", fn.String())
+			}
+			if got := llvmutil.IsPointerFreeAlloca(alloca); got != test.pointerFree {
+				t.Errorf("pointer-free metadata = %t, want %t:\n%s", got, test.pointerFree, fn.String())
+			}
+		})
+	}
+}
+
 func TestAllocsAggregateEdges(t *testing.T) {
 	t.Parallel()
 
