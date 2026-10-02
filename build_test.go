@@ -188,8 +188,6 @@ func TestBuild(t *testing.T) {
 						var args []string
 						if name == "finalizerlarge.go" {
 							args = []string{"graph"}
-						} else if name == "finalizer.go" {
-							args = []string{"types"}
 						}
 						runTest(name, options, t, args, nil)
 					})

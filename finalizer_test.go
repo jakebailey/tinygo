@@ -12,6 +12,41 @@ import (
 	"github.com/tinygo-org/tinygo/goenv"
 )
 
+func TestWeakPortable(t *testing.T) {
+	t.Parallel()
+	_, minor, err := goenv.GetGorootVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minor < 24 {
+		t.Skip("weak pointers require Go 1.24")
+	}
+	for _, target := range []string{"wasm", "wasip1", "wasip2"} {
+		for _, gc := range []string{"precise", "conservative", "boehm"} {
+			// Boehm needs libc, while wasip2 uses wasmbuiltins.
+			// See builder/bdwgc.go and targets/wasip2.json.
+			if target == "wasip2" && gc == "boehm" {
+				continue
+			}
+			t.Run(target+"/"+gc, func(t *testing.T) {
+				t.Parallel()
+				options := optionsFromTarget(target, sema)
+				options.GC = gc
+				options.Tags = append(options.Tags, "runtime_asserts")
+				// The stress test needs preemption that cooperative Wasm schedulers lack.
+				// See https://go.dev/src/weak/pointer_test.go (TestIssue69210).
+				options.TestConfig.Short = true
+				emuCheck(t, options)
+				var output bytes.Buffer
+				passed, err := Test("weak", true, &output, &output, &options, "")
+				if err != nil || !passed {
+					t.Fatalf("weak tests failed: %v\n%s", err, output.String())
+				}
+			})
+		}
+	}
+}
+
 func TestGCConformanceReference(t *testing.T) {
 	t.Parallel()
 	_, minor, err := goenv.GetGorootVersion()
