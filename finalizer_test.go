@@ -9,7 +9,23 @@ import (
 	"time"
 
 	"github.com/tinygo-org/tinygo/builder"
+	"github.com/tinygo-org/tinygo/goenv"
 )
+
+func TestGCConformanceReference(t *testing.T) {
+	t.Parallel()
+	_, minor, err := goenv.GetGorootVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minor < 24 {
+		t.Skip("weak pointers and cleanups require Go 1.24")
+	}
+	cmd := exec.Command(goenv.Get("GOROOT")+"/bin/go", "test", "./testdata/gcconformance", "-count=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Go conformance cases failed: %v\n%s", err, output)
+	}
+}
 
 func TestBoehmFinalizerInterior(t *testing.T) {
 	t.Parallel()
@@ -74,8 +90,13 @@ func TestFinalizerRunnerRegistration(t *testing.T) {
 	}{
 		{"wasm", "boehm", "asyncify"},
 		{"wasm", "conservative", "asyncify"},
+		{"wasm", "precise", "asyncify"},
 		{"", "boehm", "tasks"},
 		{"", "boehm", "threads"},
+		{"", "conservative", "tasks"},
+		{"", "conservative", "threads"},
+		{"", "precise", "tasks"},
+		{"", "precise", "threads"},
 	} {
 		if test.target == "" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 			continue
@@ -89,6 +110,71 @@ func TestFinalizerRunnerRegistration(t *testing.T) {
 				"main": {"finalizerIdleMode": "registration"},
 			}
 			runTest("finalizeridle.go", options, t, nil, nil)
+		})
+	}
+}
+
+func TestFinalizerInvalid(t *testing.T) {
+	t.Parallel()
+	for _, gc := range []string{"boehm", "precise", "conservative"} {
+		gc := gc
+		t.Run(gc, func(t *testing.T) {
+			t.Parallel()
+			options := optionsFromTarget("", sema)
+			options.GC = gc
+			options.Tags = append(options.Tags, "runtime_asserts")
+			config, err := builder.NewConfig(&options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct {
+				name string
+				want string
+			}{
+				{"duplicate", "finalizer already set"},
+				{"nil", "pointer not in allocated block"},
+				{"count", "incompatible finalizer signature"},
+				{"variadic", "incompatible finalizer signature"},
+				{"type", "incompatible finalizer signature"},
+				{"non-function", "second argument is not a function"},
+				{"non-pointer", "first argument is not a pointer"},
+				{"interior-pointer", "pointer not at beginning of allocated block"},
+				{"interior-large", "pointer not at beginning of allocated block"},
+				{"interior-duplicate", "finalizer already set"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					output := &bytes.Buffer{}
+					_, err := buildAndRun("testdata/finalizer.go", config, output, []string{tc.name}, nil, time.Minute, func(cmd *exec.Cmd, result *builder.BuildResult) error {
+						cmd.Stdout, cmd.Stderr = nil, nil
+						data, err := cmd.CombinedOutput()
+						output.Write(data)
+						return err
+					})
+					if err == nil {
+						t.Fatal("invalid finalizer registration succeeded")
+					}
+					if !strings.Contains(output.String(), tc.want) {
+						t.Fatalf("output does not contain %q:\n%s", tc.want, output.String())
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestInteriorFinalizerInvalidReference(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"interior-pointer", "interior-large", "interior-duplicate"} {
+		t.Run(name, func(t *testing.T) {
+			want := "pointer not at beginning of allocated block"
+			if name == "interior-duplicate" {
+				want = "finalizer already set"
+			}
+			cmd := exec.Command(goenv.Get("GOROOT")+"/bin/go", "run", "./testdata/finalizer.go", name)
+			output, err := cmd.CombinedOutput()
+			if err == nil || !bytes.Contains(output, []byte(want)) {
+				t.Fatalf("Go registration result: %v\n%s", err, output)
+			}
 		})
 	}
 }

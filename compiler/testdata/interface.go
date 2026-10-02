@@ -28,6 +28,15 @@ func anonymousInterfaceType() interface{} {
 	return v
 }
 
+type finalizerInterface interface {
+	Accept(finalizerInterface) bool
+}
+
+func finalizerInterfaceType() interface{} {
+	var v *finalizerInterface
+	return v
+}
+
 // Test interface builtins.
 
 func isInt(itf interface{}) bool {
