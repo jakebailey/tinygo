@@ -22,7 +22,11 @@ import (
 // This is useful for creating temporary allocas for intrinsics. Don't forget to
 // end the lifetime using emitLifetimeEnd after you're done with it.
 func (b *builder) createTemporaryAlloca(t llvm.Type, name string) (alloca, size llvm.Value) {
-	return llvmutil.CreateTemporaryAlloca(b.Builder, b.mod, t, name)
+	alloca, size = llvmutil.CreateTemporaryAlloca(b.Builder, b.mod, t, name)
+	if b.NeedsStackObjects && !typeHasPointers(t) {
+		llvmutil.MarkPointerFreeAlloca(alloca)
+	}
+	return
 }
 
 // insertBasicBlock inserts a new basic block after the current basic block.

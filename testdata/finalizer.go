@@ -9,7 +9,10 @@ package main
 // stack scanning on the emulated targets cannot reliably collect the object, so
 // firing cannot be asserted there.
 
-import "runtime"
+import (
+	"runtime"
+	"sync/atomic"
+)
 
 type T struct{ x int }
 
@@ -120,7 +123,40 @@ func testReplace() {
 	}
 }
 
+func testRootLiveness() {
+	if runtime.GOARCH != "wasm" {
+		return
+	}
+	var done uint32
+	pointers := make([]*T, 10)
+	for i := range pointers {
+		pointers[i] = &T{x: i}
+		runtime.SetFinalizer(pointers[i], func(*T) {
+			atomic.AddUint32(&done, 1)
+		})
+	}
+	runtime.GC()
+	for i, p := range pointers {
+		if p.x != i {
+			panic("finalizer: live object corrupted")
+		}
+	}
+	if atomic.LoadUint32(&done) != 0 {
+		panic("finalizer: live object finalized")
+	}
+	pointers = nil
+	for i := 0; i < 100 && atomic.LoadUint32(&done) != 10; i++ {
+		runtime.GC()
+		runtime.Gosched()
+	}
+	if atomic.LoadUint32(&done) != 10 {
+		println("finalized:", atomic.LoadUint32(&done))
+		panic("finalizer: dead roots retained in active frame")
+	}
+}
+
 func main() {
+	testRootLiveness()
 	testFires()
 	testClear()
 	testReplace()

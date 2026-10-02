@@ -128,6 +128,9 @@ func OptimizeAllocs(mod llvm.Module, printAllocs *regexp.Regexp, maxStackAlloc u
 		allocaType := llvm.ArrayType(mod.Context().Int8Type(), int(size))
 		alloca := builder.CreateAlloca(allocaType, "stackalloc")
 		alloca.SetAlignment(alignment)
+		if !mod.NamedGlobal("runtime.stackChainStart").IsNil() && isPointerFreeAllocation(heapalloc) {
+			llvmutil.MarkPointerFreeAlloca(alloca)
+		}
 
 		// Zero the allocation inside the block where the value was originally allocated.
 		zero := llvm.ConstNull(alloca.AllocatedType())

@@ -68,3 +68,12 @@ func selectBlocking(ch1, ch2 chan int) (int, bool) {
 		return value, ok
 	}
 }
+
+func selectMixed(ch1 chan int, ch2 chan *int) *int {
+	select {
+	case <-ch1:
+		return nil
+	case value := <-ch2:
+		return value
+	}
+}
