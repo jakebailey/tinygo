@@ -2,7 +2,10 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"internal/reflectlite"
+	"unsafe"
+)
 
 // finalizerGCThreshold starts pressure GC when registrations indicate external memory pressure.
 // Larger tables use a proportional threshold. Zero disables this trigger.
@@ -21,9 +24,34 @@ func finalizerGCTrigger(count uintptr) uintptr {
 	return finalizerGCThreshold
 }
 
-// A func(*T) and a func(unsafe.Pointer) have the same TinyGo closure ABI.
-func callFinalizer(objPtr unsafe.Pointer, fn interface{}) {
+func checkFinalizer(obj, fn interface{}) *reflectlite.RawType {
+	value := reflectlite.ValueOf(obj)
+	if value.Kind() != reflectlite.Pointer {
+		runtimeFatal("runtime.SetFinalizer: first argument is not a pointer")
+	}
+	if value.IsNil() {
+		runtimeFatal("runtime.SetFinalizer: pointer not in allocated block")
+	}
+	if fn != nil {
+		f := reflectlite.ValueOf(fn)
+		if f.Kind() != reflectlite.Func {
+			runtimeFatal("runtime.SetFinalizer: second argument is not a function")
+		}
+		arg, _ := reflectlite.FinalizerForType(f.RawType())
+		if arg == nil || !reflectlite.RawAssignableTo(value.RawType(), arg) {
+			runtimeFatal("runtime.SetFinalizer: incompatible finalizer signature")
+		}
+	}
+	return value.RawType()
+}
+
+// Use the adapter from compiler.getFinalizerCall for the actual callback ABI.
+// Casting to func(unsafe.Pointer) would mishandle interface arguments and results.
+func callFinalizer(objPtr unsafe.Pointer, objType *reflectlite.RawType, fn interface{}) {
+	var obj interface{}
+	*(*_interface)(unsafe.Pointer(&obj)) = _interface{typecode: unsafe.Pointer(objType), value: objPtr}
 	fnBox := (*_interface)(unsafe.Pointer(&fn)).value
-	f := *(*func(unsafe.Pointer))(fnBox)
-	f(objPtr)
+	_, call := reflectlite.FinalizerForType(reflectlite.ValueOf(fn).RawType())
+	call(obj, fnBox)
+	KeepAlive(obj)
 }

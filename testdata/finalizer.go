@@ -61,6 +61,7 @@ func allocRegisterClear() {
 func allocRegisterReplace() {
 	p := &T{x: 2}
 	runtime.SetFinalizer(p, func(*T) { f1Ran++ })
+	runtime.SetFinalizer(p, nil)
 	runtime.SetFinalizer(p, func(*T) { f2Ran++ })
 }
 
@@ -102,8 +103,6 @@ func testClear() {
 	}
 }
 
-// testReplace checks that re-registering replaces the finalizer: only the latest
-// one runs, and only once.
 func testReplace() {
 	allocRegisterReplace()
 	for i := 0; i < 100 && f2Ran == 0; i++ {
@@ -116,6 +115,38 @@ func testReplace() {
 	}
 	if f2Ran != 1 {
 		panic("finalizer: replacement finalizer f2 did not run exactly once")
+	}
+}
+
+func testRootLiveness() {
+	if runtime.GOARCH != "wasm" {
+		return
+	}
+	var done uint32
+	pointers := make([]*T, 10)
+	for i := range pointers {
+		pointers[i] = &T{x: i}
+		runtime.SetFinalizer(pointers[i], func(*T) {
+			atomic.AddUint32(&done, 1)
+		})
+	}
+	runtime.GC()
+	for i, p := range pointers {
+		if p.x != i {
+			panic("finalizer: live object corrupted")
+		}
+	}
+	if atomic.LoadUint32(&done) != 0 {
+		panic("finalizer: live object finalized")
+	}
+	pointers = nil
+	for i := 0; i < 100 && atomic.LoadUint32(&done) != 10; i++ {
+		runtime.GC()
+		runtime.Gosched()
+	}
+	if atomic.LoadUint32(&done) != 10 {
+		println("finalized:", atomic.LoadUint32(&done))
+		panic("finalizer: dead roots retained in active frame")
 	}
 }
 
@@ -189,38 +220,6 @@ func testInteriorFinalizers() {
 	panic("interior finalizers did not run exactly once")
 }
 
-func testRootLiveness() {
-	if runtime.GOARCH != "wasm" {
-		return
-	}
-	var done uint32
-	pointers := make([]*T, 10)
-	for i := range pointers {
-		pointers[i] = &T{x: i}
-		runtime.SetFinalizer(pointers[i], func(*T) {
-			atomic.AddUint32(&done, 1)
-		})
-	}
-	runtime.GC()
-	for i, p := range pointers {
-		if p.x != i {
-			panic("finalizer: live object corrupted")
-		}
-	}
-	if atomic.LoadUint32(&done) != 0 {
-		panic("finalizer: live object finalized")
-	}
-	pointers = nil
-	for i := 0; i < 100 && atomic.LoadUint32(&done) != 10; i++ {
-		runtime.GC()
-		runtime.Gosched()
-	}
-	if atomic.LoadUint32(&done) != 10 {
-		println("finalized:", atomic.LoadUint32(&done))
-		panic("finalizer: dead roots retained in active frame")
-	}
-}
-
 func main() {
 	if finalizerTestMode == "interior" {
 		testInteriorFinalizers()
@@ -231,22 +230,12 @@ func main() {
 		switch os.Args[1] {
 		case "interior":
 			testInteriorFinalizers()
-			println("ok")
-		case "interior-pointer":
-			p := new(struct {
-				pad    [128]byte
-				target *T
-			})
-			runtime.SetFinalizer(&p.target, func(**T) {})
-			runtime.KeepAlive(p)
-		case "interior-large":
-			p := new(struct {
-				pad    [128]byte
-				target [16]byte
-			})
-			runtime.SetFinalizer(&p.target, func(*[16]byte) {})
-			runtime.KeepAlive(p)
+		case "types":
+			testFinalizerTypes()
+		default:
+			testInvalidFinalizer(os.Args[1])
 		}
+		println("ok")
 		return
 	}
 	testRootLiveness()
@@ -254,4 +243,125 @@ func main() {
 	testClear()
 	testReplace()
 	println("ok")
+}
+
+type object struct {
+	value int
+	data  [128]byte
+}
+
+func (p *object) read() int { return p.value }
+
+func (p *object) finish() { check(p) }
+
+type reader interface{ read() int }
+type pointer *object
+type finalizer func(*object) [2048]int
+
+var completed atomic.Int32
+
+func check(p *object) {
+	if p.value != 42 {
+		panic("wrong finalizer argument")
+	}
+	completed.Add(1)
+}
+
+//go:noinline
+func register(i int) {
+	p := &object{value: 42}
+	switch i {
+	case 0:
+		runtime.SetFinalizer(p, func(p *object) { check(p) })
+	case 1:
+		runtime.SetFinalizer(pointer(p), func(p *object) { check(p) })
+	case 2:
+		runtime.SetFinalizer(p, func(p pointer) { check(p) })
+	case 3:
+		runtime.SetFinalizer(p, func(v interface{}) [4]int64 {
+			check(v.(*object))
+			return [4]int64{}
+		})
+	case 4:
+		runtime.SetFinalizer(p, func(v reader) (int, string) {
+			if v.read() != 42 {
+				panic("wrong finalizer interface")
+			}
+			check(v.(*object))
+			return 1, "ignored"
+		})
+	case 5:
+		runtime.SetFinalizer(p, finalizer(func(v *object) [2048]int {
+			check(v)
+			return [2048]int{}
+		}))
+	case 6:
+		runtime.SetFinalizer(p, func(v *object) {
+			check(v)
+			runtime.SetFinalizer(v, func(v *object) { check(v) })
+		})
+	case 7:
+		runtime.SetFinalizer(p, (*object).finish)
+	}
+}
+
+func testFinalizerTypes() {
+	for i := 0; i < 8; i++ {
+		register(i)
+	}
+	for i := 0; i < 100 && completed.Load() != 9; i++ {
+		sink += scrubStack(40)
+		runtime.GC()
+		runtime.Gosched()
+		if runtime.GOARCH != "wasm" {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if completed.Load() != 9 {
+		println("completed:", completed.Load())
+		panic("finalizer call adapters did not run")
+	}
+}
+
+func testInvalidFinalizer(name string) {
+	p := new(object)
+	switch name {
+	case "duplicate":
+		runtime.SetFinalizer(p, func(*object) {})
+		runtime.SetFinalizer(p, func(*object) {})
+	case "nil":
+		runtime.SetFinalizer((*object)(nil), func(*object) {})
+	case "count":
+		runtime.SetFinalizer(p, func() {})
+	case "variadic":
+		runtime.SetFinalizer(p, func(...*object) {})
+	case "type":
+		runtime.SetFinalizer(p, func(*int) {})
+	case "non-function":
+		runtime.SetFinalizer(p, 1)
+	case "non-pointer":
+		runtime.SetFinalizer(1, func(int) {})
+	case "interior-pointer":
+		q := new(struct {
+			pad    [128]byte
+			target *object
+		})
+		runtime.SetFinalizer(&q.target, func(**object) {})
+		runtime.KeepAlive(q)
+	case "interior-large":
+		q := new(struct {
+			pad    [128]byte
+			target [16]byte
+		})
+		runtime.SetFinalizer(&q.target, func(*[16]byte) {})
+		runtime.KeepAlive(q)
+	case "interior-duplicate":
+		q := new([128]byte)
+		runtime.SetFinalizer(&q[1], func(*byte) {})
+		runtime.SetFinalizer(&q[2], func(*byte) {})
+		runtime.SetFinalizer(&q[2], nil)
+		runtime.SetFinalizer(&q[1], func(*byte) {})
+		runtime.KeepAlive(q)
+	}
+	runtime.KeepAlive(p)
 }

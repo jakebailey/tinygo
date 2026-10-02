@@ -10,3 +10,9 @@ func spawnFinalizerRunner() {
 }
 
 func initFinalizerScheduler() { finalizerIdleGC = finalizerPressureGC }
+
+func spawnCleanupRunner() {
+	go cleanupRunner()
+}
+
+func initCleanupScheduler() { initFinalizerScheduler() }
