@@ -220,6 +220,20 @@ type objHeader struct {
 	layout gcLayout
 }
 
+func blockAllocation(addr uintptr) (base, size uintptr) {
+	if !isOnHeap(addr) || blockFromAddr(addr).state() == blockStateFree {
+		return
+	}
+	head := blockFromAddr(addr).findHead()
+	first := head
+	for first > 0 && (first-1).state() == blockStateTail {
+		first--
+	}
+	base = first.address()
+	size = uintptr(head-first)*bytesPerBlock + bytesPerBlock - unsafe.Sizeof(objHeader{})
+	return
+}
+
 // freeRange is a node on the outer list of range lengths.
 // The free ranges are structured as two nested singly-linked lists:
 // - The outer level (freeRange) has one entry for each unique range length.
@@ -494,11 +508,12 @@ func alloc(size uintptr, layout unsafe.Pointer) unsafe.Pointer {
 	header.layout = parseGCLayout(layout)
 
 	// We've claimed this allocation, now we can unlock the heap.
+	queued := finalizersQueued
+	finalizersQueued = false
 	gcLock.Unlock()
 
 	// If the GC above queued any finalizers, run them now that gcLock is free.
-	if finalizersQueued {
-		finalizersQueued = false
+	if queued {
 		wakeFinalizer()
 	}
 
@@ -586,11 +601,12 @@ func freeTaskStack(addr uintptr) {
 func GC() {
 	gcLock.Lock()
 	runGC()
+	queued := finalizersQueued
+	finalizersQueued = false
 	gcLock.Unlock()
 
 	// If the GC queued any finalizers, run them now that gcLock is free.
-	if finalizersQueued {
-		finalizersQueued = false
+	if queued {
 		wakeFinalizer()
 	}
 }
@@ -644,6 +660,10 @@ func runGC() (freeBytes uintptr) {
 	// finalizers. This runs while the world is still stopped, after marking is
 	// complete and before sweep frees anything.
 	scanFinalizers()
+	scanWeakPointers()
+	if scanCleanups() {
+		finalizersQueued = true
+	}
 
 	// If we're using threads, resume all other threads before starting the
 	// sweep.
@@ -714,30 +734,34 @@ func finishMark() {
 		}
 		scanList = (*objHeader)(unsafe.Pointer(obj.next))
 
-		// Check if the object may contain pointers.
-		if obj.layout.pointerFree() {
-			// This object doesn't contain any pointers.
-			// This is a fast path for objects like make([]int, 4096).
-			// It skips the length calculation.
-			continue
-		}
-
-		// Find the last block in the object.
-		// This block contains the header.
-		lastBlock := blockFromAddr(uintptr(unsafe.Pointer(obj)))
-
-		// Find the first block in the allocation.
-		firstBlock := lastBlock
-		for firstBlock > 0 && (firstBlock-1).state() == blockStateTail {
-			firstBlock--
-		}
-
-		// Compute the size of the allocation.
-		bodySize := uintptr(lastBlock-firstBlock)*bytesPerBlock + (bytesPerBlock - unsafe.Sizeof(objHeader{}))
-
-		// Scan the object.
-		obj.layout.scan(firstBlock.address(), bodySize)
+		scanObject(obj)
 	}
+}
+
+func scanObject(obj *objHeader) {
+	// Check if the object may contain pointers.
+	if obj.layout.pointerFree() {
+		// This object doesn't contain any pointers.
+		// This is a fast path for objects like make([]int, 4096).
+		// It skips the length calculation.
+		return
+	}
+
+	// Find the last block in the object.
+	// This block contains the header.
+	lastBlock := blockFromAddr(uintptr(unsafe.Pointer(obj)))
+
+	// Find the first block in the allocation.
+	firstBlock := lastBlock
+	for firstBlock > 0 && (firstBlock-1).state() == blockStateTail {
+		firstBlock--
+	}
+
+	// Compute the size of the allocation.
+	bodySize := uintptr(lastBlock-firstBlock)*bytesPerBlock + (bytesPerBlock - unsafe.Sizeof(objHeader{}))
+
+	// Scan the object.
+	obj.layout.scan(firstBlock.address(), bodySize)
 }
 
 // mark a GC root at the address addr.
@@ -941,37 +965,32 @@ var count4LUT = [16]uint8{
 }
 
 func SetFinalizer(obj interface{}, finalizer interface{}) {
-	// Validate the arguments up front, like the standard library does, so misuse
-	// fails fast at registration instead of corrupting state when the finalizer
-	// is later invoked. reflectlite cannot inspect a func's signature, so the
-	// exact func(*T) match is not checked; the closure ABI is uniform for any
-	// single pointer argument, which is why callFinalizer can reinterpret it.
-	if reflectlite.ValueOf(obj).Kind() != reflectlite.Pointer {
-		runtimeFatal("runtime.SetFinalizer: first argument is not a pointer")
-	}
-	if finalizer != nil && reflectlite.ValueOf(finalizer).Kind() != reflectlite.Func {
-		runtimeFatal("runtime.SetFinalizer: second argument is not a function")
-	}
+	typ := checkFinalizer(obj, finalizer)
 
 	// For an interface holding a pointer, the value word is the pointer itself.
 	objPtr := (*_interface)(unsafe.Pointer(&obj)).value
-	if objPtr == nil {
-		// A nil pointer has nothing to finalize.
-		return
-	}
 
 	gcLock.Lock()
 	addr := uintptr(objPtr)
-	manual := false
-	if isOnHeap(addr) {
-		head := blockFromAddr(addr).findHead()
-		header := (*objHeader)(unsafe.Add(head.pointer(), bytesPerBlock-unsafe.Sizeof(objHeader{})))
-		manual = header.next == 1
+	base, _ := blockAllocation(addr)
+	if base == 0 {
+		gcLock.Unlock()
+		if isOnHeap(addr) {
+			runtimeFatal("runtime.SetFinalizer: pointer not in allocated block")
+		}
+		return
 	}
+	head := blockFromAddr(addr).findHead()
+	header := (*objHeader)(unsafe.Add(head.pointer(), bytesPerBlock-unsafe.Sizeof(objHeader{})))
+	manual := header.next == 1
 	gcLock.Unlock()
+	if base != addr && !reflectlite.FinalizerAllowsInterior(typ) {
+		runtimeFatal("runtime.SetFinalizer: pointer not at beginning of allocated block")
+	}
 	if manual && finalizer != nil {
 		runtimeFatal("runtime.SetFinalizer: manual allocation")
 	}
 
-	registerFinalizer(uintptr(objPtr), finalizer)
+	registerFinalizer(uintptr(objPtr), typ, finalizer)
+	KeepAlive(obj)
 }

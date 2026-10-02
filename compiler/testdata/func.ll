@@ -34,7 +34,7 @@ declare void @runtime.nilPanic(ptr) #0
 ; Function Attrs: nounwind
 define hidden void @main.bar(ptr %context) unnamed_addr #1 {
 entry:
-  call void @main.foo(ptr undef, ptr nonnull @main.someFunc, ptr undef)
+  call void @main.foo(ptr null, ptr nonnull @main.someFunc, ptr undef)
   ret void
 }
 

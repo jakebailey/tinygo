@@ -58,16 +58,17 @@ func testClearThenRegister() {
 }
 
 //go:noinline
-func allocRegisterTwice() {
+func allocReplace() {
 	for i := 0; i < batch; i++ {
 		p := &box{x: i}
 		runtime.SetFinalizer(p, func(*box) { replacedOldRan++ })
+		runtime.SetFinalizer(p, nil)
 		runtime.SetFinalizer(p, func(*box) { replacedNewRan++ })
 	}
 }
 
-func testRegisterTwiceLeavesOne() {
-	allocRegisterTwice()
+func testReplacementLeavesOne() {
+	allocReplace()
 	for i := 0; i < 200 && replacedNewRan < batch; i++ {
 		sink += scrubStack(40)
 		runtime.GC()
@@ -169,7 +170,7 @@ func testMixedBatch() {
 
 func main() {
 	testClearThenRegister()
-	testRegisterTwiceLeavesOne()
+	testReplacementLeavesOne()
 	testChurnLeavesNothing()
 	testAddressReuse()
 	testMixedBatch()

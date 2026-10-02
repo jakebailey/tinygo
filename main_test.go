@@ -115,8 +115,13 @@ func TestFinalizerRunnerRegistration(t *testing.T) {
 	}{
 		{"wasm", "boehm", "asyncify"},
 		{"wasm", "conservative", "asyncify"},
+		{"wasm", "precise", "asyncify"},
 		{"", "boehm", "tasks"},
 		{"", "boehm", "threads"},
+		{"", "conservative", "tasks"},
+		{"", "conservative", "threads"},
+		{"", "precise", "tasks"},
+		{"", "precise", "threads"},
 	} {
 		if test.target == "" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 			continue
@@ -455,8 +460,28 @@ func TestTrimPathTestPackages(t *testing.T) {
 	}
 }
 
+func TestGCConformanceReference(t *testing.T) {
+	t.Parallel()
+	_, minor, err := goenv.GetGorootVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minor < 24 {
+		t.Skip("weak pointers and cleanups require Go 1.24")
+	}
+	cmd := exec.Command(goenv.Get("GOROOT")+"/bin/go", "test", "./testdata/gcconformance", "-count=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Go conformance cases failed: %v\n%s", err, output)
+	}
+}
+
 func TestBuild(t *testing.T) {
 	t.Parallel()
+
+	_, minor, err := goenv.GetGorootVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []string{
 		"alias.go",
@@ -564,6 +589,7 @@ func TestBuild(t *testing.T) {
 			"finalizeridle.go",
 			"finalizerlarge.go",
 			"finalizerinvariants.go",
+			"cleanup/",
 		} {
 			name := name
 			t.Run(name, func(t *testing.T) {
@@ -576,6 +602,93 @@ func TestBuild(t *testing.T) {
 				}
 				runTest(name, testOptions, t, nil, nil)
 			})
+		}
+	})
+
+	t.Run("finalizer-semantics", func(t *testing.T) {
+		t.Parallel()
+		for _, gc := range []string{"boehm", "precise", "conservative"} {
+			gc := gc
+			for _, scheduler := range []string{"asyncify", "none"} {
+				scheduler := scheduler
+				tests := []string{"finalizerlarge.go", "finalizer.go", "cleanup/"}
+				if minor >= 24 {
+					tests = append(tests, "gcconformance/")
+				}
+				for _, name := range tests {
+					name := name
+					t.Run(gc+"/"+scheduler+"/"+name, func(t *testing.T) {
+						t.Parallel()
+						options := optionsFromTarget("wasm", sema)
+						options.GC = gc
+						options.Scheduler = scheduler
+						options.Tags = append(options.Tags, "runtime_asserts")
+						var args []string
+						if name == "finalizerlarge.go" {
+							args = []string{"graph"}
+						} else if name == "finalizer.go" {
+							args = []string{"types"}
+						}
+						runTest(name, options, t, args, nil)
+					})
+				}
+			}
+		}
+	})
+
+	t.Run("host-finalizer-semantics", func(t *testing.T) {
+		t.Parallel()
+		for _, gc := range []string{"boehm", "precise", "conservative"} {
+			gc := gc
+			tests := []string{"finalizerlarge.go", "finalizer.go", "cleanup/"}
+			if minor >= 24 {
+				tests = append(tests, "gcconformance/")
+			}
+			for _, name := range tests {
+				name := name
+				t.Run(gc+"/"+name, func(t *testing.T) {
+					t.Parallel()
+					options := optionsFromTarget("", sema)
+					options.GC = gc
+					options.Tags = append(options.Tags, "runtime_asserts")
+					var args []string
+					if name == "finalizerlarge.go" {
+						args = []string{"graph"}
+					} else if name == "finalizer.go" {
+						args = []string{"types"}
+					}
+					runTest(name, options, t, args, nil)
+				})
+			}
+		}
+	})
+
+	t.Run("other-finalizer-schedulers", func(t *testing.T) {
+		t.Parallel()
+		for _, target := range []string{"", "riscv-qemu"} {
+			target := target
+			if *testTarget != "" && target != *testTarget {
+				continue
+			}
+			if target == "" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+				continue
+			}
+			for _, gc := range []string{"precise", "conservative"} {
+				gc := gc
+				t.Run(target+"/"+gc, func(t *testing.T) {
+					t.Parallel()
+					options := optionsFromTarget(target, sema)
+					options.GC = gc
+					options.Tags = append(options.Tags, "runtime_asserts")
+					if target == "" {
+						options.Scheduler = "tasks"
+					}
+					runTest("cleanup/", options, t, nil, nil)
+					if minor >= 24 {
+						runTest("gcconformance/", options, t, nil, nil)
+					}
+				})
+			}
 		}
 	})
 
@@ -1621,6 +1734,71 @@ func checkOutputData(t *testing.T, expectedOutput, actual []byte) {
 	}
 }
 
+func TestFinalizerInvalid(t *testing.T) {
+	t.Parallel()
+	for _, gc := range []string{"boehm", "precise", "conservative"} {
+		gc := gc
+		t.Run(gc, func(t *testing.T) {
+			t.Parallel()
+			options := optionsFromTarget("", sema)
+			options.GC = gc
+			options.Tags = append(options.Tags, "runtime_asserts")
+			config, err := builder.NewConfig(&options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct {
+				name string
+				want string
+			}{
+				{"duplicate", "finalizer already set"},
+				{"nil", "pointer not in allocated block"},
+				{"count", "incompatible finalizer signature"},
+				{"variadic", "incompatible finalizer signature"},
+				{"type", "incompatible finalizer signature"},
+				{"non-function", "second argument is not a function"},
+				{"non-pointer", "first argument is not a pointer"},
+				{"interior-pointer", "pointer not at beginning of allocated block"},
+				{"interior-large", "pointer not at beginning of allocated block"},
+				{"interior-duplicate", "finalizer already set"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					output := &bytes.Buffer{}
+					_, err := buildAndRun("testdata/finalizer.go", config, output, []string{tc.name}, nil, time.Minute, func(cmd *exec.Cmd, result builder.BuildResult) error {
+						cmd.Stdout, cmd.Stderr = nil, nil
+						data, err := cmd.CombinedOutput()
+						output.Write(data)
+						return err
+					})
+					if err == nil {
+						t.Fatal("invalid finalizer registration succeeded")
+					}
+					if !strings.Contains(output.String(), tc.want) {
+						t.Fatalf("output does not contain %q:\n%s", tc.want, output.String())
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestInteriorFinalizerInvalidReference(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"interior-pointer", "interior-large", "interior-duplicate"} {
+		t.Run(name, func(t *testing.T) {
+			want := "pointer not at beginning of allocated block"
+			if name == "interior-duplicate" {
+				want = "finalizer already set"
+			}
+			cmd := exec.Command(goenv.Get("GOROOT")+"/bin/go", "run", "./testdata/finalizer.go", name)
+			output, err := cmd.CombinedOutput()
+			if err == nil || !bytes.Contains(output, []byte(want)) {
+				t.Fatalf("Go registration result: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
 func TestGoexitCrash(t *testing.T) {
 	t.Parallel()
 
@@ -2082,6 +2260,32 @@ func TestInitAllDWARF(t *testing.T) {
 		}
 		if entry.Tag == dwarf.TagSubprogram && entry.Val(dwarf.AttrName) == "runtime.initAll" {
 			return
+		}
+	}
+}
+
+func TestRetiredStack(t *testing.T) {
+	t.Parallel()
+	for _, target := range []string{"", "riscv-qemu"} {
+		target := target
+		if *testTarget != "" && target != *testTarget {
+			continue
+		}
+		if target == "" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+			continue
+		}
+		for _, gc := range []string{"precise", "conservative"} {
+			gc := gc
+			t.Run(target+"/"+gc, func(t *testing.T) {
+				t.Parallel()
+				options := optionsFromTarget(target, sema)
+				options.GC = gc
+				options.Tags = append(options.Tags, "runtime_asserts")
+				if target == "" {
+					options.Scheduler = "tasks"
+				}
+				runTest("retiredstack/", options, t, nil, nil)
+			})
 		}
 	}
 }
