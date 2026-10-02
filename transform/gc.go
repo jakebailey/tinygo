@@ -3,6 +3,7 @@ package transform
 import (
 	"strings"
 
+	"github.com/tinygo-org/tinygo/compiler/llvmutil"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -302,10 +303,11 @@ func MakeGCStackSlots(mod llvm.Module) bool {
 			llvm.ConstInt(ctx.Int32Type(), 0, false),
 		}, "")
 		builder.CreateStore(parent, gep)
-		builder.CreateStore(stackObject, stackChainStart)
+		prologueEnd := builder.CreateStore(stackObject, stackChainStart)
 
 		// Do a store to the stack object after each new pointer that is created.
 		pointerStores := make(map[llvm.Value]struct{})
+		slots := make([]llvm.Value, len(pointers))
 		for i, ptr := range pointers {
 			// Insert the store after the pointer value is created.
 			insertionPoint := llvm.NextInstruction(ptr)
@@ -314,17 +316,22 @@ func MakeGCStackSlots(mod llvm.Module) bool {
 				// Insert after the last PHI node.
 				insertionPoint = llvm.NextInstruction(insertionPoint)
 			}
-			builder.SetInsertPointBefore(insertionPoint)
-
 			// Extract a pointer to the appropriate section of the stack object.
+			builder.SetInsertPointBefore(llvm.NextInstruction(stackObject))
 			gep := builder.CreateGEP(stackObjectType, stackObject, []llvm.Value{
 				llvm.ConstInt(ctx.Int32Type(), 0, false),
 				llvm.ConstInt(ctx.Int32Type(), uint64(2+i), false),
 			}, "")
 
 			// Store the pointer into the stack slot.
+			builder.SetInsertPointBefore(insertionPoint)
 			store := builder.CreateStore(ptr, gep)
 			pointerStores[store] = struct{}{}
+			slots[i] = gep
+		}
+
+		for i, ptr := range pointers {
+			clearDeadGCRoot(builder, fn, ptr, slots[i], prologueEnd, pointerStores)
 		}
 
 		// Make sure this stack object is popped from the linked list of stack
@@ -341,11 +348,231 @@ func MakeGCStackSlots(mod llvm.Module) bool {
 				prev.SetTailCall(false)
 			}
 			builder.SetInsertPointBefore(ret)
+			// The conservative scan can still see retired frames.
+			// See src/runtime/gc_stack_portable.go.
+			clear := builder.CreateStore(llvm.ConstNull(stackObjectType), stackObject)
+			clear.SetVolatile(true)
 			builder.CreateStore(parent, stackChainStart)
 		}
 	}
 
+	for fn := range trackFuncs {
+		if fn.FirstBasicBlock().IsNil() {
+			continue
+		}
+		var allocas []llvm.Value
+		for inst := fn.EntryBasicBlock().FirstInstruction(); !inst.IsNil(); inst = llvm.NextInstruction(inst) {
+			if inst.IsAAllocaInst().IsNil() || inst.FirstUse().IsNil() {
+				continue
+			}
+			if llvmutil.IsPointerFreeAlloca(inst) {
+				continue
+			}
+			count := inst.Operand(0)
+			if count.IsAConstantInt().IsNil() || count.ZExtValue() != 1 || !valueEscapesAt(inst).IsNil() {
+				continue
+			}
+			allocas = append(allocas, inst)
+		}
+		for _, alloca := range allocas {
+			clearDeadGCRoot(builder, fn, alloca, llvm.Value{}, llvm.Value{}, nil)
+		}
+	}
+
 	return true
+}
+
+// Include derived pointers when finding the last use of a root.
+// See https://llvm.org/docs/LangRef.html#pointer-aliasing-rules.
+func clearDeadGCRoot(builder llvm.Builder, fn, ptr, slot, prologueEnd llvm.Value, stores map[llvm.Value]struct{}) {
+	uses := map[llvm.Value]bool{}
+	lifetimes := map[llvm.Value]bool{}
+	seen := map[llvm.Value]bool{}
+	worklist := []llvm.Value{ptr}
+	for len(worklist) != 0 {
+		value := worklist[len(worklist)-1]
+		worklist = worklist[:len(worklist)-1]
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		if !value.IsAInstruction().IsNil() {
+			switch value.InstructionOpcode() {
+			case llvm.ExtractValue, llvm.ExtractElement, llvm.BitCast, llvm.GetElementPtr:
+				worklist = append(worklist, value.Operand(0))
+			}
+		}
+		for _, use := range getUses(value) {
+			if _, ok := stores[use]; ok {
+				continue
+			}
+			if use.IsAInstruction().IsNil() || use.InstructionParent().Parent() != fn {
+				continue
+			}
+			if !use.IsACallInst().IsNil() && strings.HasPrefix(use.CalledValue().Name(), "llvm.lifetime.") {
+				if slot.IsNil() {
+					lifetimes[use] = strings.HasPrefix(use.CalledValue().Name(), "llvm.lifetime.start.")
+				}
+				continue
+			}
+			uses[use] = true
+			switch use.InstructionOpcode() {
+			case llvm.GetElementPtr, llvm.BitCast,
+				llvm.PtrToInt, llvm.IntToPtr, llvm.PHI, llvm.Select,
+				llvm.InsertValue, llvm.ExtractValue, llvm.InsertElement, llvm.ExtractElement,
+				llvm.Add, llvm.Sub, llvm.Mul, llvm.UDiv, llvm.SDiv, llvm.URem, llvm.SRem,
+				llvm.And, llvm.Or, llvm.Xor, llvm.Shl, llvm.LShr, llvm.AShr,
+				llvm.Trunc, llvm.ZExt, llvm.SExt:
+				worklist = append(worklist, use)
+			case llvm.Call:
+				if slot.IsNil() && typeHasPointers(use.Type()) {
+					worklist = append(worklist, use)
+				}
+			default:
+				if use.InstructionOpcode() != llvm.Load && typeHasPointers(use.Type()) {
+					worklist = append(worklist, use)
+				}
+			}
+		}
+	}
+	if len(uses) == 0 && slot.IsNil() {
+		return
+	}
+
+	var blocks []llvm.BasicBlock
+	lastUse := map[llvm.BasicBlock]llvm.Value{}
+	predecessors := map[llvm.BasicBlock][]llvm.BasicBlock{}
+	for bb := fn.FirstBasicBlock(); !bb.IsNil(); bb = llvm.NextBasicBlock(bb) {
+		blocks = append(blocks, bb)
+		term := bb.LastInstruction()
+		for i := 0; i < term.SuccessorsCount(); i++ {
+			succ := term.Successor(i)
+			predecessors[succ] = append(predecessors[succ], bb)
+		}
+		for inst := bb.FirstInstruction(); !inst.IsNil(); inst = llvm.NextInstruction(inst) {
+			_, isRootStore := stores[inst]
+			if uses[inst] || (isRootStore && inst.Operand(1) == slot) {
+				lastUse[bb] = inst
+			}
+		}
+	}
+
+	liveIn := map[llvm.BasicBlock]bool{}
+	liveOut := map[llvm.BasicBlock]bool{}
+	for changed := true; changed; {
+		changed = false
+		for i := len(blocks) - 1; i >= 0; i-- {
+			bb := blocks[i]
+			out := false
+			term := bb.LastInstruction()
+			for j := 0; j < term.SuccessorsCount(); j++ {
+				out = out || liveIn[term.Successor(j)]
+			}
+			in := (!lastUse[bb].IsNil() || out) && bb != ptr.InstructionParent()
+			if in != liveIn[bb] || out != liveOut[bb] {
+				liveIn[bb], liveOut[bb] = in, out
+				changed = true
+			}
+		}
+	}
+
+	activeAt := map[llvm.Value]bool{}
+	if len(lifetimes) != 0 {
+		activeOut := map[llvm.BasicBlock]bool{}
+		for _, bb := range blocks {
+			activeOut[bb] = true
+		}
+		for changed := true; changed; {
+			changed = false
+			for _, bb := range blocks {
+				active := bb != fn.EntryBasicBlock() && len(predecessors[bb]) != 0
+				for _, pred := range predecessors[bb] {
+					active = active && activeOut[pred]
+				}
+				for inst := bb.FirstInstruction(); !inst.IsNil(); inst = llvm.NextInstruction(inst) {
+					activeAt[inst] = active
+					if start, ok := lifetimes[inst]; ok {
+						active = start
+					}
+				}
+				if active != activeOut[bb] {
+					activeOut[bb] = active
+					changed = true
+				}
+			}
+		}
+		for _, bb := range blocks {
+			last := lastUse[bb]
+			clearAfterLast := !liveOut[bb] && !last.IsNil() && activeAt[llvm.NextInstruction(last)]
+			pastLast := false
+			for inst := bb.FirstInstruction(); !inst.IsNil(); inst = llvm.NextInstruction(inst) {
+				pastLast = pastLast || inst == last
+				if start, ok := lifetimes[inst]; ok {
+					redundant := clearAfterLast && pastLast
+					pastLast = false
+					if start || !activeAt[inst] || redundant {
+						continue
+					}
+					builder.SetInsertPointBefore(inst)
+					store := builder.CreateStore(llvm.ConstNull(ptr.AllocatedType()), ptr)
+					store.SetVolatile(true)
+				}
+			}
+		}
+	}
+
+	for _, bb := range blocks {
+		if liveOut[bb] {
+			continue
+		}
+		needed := liveIn[bb] || bb == ptr.InstructionParent()
+		for _, pred := range predecessors[bb] {
+			needed = needed || liveOut[pred]
+		}
+		if !needed {
+			continue
+		}
+		after := lastUse[bb]
+		if bb == ptr.InstructionParent() && after.IsNil() {
+			after = ptr
+			for store := range stores {
+				if store.Operand(1) == slot {
+					after = store
+					break
+				}
+			}
+		}
+		var before llvm.Value
+		if after.IsNil() {
+			before = bb.FirstInstruction()
+			if bb == fn.EntryBasicBlock() && !prologueEnd.IsNil() {
+				before = llvm.NextInstruction(prologueEnd)
+			}
+		} else {
+			before = llvm.NextInstruction(after)
+		}
+		for !before.IsNil() && !before.IsAPHINode().IsNil() {
+			before = llvm.NextInstruction(before)
+		}
+		if before.IsNil() {
+			continue
+		}
+		if len(lifetimes) != 0 && !activeAt[before] {
+			continue
+		}
+		if !after.IsNil() && !after.IsACallInst().IsNil() {
+			after.SetTailCall(false)
+		}
+		builder.SetInsertPointBefore(before)
+		if slot.IsNil() {
+			store := builder.CreateStore(llvm.ConstNull(ptr.AllocatedType()), ptr)
+			// gc_stack_portable.go reads these bytes after their LLVM lifetime.
+			// Volatile prevents dead-store elimination from keeping stale roots.
+			store.SetVolatile(true)
+		} else {
+			builder.CreateStore(llvm.ConstNull(ptr.Type()), slot)
+		}
+	}
 }
 
 func makeGCGlobalRoots(mod llvm.Module) bool {
