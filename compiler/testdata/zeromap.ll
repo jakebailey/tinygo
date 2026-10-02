@@ -23,8 +23,8 @@ entry:
 ; Function Attrs: noinline nounwind
 define hidden i32 @main.testZeroGet(ptr dereferenceable_or_null(52) %m, i1 %s.b1, i32 %s.i, i1 %s.b2, ptr %context) unnamed_addr #2 {
 entry:
-  %hashmap.key = alloca %main.hasPadding, align 8
-  %hashmap.value = alloca i32, align 4
+  %hashmap.key = alloca %main.hasPadding, align 8, !tinygo.gc.pointerfree !0
+  %hashmap.value = alloca i32, align 4, !tinygo.gc.pointerfree !0
   %0 = insertvalue %main.hasPadding zeroinitializer, i1 %s.b1, 0
   %1 = insertvalue %main.hasPadding %0, i32 %s.i, 1
   %2 = insertvalue %main.hasPadding %1, i1 %s.b2, 2
@@ -49,8 +49,8 @@ declare void @llvm.lifetime.end.p0(ptr captures(none)) #3
 ; Function Attrs: noinline nounwind
 define hidden void @main.testZeroSet(ptr dereferenceable_or_null(52) %m, i1 %s.b1, i32 %s.i, i1 %s.b2, ptr %context) unnamed_addr #2 {
 entry:
-  %hashmap.key = alloca %main.hasPadding, align 8
-  %hashmap.value = alloca i32, align 4
+  %hashmap.key = alloca %main.hasPadding, align 8, !tinygo.gc.pointerfree !0
+  %hashmap.value = alloca i32, align 4, !tinygo.gc.pointerfree !0
   %0 = insertvalue %main.hasPadding zeroinitializer, i1 %s.b1, 0
   %1 = insertvalue %main.hasPadding %0, i32 %s.i, 1
   %2 = insertvalue %main.hasPadding %1, i1 %s.b2, 2
@@ -69,8 +69,8 @@ declare void @runtime.hashmapGenericSet(ptr dereferenceable_or_null(52), ptr cap
 ; Function Attrs: noinline nounwind
 define hidden i32 @main.testZeroArrayGet(ptr dereferenceable_or_null(52) %m, [2 x %main.hasPadding] %s, ptr %context) unnamed_addr #2 {
 entry:
-  %hashmap.key = alloca [2 x %main.hasPadding], align 8
-  %hashmap.value = alloca i32, align 4
+  %hashmap.key = alloca [2 x %main.hasPadding], align 8, !tinygo.gc.pointerfree !0
+  %hashmap.value = alloca i32, align 4, !tinygo.gc.pointerfree !0
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.value)
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.key)
   %s.elt = extractvalue [2 x %main.hasPadding] %s, 0
@@ -88,8 +88,8 @@ entry:
 ; Function Attrs: noinline nounwind
 define hidden void @main.testZeroArraySet(ptr dereferenceable_or_null(52) %m, [2 x %main.hasPadding] %s, ptr %context) unnamed_addr #2 {
 entry:
-  %hashmap.key = alloca [2 x %main.hasPadding], align 8
-  %hashmap.value = alloca i32, align 4
+  %hashmap.key = alloca [2 x %main.hasPadding], align 8, !tinygo.gc.pointerfree !0
+  %hashmap.value = alloca i32, align 4, !tinygo.gc.pointerfree !0
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.value)
   store i32 5, ptr %hashmap.value, align 4
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.key)
@@ -253,8 +253,8 @@ eq.array.done:                                    ; preds = %eq.array.body
 ; Function Attrs: noinline nounwind
 define hidden void @main.testBinarySet(ptr dereferenceable_or_null(52) %m, i32 %key, i32 %value, ptr %context) unnamed_addr #2 {
 entry:
-  %hashmap.key = alloca i32, align 4
-  %hashmap.value = alloca i32, align 4
+  %hashmap.key = alloca i32, align 4, !tinygo.gc.pointerfree !0
+  %hashmap.value = alloca i32, align 4, !tinygo.gc.pointerfree !0
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.value)
   store i32 %value, ptr %hashmap.value, align 4
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.key)
@@ -270,8 +270,8 @@ declare void @runtime.hashmapBinarySet(ptr dereferenceable_or_null(52), ptr capt
 ; Function Attrs: noinline nounwind
 define hidden i32 @main.testBinaryGet(ptr dereferenceable_or_null(52) %m, i32 %key, ptr %context) unnamed_addr #2 {
 entry:
-  %hashmap.key = alloca i32, align 4
-  %hashmap.value = alloca i32, align 4
+  %hashmap.key = alloca i32, align 4, !tinygo.gc.pointerfree !0
+  %hashmap.value = alloca i32, align 4, !tinygo.gc.pointerfree !0
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.value)
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.key)
   store i32 %key, ptr %hashmap.key, align 4
@@ -287,7 +287,7 @@ declare i1 @runtime.hashmapBinaryGet(ptr dereferenceable_or_null(52), ptr captur
 ; Function Attrs: noinline nounwind
 define hidden void @main.testBinaryDelete(ptr dereferenceable_or_null(52) %m, i32 %key, ptr %context) unnamed_addr #2 {
 entry:
-  %hashmap.key = alloca i32, align 4
+  %hashmap.key = alloca i32, align 4, !tinygo.gc.pointerfree !0
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.key)
   store i32 %key, ptr %hashmap.key, align 4
   call void @runtime.hashmapBinaryDelete(ptr %m, ptr nonnull %hashmap.key, ptr undef) #4
@@ -300,7 +300,7 @@ declare void @runtime.hashmapBinaryDelete(ptr dereferenceable_or_null(52), ptr c
 ; Function Attrs: noinline nounwind
 define hidden void @main.testStringSet(ptr dereferenceable_or_null(52) %m, ptr readonly %key.data, i32 range(i32 0, -2147483648) %key.len, i32 %value, ptr %context) unnamed_addr #2 {
 entry:
-  %hashmap.value = alloca i32, align 4
+  %hashmap.value = alloca i32, align 4, !tinygo.gc.pointerfree !0
   call void @llvm.lifetime.start.p0(ptr nonnull %hashmap.value)
   store i32 %value, ptr %hashmap.value, align 4
   call void @runtime.hashmapStringSet(ptr %m, ptr %key.data, i32 %key.len, ptr nonnull %hashmap.value, ptr undef) #4
@@ -321,3 +321,5 @@ attributes #1 = { nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+cal
 attributes #2 = { noinline nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" }
 attributes #3 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
 attributes #4 = { nounwind }
+
+!0 = !{}
