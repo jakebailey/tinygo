@@ -238,6 +238,199 @@ define void @allocAndSave(ptr %x) {
   ret void
 }
 
+declare void @usePointer(ptr)
+
+define void @deadBeforeCollection() {
+  %ptr = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %ptr)
+  call void @usePointer(ptr %ptr)
+  call void @someArbitraryFunction()
+  ret void
+}
+
+define void @liveInteriorPointer() {
+  %ptr = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %ptr)
+  %field = getelementptr i8, ptr %ptr, i32 1
+  call void @someArbitraryFunction()
+  call void @usePointer(ptr %field)
+  call void @someArbitraryFunction()
+  ret void
+}
+
+define void @deadOnOneBranch(i1 %condition) {
+entry:
+  %ptr = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %ptr)
+  br i1 %condition, label %live, label %dead
+
+live:
+  call void @someArbitraryFunction()
+  call void @usePointer(ptr %ptr)
+  br label %end
+
+dead:
+  call void @someArbitraryFunction()
+  br label %end
+
+end:
+  call void @someArbitraryFunction()
+  ret void
+}
+
+define void @liveAcrossLoop(i1 %repeat) {
+entry:
+  %ptr = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %ptr)
+  br label %loop
+
+loop:
+  call void @someArbitraryFunction()
+  call void @usePointer(ptr %ptr)
+  br i1 %repeat, label %loop, label %end
+
+end:
+  call void @someArbitraryFunction()
+  ret void
+}
+
+declare {ptr, i32} @getAggregate()
+declare void @useAggregate({ptr, i32})
+
+define void @liveAggregate() {
+  %value = call {ptr, i32} @getAggregate()
+  %ptr = extractvalue {ptr, i32} %value, 0
+  call void @runtime.trackPointer(ptr %ptr)
+  call void @someArbitraryFunction()
+  call void @useAggregate({ptr, i32} %value)
+  call void @someArbitraryFunction()
+  ret void
+}
+
+define void @deadStackAllocation() {
+  %storage = alloca ptr
+  %ptr = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %ptr)
+  store ptr %ptr, ptr %storage
+  call void @someArbitraryFunction()
+  %loaded = load ptr, ptr %storage
+  call void @runtime.trackPointer(ptr %loaded)
+  call void @usePointer(ptr %loaded)
+  call void @someArbitraryFunction()
+  ret void
+}
+
+define void @escapedStackAllocation() {
+  %storage = alloca ptr
+  %ptr = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %ptr)
+  store ptr %ptr, ptr %storage
+  store ptr %storage, ptr @ptrGlobal
+  call void @someArbitraryFunction()
+  ret void
+}
+
+define void @deadByteArrayStackAllocation() {
+  %storage = alloca [32 x i8], align 4
+  %ptr = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %ptr)
+  store ptr %ptr, ptr %storage
+  call void @someArbitraryFunction()
+  %loaded = load ptr, ptr %storage
+  call void @runtime.trackPointer(ptr %loaded)
+  call void @usePointer(ptr %loaded)
+  call void @someArbitraryFunction()
+  ret void
+}
+
+define void @deadPointerFreeStackAllocation() {
+  %storage = alloca [32 x i8], align 4, !tinygo.gc.pointerfree !0
+  store i32 42, ptr %storage
+  call void @readPointerStorage(ptr %storage)
+  call void @someArbitraryFunction()
+  ret void
+}
+
+define void @promotedPointerFreeStackAllocation() {
+  %storage = call align 4 ptr @runtime.alloc(i32 32, ptr inttoptr (i32 3 to ptr))
+  store i32 42, ptr %storage
+  call void @readPointerStorage(ptr %storage)
+  call void @someArbitraryFunction()
+  ret void
+}
+
+define void @promotedPointerStackAllocation() {
+  %storage = call align 4 ptr @runtime.alloc(i32 32, ptr inttoptr (i32 67 to ptr))
+  %ptr = call ptr @getPointer()
+  store ptr %ptr, ptr %storage
+  call void @readPointerStorage(ptr %storage)
+  call void @someArbitraryFunction()
+  ret void
+}
+
+define void @mergedPointerFreeStackAllocation([8 x i32] %bytes) {
+  %source = alloca [32 x i8], align 4, !tinygo.gc.pointerfree !0
+  %destination = alloca [32 x i8], align 4
+  store [8 x i32] %bytes, ptr %source
+  call void @readPointerStorage(ptr %source)
+  call void @llvm.memcpy.p0.p0.i32(ptr align 4 %destination, ptr align 4 %source, i32 32, i1 false)
+  %ptr = call ptr @getPointer()
+  store ptr %ptr, ptr %destination
+  call void @readPointerStorage(ptr %destination)
+  call void @someArbitraryFunction()
+  ret void
+}
+
+declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+
+declare void @llvm.lifetime.start.p0(ptr captures(none))
+declare void @llvm.lifetime.end.p0(ptr captures(none))
+declare void @readPointerStorage(ptr captures(none) readonly)
+
+!0 = !{}
+
+define void @deadStackLifetime(i1 %condition) {
+entry:
+  %storage = alloca ptr
+  br i1 %condition, label %active, label %end
+
+active:
+  call void @llvm.lifetime.start.p0(ptr %storage)
+  %ptr = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %ptr)
+  store ptr %ptr, ptr %storage
+  call void @readPointerStorage(ptr %storage)
+  call void @someArbitraryFunction()
+  call void @llvm.lifetime.end.p0(ptr %storage)
+  br label %end
+
+end:
+  call void @someArbitraryFunction()
+  ret void
+}
+
+define void @restartedStackLifetime() {
+  %storage = alloca ptr
+  call void @llvm.lifetime.start.p0(ptr %storage)
+  %first = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %first)
+  store ptr %first, ptr %storage
+  call void @readPointerStorage(ptr %storage)
+  call void @llvm.lifetime.end.p0(ptr %storage)
+  call void @someArbitraryFunction()
+  call void @llvm.lifetime.start.p0(ptr %storage)
+  %second = call ptr @getPointer()
+  call void @runtime.trackPointer(ptr %second)
+  store ptr %second, ptr %storage
+  call void @readPointerStorage(ptr %storage)
+  call void @llvm.lifetime.end.p0(ptr %storage)
+  call void @someArbitraryFunction()
+  call void @llvm.lifetime.start.p0(ptr %storage)
+  call void @llvm.lifetime.end.p0(ptr %storage)
+  call void @someArbitraryFunction()
+  ret void
+}
+
 declare void @"(internal/task).Pause"()
 
 define ptr @getAndPause() {

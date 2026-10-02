@@ -189,6 +189,38 @@ func testInteriorFinalizers() {
 	panic("interior finalizers did not run exactly once")
 }
 
+func testRootLiveness() {
+	if runtime.GOARCH != "wasm" {
+		return
+	}
+	var done uint32
+	pointers := make([]*T, 10)
+	for i := range pointers {
+		pointers[i] = &T{x: i}
+		runtime.SetFinalizer(pointers[i], func(*T) {
+			atomic.AddUint32(&done, 1)
+		})
+	}
+	runtime.GC()
+	for i, p := range pointers {
+		if p.x != i {
+			panic("finalizer: live object corrupted")
+		}
+	}
+	if atomic.LoadUint32(&done) != 0 {
+		panic("finalizer: live object finalized")
+	}
+	pointers = nil
+	for i := 0; i < 100 && atomic.LoadUint32(&done) != 10; i++ {
+		runtime.GC()
+		runtime.Gosched()
+	}
+	if atomic.LoadUint32(&done) != 10 {
+		println("finalized:", atomic.LoadUint32(&done))
+		panic("finalizer: dead roots retained in active frame")
+	}
+}
+
 func main() {
 	if finalizerTestMode == "interior" {
 		testInteriorFinalizers()
@@ -217,6 +249,7 @@ func main() {
 		}
 		return
 	}
+	testRootLiveness()
 	testFires()
 	testClear()
 	testReplace()
