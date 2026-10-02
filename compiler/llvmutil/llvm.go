@@ -15,6 +15,17 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+// MarkPointerFreeAlloca preserves the original allocation layout, not its LLVM type.
+// See compilerContext.createObjectLayout in compiler/llvm.go.
+func MarkPointerFreeAlloca(alloca llvm.Value) {
+	ctx := alloca.Type().Context()
+	alloca.SetMetadata(ctx.MDKindID("tinygo.gc.pointerfree"), ctx.MDNode(nil))
+}
+
+func IsPointerFreeAlloca(alloca llvm.Value) bool {
+	return !alloca.Metadata(alloca.Type().Context().MDKindID("tinygo.gc.pointerfree")).IsNil()
+}
+
 // CreateEntryBlockAlloca creates a new alloca in the entry block, even though
 // the IR builder is located elsewhere. It assumes that the insert point is
 // at the end of the current block.
