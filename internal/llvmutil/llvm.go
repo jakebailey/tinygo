@@ -157,6 +157,16 @@ func (stub *InterfaceStub) Apply(fn llvm.Value) {
 	}
 }
 
+// MarkPointerFreeAlloca records that the original allocation layout has no pointers.
+func MarkPointerFreeAlloca(alloca llvm.Value) {
+	ctx := alloca.Type().Context()
+	alloca.SetMetadata(ctx.MDKindID("tinygo.gc.pointerfree"), ctx.MDNode(nil))
+}
+
+func IsPointerFreeAlloca(alloca llvm.Value) bool {
+	return !alloca.Metadata(alloca.Type().Context().MDKindID("tinygo.gc.pointerfree")).IsNil()
+}
+
 // CreateEntryBlockAlloca creates a new alloca in the entry block, even though
 // the IR builder is located elsewhere. It assumes that the insert point is
 // at the end of the current block.

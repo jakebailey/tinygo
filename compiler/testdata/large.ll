@@ -548,7 +548,7 @@ define hidden i8 @main.selectLargeChannel(ptr dereferenceable_or_null(44) %ch, p
 entry:
   %select.block.alloca = alloca [2 x %runtime.channelOp], align 8
   %select.states.alloca = alloca [2 x %runtime.chanSelectState], align 8
-  %select.recvbuf.alloca = alloca [1025 x i8], align 1
+  %select.recvbuf.alloca = alloca [1025 x i8], align 1, !tinygo.gc.pointerfree !0
   %stackalloc = alloca i8, align 1
   call void @llvm.lifetime.start.p0(ptr nonnull %select.recvbuf.alloca)
   call void @llvm.lifetime.start.p0(ptr nonnull %select.states.alloca)
@@ -739,3 +739,5 @@ attributes #11 = { "target-features"="+bulk-memory,+bulk-memory-opt,+call-indire
 attributes #12 = { nounwind "target-features"="+bulk-memory,+bulk-memory-opt,+call-indirect-overlong,+mutable-globals,+nontrapping-fptoint,+sign-ext,-multivalue,-reference-types" "tinygo-gowrapper"="main.readLargeValue" }
 attributes #13 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
 attributes #14 = { nounwind }
+
+!0 = !{}
