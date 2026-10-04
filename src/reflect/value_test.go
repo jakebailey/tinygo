@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 func TestTinyIndirectPointers(t *testing.T) {
@@ -36,6 +37,31 @@ func TestTinyIndirectPointers(t *testing.T) {
 
 	if v1.Elem().Index(0).Uint() != 0xaa {
 		t.Errorf("bad indirect array index via reflect")
+	}
+}
+
+func TestTinySetPointer(t *testing.T) {
+	type pointer unsafe.Pointer
+	var p pointer
+	value := ValueOf(&p).Elem()
+	object := new(int)
+	*object = 17
+	value.SetPointer(unsafe.Pointer(object))
+	runtime.GC()
+	if got := *(*int)(unsafe.Pointer(p)); got != 17 {
+		t.Fatalf("SetPointer stored %d, want 17", got)
+	}
+	value.SetPointer(nil)
+	if p != nil {
+		t.Fatal("SetPointer(nil) did not clear the pointer")
+	}
+	shouldPanic("", func() { ValueOf(p).SetPointer(nil) })
+	shouldPanic("", func() { ValueOf(new(*int)).Elem().SetPointer(nil) })
+	shouldPanic("", func() { Value{}.SetPointer(nil) })
+	fields := struct{ pointer unsafe.Pointer }{unsafe.Pointer(object)}
+	shouldPanic("", func() { ValueOf(&fields).Elem().Field(0).SetPointer(nil) })
+	if fields.pointer != unsafe.Pointer(object) {
+		t.Fatal("SetPointer changed an unexported field")
 	}
 }
 

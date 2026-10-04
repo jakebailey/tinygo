@@ -1371,6 +1371,17 @@ func (v Value) SetComplex(x complex128) {
 	}
 }
 
+// SetPointer sets v to x. It panics unless v is a settable UnsafePointer.
+// See https://pkg.go.dev/reflect#Value.SetPointer.
+func (v Value) SetPointer(x unsafe.Pointer) {
+	v.checkAddressable()
+	v.checkRO()
+	if v.Kind() != UnsafePointer {
+		panic(&ValueError{Method: "reflect.Value.SetPointer", Kind: v.Kind()})
+	}
+	*(*unsafe.Pointer)(v.value) = x
+}
+
 func (v Value) SetString(x string) {
 	v.checkAddressable()
 	v.checkRO()

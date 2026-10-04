@@ -4149,7 +4149,6 @@ func TestValuePanic(t *testing.T) {
 */
 
 func shouldPanic(expect string, f func()) {
-	return
 	defer func() {
 		r := recover()
 		if r == nil {
