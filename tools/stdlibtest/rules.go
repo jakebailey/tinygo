@@ -439,7 +439,6 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 
 	// TinyGo exceeds the upstream allocation budgets for these operations.
 	r.skipTest("bufio", `^TestReadStringAllocs$`)
-	r.skipTest("bytes", `^TestNewBufferShallow$`)
 	r.skipTest("crypto/ed25519", `^TestAllocations$`)
 	r.skipTest("crypto/rsa", `^TestAllocations$`)
 	r.skipTest("crypto/sha256", `^(TestAllocations|TestAllocatonsWithTypeAsserts)$`)
