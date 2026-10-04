@@ -18,8 +18,8 @@ pico2                    ./testdata/size-os                       2      17109  
 pico2                    ./testdata/size-timer                    z       9311     1777      112     5680
 pico2                    ./testdata/size-timer                    2      21083     1685      108     5688
 cortex-m-qemu            ./testdata/size-corpus                   z       8775     1297       80     4188
-cortex-m-qemu            ./testdata/size-corpus                   2      19856      808       72     4188
-riscv-qemu               ./testdata/size-corpus                   z      16196     1028       88    16668
+cortex-m-qemu            ./testdata/size-corpus                   2      19858      806       72     4188
+riscv-qemu               ./testdata/size-corpus                   z      16212     1028       88    16668
 riscv-qemu               ./testdata/size-corpus                   2      28226      846       80    16652
 cortex-m-qemu            ./testdata/size-init-recover             z       2559      761        4     4168
 cortex-m-qemu            ./testdata/size-init-recover             2       7628      252        4     4168
@@ -28,7 +28,7 @@ pico2                    ./testdata/size-init-regexp              2      26265  
 cortex-m-qemu            ./testdata/size-init-crc                 z       3738      766        4     4424
 cortex-m-qemu            ./testdata/size-init-crc                 2       9164      252        4     4424
 cortex-m-qemu            ./testdata/size-init-map                 z       2860      812      148     4168
-cortex-m-qemu            ./testdata/size-init-map                 2       8839      305      148     4168
+cortex-m-qemu            ./testdata/size-init-map                 2       8855      305      148     4168
 cortex-m-qemu            ./testdata/size-init-errors              z       2651      869       28     4168
 cortex-m-qemu            ./testdata/size-init-errors              2       7724      252        4     4168
 cortex-m-qemu            ./testdata/size-init-config              z       3161      783        4     4168

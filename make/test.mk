@@ -232,7 +232,7 @@ TEST_OPTIONS_unicode/utf8 := -skip='^(TestAllocationsDecode)$$'
 TEST_OPTIONS_context := -skip='^TestAllocs$$'
 TEST_OPTIONS_mime := -skip='^TestLookupMallocs$$'
 TEST_OPTIONS_net/textproto := -skip='^TestCommonHeaders$$'
-TEST_OPTIONS_reflect := -skip='^TestMapIterSet$$'
+TEST_OPTIONS_reflect :=
 TEST_OPTIONS_bytes := -skip='^(TestNewBufferShallow|TestReplace)$$'
 TEST_OPTIONS_slices := -skip='^(TestGrow|TestInsert|TestConcat)$$'
 TEST_OPTIONS_strings := -skip='^(TestBuilderAllocs|TestBuilderGrow|TestBuilderGrowSizeclasses|TestIndexRune|TestReplace)$$'
@@ -260,7 +260,7 @@ tinygo-test-fast: HOST_TEST_STACK_SKIP_FLAG = $(TEST_SKIP_FLAG)
 tinygo-test-baremetal: TEST_OPTIONS_strconv := -skip='TestCountMallocs|TestAllocationsFromBytes'
 tinygo-test-baremetal: TEST_OPTIONS_unicode/utf16 := -skip='TestAllocationsDecode'
 tinygo-test-baremetal: TEST_OPTIONS_unicode/utf8 := -skip='TestAllocationsDecode'
-tinygo-test-baremetal: TEST_OPTIONS_reflect := -skip='TestMapIterSet'
+tinygo-test-baremetal: TEST_OPTIONS_reflect :=
 
 # Explicit options replace default flags, even when empty.
 # https://www.gnu.org/software/make/manual/html_node/Origin-Function.html
