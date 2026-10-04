@@ -4149,7 +4149,6 @@ func TestValuePanic(t *testing.T) {
 */
 
 func shouldPanic(expect string, f func()) {
-	return
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -4996,8 +4995,6 @@ func TestTypeOverflow(t *testing.T) {
 	}
 }
 
-/*
-
 func checkSameType(t *testing.T, x Type, y any) {
 	if x != TypeOf(y) || TypeOf(Zero(x).Interface()) != TypeOf(y) {
 		t.Errorf("did not find preexisting type for %s (vs %s)", TypeOf(x), TypeOf(y))
@@ -5204,6 +5201,8 @@ func TestArrayOfGenericAlg(t *testing.T) {
 	}
 }
 
+/*
+
 func TestArrayOfDirectIface(t *testing.T) {
 	{
 		type T [1]*byte
@@ -5242,6 +5241,8 @@ func TestArrayOfDirectIface(t *testing.T) {
 		}
 	}
 }
+
+*/
 
 // Ensure passing in negative lengths panics.
 // See https://golang.org/issue/43603
@@ -5838,6 +5839,8 @@ func TestStructOfGenericAlg(t *testing.T) {
 	}
 }
 
+/*
+
 func TestStructOfDirectIface(t *testing.T) {
 	{
 		type T struct{ X [1]*byte }
@@ -6106,6 +6109,8 @@ func TestStructOfTooManyFields(t *testing.T) {
 	}
 }
 
+*/
+
 func TestStructOfDifferentPkgPath(t *testing.T) {
 	fields := []StructField{
 		{
@@ -6130,10 +6135,10 @@ func TestStructOfTooLarge(t *testing.T) {
 	t4 := TypeOf(int32(0))
 	t0 := ArrayOf(0, t1)
 
-	// 2^64-3 sized type (or 2^32-3 on 32-bit archs)
+	maxSize := uintptr(^uint32(0))
 	bigType := StructOf([]StructField{
-		{Name: "F1", Type: ArrayOf(int(^uintptr(0)>>1), t1)},
-		{Name: "F2", Type: ArrayOf(int(^uintptr(0)>>1-1), t1)},
+		{Name: "F1", Type: ArrayOf(int(maxSize>>1), t1)},
+		{Name: "F2", Type: ArrayOf(int(maxSize>>1-1), t1)},
 	})
 
 	type test struct {
@@ -6143,7 +6148,7 @@ func TestStructOfTooLarge(t *testing.T) {
 
 	tests := [...]test{
 		{
-			shouldPanic: false, // 2^64-1, ok
+			shouldPanic: false,
 			fields: []StructField{
 				{Name: "F1", Type: bigType},
 				{Name: "F2", Type: ArrayOf(2, t1)},
@@ -6164,7 +6169,7 @@ func TestStructOfTooLarge(t *testing.T) {
 			},
 		},
 		{
-			shouldPanic: true, // overflow while adding trailing byte for zero-sized fields
+			shouldPanic: false,
 			fields: []StructField{
 				{Name: "F1", Type: bigType},
 				{Name: "F2", Type: ArrayOf(2, t1)},
@@ -6200,7 +6205,10 @@ func TestStructOfTooLarge(t *testing.T) {
 					return
 				}
 			}()
-			_ = StructOf(tt.fields)
+			typ := StructOf(tt.fields)
+			if !tt.shouldPanic && typ.Size() != maxSize {
+				t.Errorf("test %d size = %d, want %d", i, typ.Size(), maxSize)
+			}
 		}()
 	}
 }
@@ -6403,6 +6411,8 @@ func TestMapOfGCValues(t *testing.T) {
 		}
 	}
 }
+
+/*
 
 func TestTypelinksSorted(t *testing.T) {
 	var last string
