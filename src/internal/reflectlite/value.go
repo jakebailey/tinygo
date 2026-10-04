@@ -2,6 +2,7 @@ package reflectlite
 
 import (
 	"internal/gclayout"
+	"internal/hashmap"
 	"math"
 	"unsafe"
 )
@@ -1198,23 +1199,31 @@ func (v Value) MapIndex(key Value) Value {
 //go:linkname hashmapNewIterator runtime.hashmapNewIterator
 func hashmapNewIterator() unsafe.Pointer
 
-//go:linkname hashmapResetIterator runtime.hashmapResetIterator
-func hashmapResetIterator(it unsafe.Pointer) unsafe.Pointer
-
 //go:linkname hashmapNext runtime.hashmapNext
 func hashmapNext(m unsafe.Pointer, it unsafe.Pointer, key, value unsafe.Pointer) bool
 
+//go:linkname hashmapIteratorNext runtime.hashmapIteratorNext
+func hashmapIteratorNext(m unsafe.Pointer, it *hashmap.Iterator) bool
+
 func (v Value) MapRange() *MapIter {
-	iter := &MapIter{}
-	iter.Reset(v)
-	return iter
+	v.checkMapRange()
+	return &MapIter{m: v}
+}
+
+//go:noinline
+func (v Value) checkMapRange() {
+	kind := Invalid
+	if v.IsValid() {
+		kind = v.Kind()
+	}
+	if kind != Map {
+		panic(&ValueError{Method: "MapRange", Kind: kind})
+	}
 }
 
 type MapIter struct {
-	m   Value
-	it  unsafe.Pointer
-	key Value
-	val Value
+	m  Value
+	it hashmap.Iterator
 
 	started bool
 	valid   bool
@@ -1228,9 +1237,20 @@ func (it *MapIter) Key() Value {
 		panic("reflect: MapIter.Key called on exhausted iterator")
 	}
 
-	key := it.key.Elem()
-	key.flags |= it.m.flags & valueFlagRO
-	return key
+	return copyMapIterValue(it.m.typecode.Key(), it.it.Key, it.m.flags)
+}
+
+func copyMapIterValue(typ Type, ptr unsafe.Pointer, flags valueFlags) Value {
+	raw := typ.(*RawType)
+	size := raw.Size()
+	if size <= unsafe.Sizeof(uintptr(0)) {
+		ptr = loadSmallValue(ptr, size)
+	} else {
+		copy := alloc(size, raw.gcLayout())
+		memcpy(copy, ptr, size)
+		ptr = copy
+	}
+	return Value{typecode: raw, value: ptr, flags: valueFlagExported | flags&valueFlagRO}
 }
 
 func (v Value) SetIterKey(iter *MapIter) {
@@ -1246,7 +1266,7 @@ func (v Value) SetIterKey(iter *MapIter) {
 	if v.isRO() || iter.m.isRO() {
 		panic("reflect.Value.SetIterKey using value obtained using unexported field")
 	}
-	key := iter.key.Elem()
+	key := Value{typecode: iter.m.typecode.Key().(*RawType), value: iter.it.Key, flags: valueFlagIndirect | valueFlagExported}
 	if !key.typecode.AssignableTo(v.typecode) {
 		panic("reflect.Value.SetIterKey: value of type " + key.typecode.String() + " is not assignable to type " + v.typecode.String())
 	}
@@ -1261,9 +1281,7 @@ func (it *MapIter) Value() Value {
 		panic("reflect: MapIter.Value called on exhausted iterator")
 	}
 
-	value := it.val.Elem()
-	value.flags |= it.m.flags & valueFlagRO
-	return value
+	return copyMapIterValue(it.m.typecode.Elem(), it.it.Value, it.m.flags)
 }
 
 func (v Value) SetIterValue(iter *MapIter) {
@@ -1279,7 +1297,7 @@ func (v Value) SetIterValue(iter *MapIter) {
 	if v.isRO() || iter.m.isRO() {
 		panic("reflect.Value.SetIterValue using value obtained using unexported field")
 	}
-	value := iter.val.Elem()
+	value := Value{typecode: iter.m.typecode.Elem().(*RawType), value: iter.it.Value, flags: valueFlagIndirect | valueFlagExported}
 	if !value.typecode.AssignableTo(v.typecode) {
 		panic("reflect.Value.SetIterValue: value of type " + value.typecode.String() + " is not assignable to type " + v.typecode.String())
 	}
@@ -1293,11 +1311,8 @@ func (it *MapIter) Next() bool {
 	if it.started && !it.valid {
 		panic("reflect: MapIter.Next called on exhausted iterator")
 	}
-	it.key = New(it.m.typecode.Key())
-	it.val = New(it.m.typecode.Elem())
-
 	it.started = true
-	it.valid = hashmapNext(it.m.pointer(), it.it, it.key.value, it.val.value)
+	it.valid = hashmapIteratorNext(it.m.pointer(), &it.it)
 	return it.valid
 }
 
@@ -1306,12 +1321,8 @@ func (iter *MapIter) Reset(v Value) {
 		panic(&ValueError{Method: "MapRange", Kind: v.Kind()})
 	}
 
-	if v.IsValid() || iter.it != nil {
-		iter.it = hashmapResetIterator(iter.it)
-	}
+	iter.it = hashmap.Iterator{}
 	iter.m = v
-	iter.key = Value{}
-	iter.val = Value{}
 	iter.started = false
 	iter.valid = false
 }

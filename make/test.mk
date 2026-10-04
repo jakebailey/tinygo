@@ -231,7 +231,7 @@ TEST_ALLOC_MIME_SKIP_FLAG := -skip='^TestLookupMallocs$$'
 TEST_PACKAGES_ALLOC_TEXTPROTO := net/textproto
 TEST_ALLOC_TEXTPROTO_SKIP_FLAG := -skip='^TestCommonHeaders$$'
 TEST_PACKAGES_ALLOC_REFLECT := reflect
-TEST_ALLOC_REFLECT_SKIP_FLAG := -skip='^(TestMapIterSet|TestDeepEqualAllocs)$$'
+TEST_ALLOC_REFLECT_SKIP_FLAG := -skip='^TestDeepEqualAllocs$$'
 TEST_PACKAGES_ALLOC_BYTES := bytes
 TEST_ALLOC_BYTES_SKIP_FLAG := -skip='^(TestNewBufferShallow|TestEqual|TestIndex|TestLastIndex|TestReplace)$$'
 TEST_PACKAGES_ALLOC_SLICES := slices
@@ -363,7 +363,7 @@ tinygo-test-baremetal:
 	$(TINYGO) test -target riscv-qemu $(TEST_SKIP_FLAG) $(filter-out $(TEST_PACKAGES_ALLOCS),$(TEST_PACKAGES_BAREMETAL))
 	$(if $(filter $(TEST_PACKAGES_ALLOC_STRCONV),$(TEST_PACKAGES_BAREMETAL)),$(TINYGO) test -target riscv-qemu -skip='TestCountMallocs|TestAllocationsFromBytes' $(filter $(TEST_PACKAGES_ALLOC_STRCONV),$(TEST_PACKAGES_BAREMETAL)))
 	$(if $(filter $(TEST_PACKAGES_ALLOC_UNICODE),$(TEST_PACKAGES_BAREMETAL)),$(TINYGO) test -target riscv-qemu -skip='TestAllocationsDecode|TestRuneCountNonASCIIAllocation' $(filter $(TEST_PACKAGES_ALLOC_UNICODE),$(TEST_PACKAGES_BAREMETAL)))
-	$(if $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_BAREMETAL)),$(TINYGO) test -target riscv-qemu -skip='TestMapIterSet|TestDeepEqualAllocs' $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_BAREMETAL)))
+	$(if $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_BAREMETAL)),$(TINYGO) test -target riscv-qemu -skip='TestDeepEqualAllocs' $(filter $(TEST_PACKAGES_ALLOC_REFLECT),$(TEST_PACKAGES_BAREMETAL)))
 
 # Test external packages in a large corpus.
 test-corpus:
