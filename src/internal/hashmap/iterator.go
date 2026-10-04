@@ -11,4 +11,6 @@ type Iterator struct {
 	BucketIndex  uint8
 	StartIndex   uint8
 	Wrapped      bool
+	Key          unsafe.Pointer
+	Value        unsafe.Pointer
 }

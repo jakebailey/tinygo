@@ -97,14 +97,6 @@ func hashmapNewIterator() unsafe.Pointer {
 	return unsafe.Pointer(new(hashmapIterator))
 }
 
-func hashmapResetIterator(it unsafe.Pointer) unsafe.Pointer {
-	if it == nil {
-		return hashmapNewIterator()
-	}
-	*(*hashmapIterator)(it) = hashmapIterator{}
-	return it
-}
-
 // Get the topmost 8 bits of the hash, without using a special value (like 0).
 func hashmapTopHash(hash uint32) uint8 {
 	tophash := uint8(hash >> 24)
@@ -417,6 +409,17 @@ func hashmapGet(m *hashmap, key, value unsafe.Pointer, valueSize uintptr, hash u
 		return false
 	}
 
+	data := hashmapLookup(m, key, hash)
+	if data == nil {
+		memzero(value, m.valueSize)
+		return false
+	}
+	memcpy(value, data, m.valueSize)
+	return true
+}
+
+//go:nobounds
+func hashmapLookup(m *hashmap, key unsafe.Pointer, hash uint32) unsafe.Pointer {
 	tophash := hashmapTopHash(hash)
 	bucket := hashmapBucketAddrForHash(m, hash)
 
@@ -427,19 +430,15 @@ func hashmapGet(m *hashmap, key, value unsafe.Pointer, valueSize uintptr, hash u
 			if bucket.tophash[i] == tophash {
 				// This could be the key we're looking for.
 				if m.keyEqual(key, hashmapSlotKeyData(m, slotKey), m.keySize) {
-					// Found the key, copy it.
 					slotValue := hashmapSlotValue(m, bucket, i)
-					memcpy(value, hashmapSlotValueData(m, slotValue), m.valueSize)
-					return true
+					return hashmapSlotValueData(m, slotValue)
 				}
 			}
 		}
 		bucket = bucket.next
 	}
 
-	// Did not find the key.
-	memzero(value, m.valueSize)
-	return false
+	return nil
 }
 
 // Delete a given key from the map. No-op when the key does not exist in the
@@ -485,6 +484,17 @@ func hashmapDelete(m *hashmap, key unsafe.Pointer, hash uint32) {
 //
 //go:nobounds
 func hashmapNext(m *hashmap, it *hashmapIterator, key, value unsafe.Pointer) bool {
+	if !hashmapIteratorNext(m, it) {
+		return false
+	}
+	memcpy(key, it.Key, m.keySize)
+	memcpy(value, it.Value, m.valueSize)
+	return true
+}
+
+//go:nobounds
+func hashmapIteratorNext(m *hashmap, it *hashmapIterator) bool {
+	it.Key, it.Value = nil, nil
 	if m == nil {
 		// From the spec: If the map is nil, the number of iterations is 0.
 		return false
@@ -534,13 +544,14 @@ func hashmapNext(m *hashmap, it *hashmapIterator, key, value unsafe.Pointer) boo
 
 		// Found a key.
 		slotKey := hashmapSlotKey(m, bucket, it.BucketIndex)
-		memcpy(key, hashmapSlotKeyData(m, slotKey), m.keySize)
+		key := hashmapSlotKeyData(m, slotKey)
 
+		var value unsafe.Pointer
 		if it.Buckets == m.buckets {
 			// Our view of the buckets is the same as the parent map.
 			// Just copy the value we have
 			slotValue := hashmapSlotValue(m, bucket, it.BucketIndex)
-			memcpy(value, hashmapSlotValueData(m, slotValue), m.valueSize)
+			value = hashmapSlotValueData(m, slotValue)
 			it.BucketIndex++
 		} else {
 			it.BucketIndex++
@@ -548,8 +559,8 @@ func hashmapNext(m *hashmap, it *hashmapIterator, key, value unsafe.Pointer) boo
 			// Our view of the buckets doesn't match the parent map.
 			// Look up the key in the new buckets and return that value if it exists
 			hash := m.keyHash(key, m.keySize, m.seed)
-			ok := hashmapGet(m, key, value, m.valueSize, hash)
-			if !ok {
+			value = hashmapLookup(m, key, hash)
+			if value == nil {
 				// doesn't exist in parent map; try next key
 				continue
 			}
@@ -557,6 +568,7 @@ func hashmapNext(m *hashmap, it *hashmapIterator, key, value unsafe.Pointer) boo
 			// All good.
 		}
 
+		it.Key, it.Value = key, value
 		return true
 	}
 }
