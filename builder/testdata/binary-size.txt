@@ -5,9 +5,9 @@ wioterminal     examples/pininterrupt    z    7848   1688  136  7280
 pico            examples/serial          z    7721   1071  112  5616
 pico            examples/serial          2   17717    851  108  5616
 pico2           examples/serial          z    6514   1174  112  5608
-pico2           examples/serial          2   17574    962  108  5608
+pico2           examples/serial          2   17590    962  108  5608
 esp32c3-generic examples/serial          z    4918    530    0  8648
-esp32c3-generic examples/serial          2   15306    314    8  8656
+esp32c3-generic examples/serial          2    9402    314    8  8656
 cortex-m-qemu   ./testdata/size-slice    z    3087    793    4  4168
 cortex-m-qemu   ./testdata/size-slice    2    8460    284    4  4168
 cortex-m-qemu   ./testdata/size-defer    z    3782    818    4  4176
@@ -16,6 +16,6 @@ pico2           ./testdata/size-contains z    6672   1160  112  5632
 pico2           ./testdata/size-os       z    6199   1209  128  5592
 pico2           ./testdata/size-os       2   17125   1003  128  5592
 cortex-m-qemu   ./testdata/size-corpus   z    9891   1301   80  4188
-cortex-m-qemu   ./testdata/size-corpus   2   20590    810   72  4188
-riscv-qemu      ./testdata/size-corpus   z   17588   1028   88 16660
-riscv-qemu      ./testdata/size-corpus   2   30184    744   80 16644
+cortex-m-qemu   ./testdata/size-corpus   2   20174    810   72  4188
+riscv-qemu      ./testdata/size-corpus   z   17636   1028   88 16660
+riscv-qemu      ./testdata/size-corpus   2   28306    846   80 16644
