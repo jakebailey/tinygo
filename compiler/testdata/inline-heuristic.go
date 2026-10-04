@@ -15,6 +15,33 @@ func inlineSingleCall(s string) (byte, bool) {
 	return inlineSlowPath(s)
 }
 
+type inlineAllocated struct {
+	value int
+}
+
+func inlineConstructor(value int) *inlineAllocated {
+	return &inlineAllocated{value: value}
+}
+
+func inlineConstructorWrapper(value int) *inlineAllocated {
+	return inlineConstructor(value)
+}
+
+func inlineConstructorChecked(value int) *inlineAllocated {
+	inlineDisabled()
+	return &inlineAllocated{value: value}
+}
+
+func inlineConstructorExpensive(value int) *inlineAllocated {
+	inlineDisabled()
+	inlineDisabled()
+	return &inlineAllocated{value: value}
+}
+
+func inlineNonAllocatingPointer(value *inlineAllocated) *inlineAllocated {
+	return value
+}
+
 func inlineComplexSlowPath(s string) (byte, bool) {
 	if s == "" {
 		return 0, false
@@ -86,6 +113,11 @@ func main() {
 		inlineFastPath("", inlineDisabled)
 	}
 	inlineSingleCall("")
+	inlineConstructor(1)
+	inlineConstructorWrapper(2)
+	inlineConstructorChecked(3)
+	inlineConstructorExpensive(4)
+	inlineNonAllocatingPointer(nil)
 	inlineComplexSlowPath("")
 	inlineTooExpensive("")
 	inlineRecursive(0)
