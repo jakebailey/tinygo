@@ -449,6 +449,13 @@ func main() {
 		println("reflect map interface key ok")
 	}
 
+	{
+		iter := reflect.ValueOf(map[[2]byte]uint16{{17, 25}: 42}).MapRange()
+		if !iter.Next() || iter.Key().Interface().([2]byte) != [2]byte{17, 25} || iter.Value().Uint() != 42 {
+			panic("map iterator changed inline values")
+		}
+	}
+
 	// An array element type that only reflect boxes must stay in the
 	// interface method dispatch. See issue #6168.
 	{
