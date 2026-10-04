@@ -13,7 +13,7 @@ cortex-m-qemu   ./testdata/size-slice  2    8460    284    4  4168
 cortex-m-qemu   ./testdata/size-defer  z    3782    818    4  4176
 pico2           ./testdata/size-os     z    6153   1207  128  5592
 pico2           ./testdata/size-os     2   17063   1001  128  5592
-cortex-m-qemu   ./testdata/size-corpus z    9907   1301   80  4188
-cortex-m-qemu   ./testdata/size-corpus 2   20174    810   72  4188
-riscv-qemu      ./testdata/size-corpus z   17668   1028   88 16660
-riscv-qemu      ./testdata/size-corpus 2   28306    846   80 16644
+cortex-m-qemu   ./testdata/size-corpus z    9937   1303   80  4188
+cortex-m-qemu   ./testdata/size-corpus 2   20352    808   72  4188
+riscv-qemu      ./testdata/size-corpus z   17684   1028   88 16660
+riscv-qemu      ./testdata/size-corpus 2   28434    846   80 16644
