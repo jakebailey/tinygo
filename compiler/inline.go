@@ -188,7 +188,39 @@ func (b *builder) shouldInlineCall(fn *ssa.Function) bool {
 	if cost.decision != inlineAllowed || b.hasInlineCycle(fn) {
 		return false
 	}
-	return b.SizeLevel == 0 || hasInlineFastPath(fn)
+	return b.SizeLevel == 0 || hasInlineFastPath(fn) || b.returnsInlineAllocation(fn, make(map[*ssa.Function]bool))
+}
+
+func (c *compilerContext) returnsInlineAllocation(fn *ssa.Function, seen map[*ssa.Function]bool) bool {
+	if seen[fn] || c.inlineCost(fn).decision != inlineAllowed {
+		return false
+	}
+	seen[fn] = true
+	var allocated func(ssa.Value) bool
+	allocated = func(value ssa.Value) bool {
+		switch value := value.(type) {
+		case *ssa.Alloc:
+			return value.Heap
+		case *ssa.ChangeType:
+			return allocated(value.X)
+		case *ssa.Call:
+			callee := value.Common().StaticCallee()
+			return callee != nil && c.returnsInlineAllocation(callee, seen)
+		}
+		return false
+	}
+	for _, block := range fn.Blocks {
+		for _, instruction := range block.Instrs {
+			if ret, ok := instruction.(*ssa.Return); ok {
+				for _, result := range ret.Results {
+					if allocated(result) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (b *builder) addInlineCallSiteAttribute(call llvm.Value, fn *ssa.Function) {

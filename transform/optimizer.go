@@ -89,6 +89,9 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 			return []error{fmt.Errorf("could not build pass pipeline: %w", err)}
 		}
 
+		if err := mod.RunPasses("always-inline,function-attrs", llvm.TargetMachine{}, po); err != nil {
+			return []error{fmt.Errorf("could not inline before escape analysis: %w", err)}
+		}
 		// Run TinyGo-specific interprocedural optimizations.
 		if config.Options.PrintAllocs != nil && config.Options.PrintAllocsCover {
 			// The go coverage tool expects this header before any blocks.
