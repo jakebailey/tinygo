@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 func TestTinyIndirectPointers(t *testing.T) {
@@ -37,6 +38,26 @@ func TestTinyIndirectPointers(t *testing.T) {
 	if v1.Elem().Index(0).Uint() != 0xaa {
 		t.Errorf("bad indirect array index via reflect")
 	}
+}
+
+func TestTinyInterfaceData(t *testing.T) {
+	var empty any
+	var nonempty error = fmt.Errorf("interface data")
+	fields := struct{ hidden any }{new(int)}
+	for _, test := range []struct {
+		value  Value
+		header unsafe.Pointer
+	}{
+		{ValueOf(&empty).Elem(), unsafe.Pointer(&empty)},
+		{ValueOf(&nonempty).Elem(), unsafe.Pointer(&nonempty)},
+		{ValueOf(&fields).Elem().Field(0), unsafe.Pointer(&fields.hidden)},
+	} {
+		if got, want := test.value.InterfaceData(), *(*[2]uintptr)(test.header); got != want {
+			t.Errorf("InterfaceData = %v, want %v", got, want)
+		}
+	}
+	shouldPanic("", func() { ValueOf(1).InterfaceData() })
+	shouldPanic("", func() { Value{}.InterfaceData() })
 }
 
 func TestTinyInvalidValueString(t *testing.T) {
