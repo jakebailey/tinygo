@@ -313,6 +313,44 @@ func TestTrimPathTestPackages(t *testing.T) {
 	}
 }
 
+func TestWASIp2WorkingDirectory(t *testing.T) {
+	opts := optionsFromTarget("wasip2", sema)
+	emuCheck(t, opts)
+	config, err := builder.NewConfig(&opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	result, err := builder.Build("testdata/wasip2_cwd.go", "wasm", dir, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		pwd  string
+		cwd  string
+	}{
+		{"NestedPreopen", "/workspace/testdata", "/workspace/testdata"},
+		{"NormalizedPWD", "/workspace/../workspace/testdata/", "/workspace/testdata/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			output, err := exec.CommandContext(ctx, "wasmtime", "run", "--dir="+wd+"::/workspace",
+				"--dir="+filepath.Join(wd, "testdata")+"::/workspace/test",
+				"--env=PWD="+tc.pwd, "--env=EXPECT_CWD="+tc.cwd,
+				result.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("failed to run: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
 func TestBuild(t *testing.T) {
 	t.Parallel()
 
