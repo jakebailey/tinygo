@@ -734,6 +734,10 @@ func (c *Config) Emulator(format, binary string) ([]string, error) {
 	}
 	var emulator []string
 	for _, s := range parts {
+		if c.TestConfig.CompileTestBinary && c.EmulatorName() == "wasmtime" && s == "--dir={tmpDir}::/tmp" {
+			// Tests mount the host root, so do not shadow its /tmp directory.
+			continue
+		}
 		s = strings.ReplaceAll(s, "{root}", goenv.Get("TINYGOROOT"))
 		// Allow replacement of what's usually /tmp except notably Windows.
 		s = strings.ReplaceAll(s, "{tmpDir}", os.TempDir())

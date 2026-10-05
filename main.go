@@ -333,33 +333,6 @@ func Test(pkgName string, stdout, stderr io.Writer, options *compileopts.Options
 	return passed, err
 }
 
-func dirsToModuleRootRel(maindir, modroot string) []string {
-	var dirs []string
-	last := ".."
-	// strip off path elements until we hit the module root
-	// adding `..`, `../..`, `../../..` until we're done
-	for maindir != modroot {
-		dirs = append(dirs, last)
-		last = filepath.Join(last, "..")
-		maindir = filepath.Dir(maindir)
-	}
-	dirs = append(dirs, ".")
-	return dirs
-}
-
-func dirsToModuleRootAbs(maindir, modroot string) []string {
-	var dirs = []string{maindir}
-	last := filepath.Join(maindir, "..")
-	// strip off path elements until we hit the module root
-	// adding `..`, `../..`, `../../..` until we're done
-	for maindir != modroot {
-		dirs = append(dirs, last)
-		last = filepath.Join(last, "..")
-		maindir = filepath.Dir(maindir)
-	}
-	return dirs
-}
-
 // validateOutputFormat checks if the output file extension matches the expected format
 func validateOutputFormat(outpath, expectedExt string) error {
 	actualExt := filepath.Ext(outpath)
@@ -977,30 +950,23 @@ func buildAndRun(pkgName string, config *compileopts.Config, stdout io.Writer, c
 				emulator = emulator[1:]
 			}
 
-			wd, _ := os.Getwd()
-
-			// Below adds additional wasmtime flags in case a test reads files
-			// outside its directory, like "../testdata/e.txt". This allows any
-			// relative directory up to the module root, even if the test never
-			// reads any files.
-			if config.TestConfig.CompileTestBinary {
-				// Set working directory to package dir
-				wd = result.MainDir
-
-				// Add relative dirs (../, ../..) up to module root (for wasip1)
-				dirs := dirsToModuleRootRel(result.MainDir, result.ModuleRoot)
-
-				// Add absolute dirs up to module root (for wasip2)
-				dirs = append(dirs, dirsToModuleRootAbs(result.MainDir, result.ModuleRoot)...)
-
-				for _, d := range dirs {
-					emuArgs = append(emuArgs, "--dir="+d)
-				}
-			} else {
-				emuArgs = append(emuArgs, "--dir=.")
+			wd, err := os.Getwd()
+			if err != nil {
+				return result, err
 			}
 
-			emuArgs = append(emuArgs, "--dir="+wd)
+			if config.TestConfig.CompileTestBinary {
+				// Match Go's WASI runner in lib/wasm/go_wasip1_wasm_exec.
+				emuArgs = append(emuArgs, "--dir=/")
+				// Resolve virtual GOROOT links created by loader/goroot.go.
+				wd, err = filepath.EvalSymlinks(result.MainDir)
+				if err != nil {
+					return result, fmt.Errorf("could not resolve WASI test directory: %w", err)
+				}
+			} else {
+				emuArgs = append(emuArgs, "--dir=.", "--dir="+wd)
+			}
+
 			emuArgs = append(emuArgs, "--env=PWD="+wd)
 			for _, v := range environmentVars {
 				emuArgs = append(emuArgs, "--env", v)

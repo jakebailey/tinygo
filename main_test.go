@@ -1713,6 +1713,154 @@ func TestWASIWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestWASIStdlibDirectory(t *testing.T) {
+	t.Parallel()
+	for _, target := range []string{"wasip1", "wasip2"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+			opts := optionsFromTarget(target, sema)
+			opts.Tags = append(opts.Tags, "runtime_asserts")
+			opts.TestConfig.CompileTestBinary = true
+			emuCheck(t, opts)
+			config, err := builder.NewConfig(&opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output := &bytes.Buffer{}
+			_, err = buildAndRun("html/template", config, output,
+				[]string{"-test.run=^TestEmptyTemplateHTML$"},
+				nil, time.Minute, func(cmd *exec.Cmd, result builder.BuildResult) error {
+					physicalDir, err := filepath.EvalSymlinks(result.MainDir)
+					if err != nil {
+						return err
+					}
+					if !slices.Contains(cmd.Args, "--env=PWD="+physicalDir) {
+						t.Errorf("test cwd does not match the physical package directory %q", physicalDir)
+					}
+					return cmd.Run()
+				})
+			if err != nil {
+				t.Fatalf("failed to run: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
+func TestWASITestPreopens(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	pkgDir := filepath.Join(dir, "package")
+	if err := os.MkdirAll(filepath.Join(pkgDir, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pkgNameForTest := pkgDir
+	if runtime.GOOS != "windows" {
+		pkgNameForTest = filepath.Join(dir, "alias")
+		if err := os.Symlink(pkgDir, pkgNameForTest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, data := range map[string]string{
+		"go.mod":              "module example.com/wasi-test-root\n\ngo 1.23\n",
+		"parent.txt":          "fixture\n",
+		"package/fixture.txt": "fixture\n",
+		"package/access_test.go": `package access
+
+import (
+	"io"
+	"os"
+	"testing"
+)
+
+func TestFileAccess(t *testing.T) {
+	for _, name := range []string{"fixture.txt", "../parent.txt", "/custom/parent.txt"} {
+		if data, err := os.ReadFile(name); err != nil || string(data) != "fixture\n" {
+			t.Fatalf("read %q: %q, %v", name, data, err)
+		}
+	}
+	f, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if data, err := io.ReadAll(f); err != nil || len(data) != 0 {
+		t.Fatalf("read null: %q, %v", data, err)
+	}
+	if n, err := io.WriteString(f, "discard"); err != nil || n != 7 {
+		t.Fatalf("write null: %d, %v", n, err)
+	}
+	if err := os.Chdir("child"); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile("../../parent.txt"); err != nil || string(data) != "fixture\n" {
+		t.Fatalf("read after chdir: %q, %v", data, err)
+	}
+	tmp, err := os.CreateTemp("", "wasi-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"wasip1", "wasip2"} {
+		for _, compileTest := range []bool{false, true} {
+			name := "Run"
+			pkgName := "testdata/stdlib.go"
+			if compileTest {
+				name = "Test"
+				pkgName = pkgNameForTest
+			}
+			t.Run(target+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				opts := optionsFromTarget(target, sema)
+				opts.TestConfig.CompileTestBinary = compileTest
+				if compileTest {
+					opts.Directory = pkgDir
+				}
+				emuCheck(t, opts)
+				config, err := builder.NewConfig(&opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				custom := "--dir=" + dir + "::/custom"
+				config.Target.Emulator = strings.Replace(config.Target.Emulator, " {}", " "+custom+" {}", 1)
+				output := &bytes.Buffer{}
+				_, err = buildAndRun(pkgName, config, output, nil, nil, time.Minute, func(cmd *exec.Cmd, _ builder.BuildResult) error {
+					var dirs []string
+					for _, arg := range cmd.Args {
+						if strings.HasPrefix(arg, "--dir=") {
+							dirs = append(dirs, arg)
+						}
+					}
+					want := []string{"--dir=.", "--dir=" + wd, "--dir=" + os.TempDir() + "::/tmp", custom}
+					if compileTest {
+						want = []string{"--dir=/", custom}
+					}
+					if !slices.Equal(dirs, want) {
+						t.Errorf("preopens = %v, want %v", dirs, want)
+					}
+					return cmd.Run()
+				})
+				if err != nil {
+					t.Fatalf("failed to run: %v\n%s", err, output)
+				}
+			})
+		}
+	}
+}
+
 func TestTest(t *testing.T) {
 	t.Parallel()
 
