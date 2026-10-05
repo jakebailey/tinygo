@@ -208,8 +208,7 @@ func valueEscapesAtImpl(value llvm.Value, allowReturn bool, visiting map[llvm.Va
 			if !result.merge(valueEscapesAtImpl(use, allowReturn, visiting)) {
 				return result
 			}
-		case llvm.BitCast:
-			// A bitcast escapes if the casted-to value escapes.
+		case llvm.BitCast, llvm.PHI, llvm.Select:
 			if !result.merge(valueEscapesAtImpl(use, allowReturn, visiting)) {
 				return result
 			}
