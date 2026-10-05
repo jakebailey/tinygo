@@ -6,6 +6,7 @@ package interp
 import (
 	"strings"
 
+	"github.com/tinygo-org/tinygo/compiler/llvmutil"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -15,11 +16,12 @@ import (
 // Functions are in SSA form, just like the LLVM version if it. The first block
 // (blocks[0]) is the entry block.
 type function struct {
-	llvmFn llvm.Value
-	name   string       // precalculated llvmFn.Name()
-	params []llvm.Value // precalculated llvmFn.Params()
-	blocks []*basicBlock
-	locals map[llvm.Value]int
+	llvmFn     llvm.Value
+	name       string       // precalculated llvmFn.Name()
+	params     []llvm.Value // precalculated llvmFn.Params()
+	blocks     []*basicBlock
+	locals     map[llvm.Value]int
+	attributes llvmutil.FunctionUsageAttributes
 }
 
 // basicBlock represents a LLVM basic block and contains a slice of
@@ -64,10 +66,11 @@ func (inst *instruction) String() string {
 // that the interpreter doesn't have to call into LLVM.
 func (r *runner) compileFunction(llvmFn llvm.Value) *function {
 	fn := &function{
-		llvmFn: llvmFn,
-		name:   llvmFn.Name(),
-		params: llvmFn.Params(),
-		locals: make(map[llvm.Value]int),
+		llvmFn:     llvmFn,
+		name:       llvmFn.Name(),
+		params:     llvmFn.Params(),
+		locals:     make(map[llvm.Value]int),
+		attributes: llvmutil.ReadFunctionUsageAttributes(llvmFn),
 	}
 	if llvmFn.IsDeclaration() {
 		// Nothing to do.

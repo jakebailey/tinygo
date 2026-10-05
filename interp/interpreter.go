@@ -21,6 +21,7 @@ const DefaultMaxInterpBlockEntries = 1000
 
 func (r *runner) run(fn *function, params []value, parentMem *memoryView, indent string) (value, memoryView, *Error) {
 	mem := memoryView{r: r, parent: parentMem}
+	mem.attributes = mem.attributes.Merge(fn.attributes)
 	locals := make([]value, len(fn.locals))
 	r.callsExecuted++
 
