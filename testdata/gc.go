@@ -26,6 +26,21 @@ func main() {
 	testGlobalChannelRoots()
 	testReflectRoots()
 	testKeepAlive()
+	testMemStatsAllocations()
+}
+
+var memStatsObject *[16]byte
+
+func testMemStatsAllocations() {
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	memStatsObject = new([16]byte)
+	memStatsObject[0] = 42
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(memStatsObject)
+	if after.Mallocs <= before.Mallocs {
+		panic("MemStats did not count a heap allocation")
+	}
 }
 
 var scalarSlices [4][]byte
