@@ -141,6 +141,11 @@ If you did not clone the repository with the `--recursive` option, you will get 
 
     git submodule update --init
 
+The experimental Boehm object counters use `builder/bdwgc.patch`.
+TinyGo applies this patch to a private source and header copy on an archive
+cache miss, without modifying `lib/bdwgc`. Patch changes automatically change
+the archive cache key. Rebuild the TinyGo compiler after editing the patch.
+
 The release tarball is stored in build/release.tar.gz, and can be extracted with
 the following command (for example in ~/lib):
 

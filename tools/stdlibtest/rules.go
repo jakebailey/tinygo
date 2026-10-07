@@ -522,9 +522,6 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	} else {
 		r.skipTest("flag", `^TestDefineAfterSet$`)
 	}
-	// Boehm does not reclaim unreachable timers and tickers in this test.
-	r.skipTest("time", `^TestTimerGC$`)
-
 	// Both tests start subprocesses. macOS startProcess is a stub.
 	if darwin {
 		r.skipTest("flag", `^TestExitCode$`)
