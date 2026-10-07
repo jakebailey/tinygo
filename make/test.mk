@@ -239,11 +239,11 @@ TEST_OPTIONS_strings := -skip='^(TestBuilderAllocs|TestBuilderGrow|TestBuilderGr
 TEST_OPTIONS_crypto/mldsa := -short -stack-size=1MB -skip='^TestAllocations$$'
 TEST_OPTIONS_encoding/gob := -skip='^(TestIgnoreDepthLimit|TestCountDecodeMallocs)$$'
 
-tinygo-test tinygo-test-fast: TEST_OPTIONS_time := -skip='^TestTimerGC$$'
+tinygo-test tinygo-test-fast: TEST_OPTIONS_time :=
 ifeq ($(uname),Darwin)
 # These tests start 1,000 to 5,000 goroutines and can exceed macOS's thread limit.
 # https://go.dev/src/time/sleep_test.go and https://go.dev/src/time/tick_test.go
-tinygo-test tinygo-test-fast: TEST_OPTIONS_time := -skip='^(TestTimerGC|TestStopResult|TestResetResult|TestLongAdjustTimers)$$|^TestZeroTimer$$/^impl=(func|cache)$$'
+tinygo-test tinygo-test-fast: TEST_OPTIONS_time := -skip='^(TestStopResult|TestResetResult|TestLongAdjustTimers)$$|^TestZeroTimer$$/^impl=(func|cache)$$'
 endif
 tinygo-test tinygo-test-fast: TEST_OPTIONS_go/printer := -stack-size=1MB
 tinygo-test tinygo-test-fast: TEST_OPTIONS_encoding/gob := -stack-size=1MB -skip='^TestCountDecodeMallocs$$'
