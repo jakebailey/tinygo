@@ -2,6 +2,7 @@ package builder
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -37,6 +38,9 @@ type Library struct {
 	// The source directory.
 	sourceDir func() string
 
+	// A unified diff applied to a private copy of the source directory.
+	sourcePatch []byte
+
 	// The source files, relative to sourceDir.
 	librarySources func(target string, libcNeedsMalloc bool) ([]string, error)
 
@@ -53,7 +57,7 @@ type Library struct {
 // As a side effect, this call creates the library header files if they didn't
 // exist yet.
 func (l *Library) load(config *compileopts.Config, tmpdir string) (job *compileJob, abortLock func(), err error) {
-	outdir := config.LibraryPath(l.name)
+	outdir := l.cachePath(config)
 	archiveFilePath := filepath.Join(outdir, "lib.a")
 
 	// Create a lock on the output (if supported).
@@ -73,6 +77,15 @@ func (l *Library) load(config *compileopts.Config, tmpdir string) (job *compileJ
 	}
 	// Cache miss, build it now.
 
+	sourceDir := l.sourceDir()
+	originalSourceDir := sourceDir
+	if len(l.sourcePatch) != 0 {
+		sourceDir = filepath.Join(tmpdir, "source-"+l.name)
+		if err := prepareLibrarySources(originalSourceDir, sourceDir, l.sourcePatch); err != nil {
+			return nil, nil, fmt.Errorf("patch %s sources: %w", l.name, err)
+		}
+	}
+
 	// Create the destination directory where the components of this library
 	// (lib.a file, include directory) are placed.
 	err = os.MkdirAll(filepath.Join(goenv.Get("GOCACHE"), outname), 0o777)
@@ -83,6 +96,9 @@ func (l *Library) load(config *compileopts.Config, tmpdir string) (job *compileJ
 
 	// Make headers if needed.
 	headerPath := filepath.Join(outdir, "include")
+	if len(l.sourcePatch) != 0 && l.makeHeaders == nil {
+		headerPath = filepath.Join(sourceDir, "include")
+	}
 	target := config.Triple()
 	if l.makeHeaders != nil {
 		if _, err = os.Stat(headerPath); err != nil {
@@ -137,6 +153,17 @@ func (l *Library) load(config *compileopts.Config, tmpdir string) (job *compileJ
 	// reproducible. Otherwise the temporary directory is stored in the archive
 	// itself, which varies each run.
 	args := append(l.cflags(target, headerPath), "-c", "-Oz", "-gdwarf-4", "-ffunction-sections", "-fdata-sections", "-Wno-macro-redefined", "--target="+compileopts.ClangTriple(target), "-fdebug-prefix-map="+dir+"="+remapDir)
+	if sourceDir != originalSourceDir {
+		sourcePath := originalSourceDir
+		if config.TrimPath() {
+			relative, err := filepath.Rel(goenv.Get("TINYGOROOT"), originalSourceDir)
+			if err != nil {
+				return nil, nil, err
+			}
+			sourcePath = config.CSourcePath(filepath.Join("github.com/tinygo-org/tinygo", relative))
+		}
+		args = append(args, "-ffile-prefix-map="+sourceDir+"="+sourcePath)
+	}
 	resourceDir := goenv.ClangResourceDir(config.TrimPath())
 	if config.TrimPath() {
 		args = append(args,
@@ -235,8 +262,6 @@ func (l *Library) load(config *compileopts.Config, tmpdir string) (job *compileJ
 			return robustRename(f.Name(), archiveFilePath)
 		},
 	}
-
-	sourceDir := l.sourceDir()
 
 	// Create jobs to compile all sources. These jobs are depended upon by the
 	// archive job above, so must be run first.

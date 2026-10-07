@@ -4,16 +4,20 @@ package builder
 // This file provides a way to compile this GC for use with TinyGo.
 
 import (
+	_ "embed"
 	"path/filepath"
 	"strings"
 
 	"github.com/tinygo-org/tinygo/goenv"
 )
 
+//go:embed bdwgc.patch
+var boehmSourcePatch []byte
+
 var BoehmGC = Library{
-	name: "bdwgc",
+	name:        "bdwgc",
+	sourcePatch: boehmSourcePatch,
 	cflags: func(target, headerPath string) []string {
-		libdir := filepath.Join(goenv.Get("TINYGOROOT"), "lib/bdwgc")
 		flags := []string{
 			// use a modern environment
 			"-DUSE_MMAP",              // mmap is available
@@ -53,7 +57,7 @@ var BoehmGC = Library{
 			//"-DGC_THREADS",
 			//"-DTHREAD_LOCAL_ALLOC",
 
-			"-I" + libdir + "/include",
+			"-I" + headerPath,
 		}
 		return flags
 	},
