@@ -1,0 +1,485 @@
+diff --git a/allchblk.c b/allchblk.c
+index 48677f19..05223f17 100644
+--- a/allchblk.c
++++ b/allchblk.c
+@@ -350,6 +350,7 @@ setup_header(hdr *hhdr, struct hblk *block, size_t lb_adjusted, int kind,
+   hhdr->hb_obj_kind = (unsigned char)kind;
+   hhdr->hb_flags = (unsigned char)flags;
+   hhdr->hb_block = block;
++  BZERO(hhdr->hb_alloc_bits, sizeof(hhdr->hb_alloc_bits));
+   descr = ok->ok_descriptor;
+ #if ALIGNMENT > GC_DS_TAGS
+   /*
+diff --git a/gcj_mlc.c b/gcj_mlc.c
+index 4516d8af..8ea56415 100644
+--- a/gcj_mlc.c
++++ b/gcj_mlc.c
+@@ -146,6 +146,8 @@ GC_core_gcj_malloc(size_t lb, const void *vtable_ptr, unsigned flags)
+       && (op = GC_gcjobjfreelist[lg = GC_size_map[lb]], LIKELY(op != NULL))) {
+     GC_gcjobjfreelist[lg] = (ptr_t)obj_link(op);
+     GC_bytes_allocd += GRANULES_TO_BYTES((word)lg);
++    GC_objects_allocd++;
++    GC_record_allocation(op);
+     GC_ASSERT(NULL == ((void **)op)[1]);
+   } else {
+     /*
+diff --git a/include/gc/gc.h b/include/gc/gc.h
+index 3cbc4f9c..5ac7ee2b 100644
+--- a/include/gc/gc.h
++++ b/include/gc/gc.h
+@@ -1076,6 +1076,15 @@ struct GC_prof_stats_s {
+ 
+   /** Total amount of memory obtained from OS, in bytes. */
+   GC_word obtained_from_os_bytes;
++
++  /** Cumulative allocated objects, including thread-local allocator reserves. */
++  unsigned long long objects_allocd;
++
++  /** Cumulative swept objects, explicit frees, and released local reserves. */
++  unsigned long long objects_freed;
++
++  /** Allocated objects not yet swept or explicitly released. */
++  unsigned long long objects_in_use;
+ };
+ 
+ /**
+diff --git a/include/private/gc_priv.h b/include/private/gc_priv.h
+index 8a0c0669..2d898ff8 100644
+--- a/include/private/gc_priv.h
++++ b/include/private/gc_priv.h
+@@ -1284,6 +1284,8 @@ struct hblkhdr {
+    */
+   size_t hb_sz;
+ 
++  word hb_alloc_bits[MARK_BITS_PER_HBLK / CPP_WORDSZ];
++
+   /* Object descriptor for marking.  See `gc_mark.h` file. */
+   word hb_descr;
+ 
+@@ -1542,6 +1544,11 @@ struct _GC_arrays {
+   /* Number of bytes allocated before this collection cycle. */
+   word _bytes_allocd_before_gc;
+ 
++#define GC_objects_allocd GC_arrays._objects_allocd
++#define GC_objects_freed GC_arrays._objects_freed
++  unsigned long long _objects_allocd;
++  unsigned long long _objects_freed;
++
+ #define GC_our_mem_bytes GC_arrays._our_mem_bytes
+   word _our_mem_bytes;
+ 
+@@ -2071,6 +2078,23 @@ GC_EXTERN struct obj_kind {
+ #define beginGC_obj_kinds ((ptr_t)(&GC_obj_kinds[0]))
+ #define endGC_obj_kinds (beginGC_obj_kinds + sizeof(GC_obj_kinds))
+ 
++GC_INNER void GC_record_allocation_list(void *);
++GC_INNER void GC_record_reclaimed_objects(hdr *, size_t);
++GC_INNER void GC_record_released_object(void *);
++
++#ifdef PARALLEL_MARK
++GC_EXTERN volatile AO_t GC_objects_allocd_tmp;
++GC_EXTERN volatile AO_t GC_objects_freed_tmp;
++GC_INNER void GC_flush_object_counts(void);
++#  define GC_objects_allocd_total \
++    (GC_objects_allocd + (unsigned long long)AO_load(&GC_objects_allocd_tmp))
++#  define GC_objects_freed_total \
++    (GC_objects_freed + (unsigned long long)AO_load(&GC_objects_freed_tmp))
++#else
++#  define GC_objects_allocd_total GC_objects_allocd
++#  define GC_objects_freed_total GC_objects_freed
++#endif
++
+ /*
+  * Variables `GC_bytes_allocd`, `GC_objfreelist` and `GC_aobjfreelist`
+  * are located inside `GC_arrays` by default.
+@@ -2302,6 +2326,21 @@ GC_INNER void GC_push_all_register_sections(
+                         : BYTES_TO_GRANULES(HBLK_OBJS(sz) * (sz)))
+ #endif /* !MARK_BIT_PER_OBJ */
+ 
++#ifdef PARALLEL_MARK
++#  define GC_set_alloc_bit(hhdr, n)                              \
++    AO_or((volatile AO_t *)&(hhdr)->hb_alloc_bits[divWORDSZ(n)], \
++          (AO_t)1 << modWORDSZ(n))
++#else
++#  define GC_set_alloc_bit(hhdr, n) \
++    (void)((hhdr)->hb_alloc_bits[divWORDSZ(n)] |= (word)1 << modWORDSZ(n))
++#endif
++
++#define GC_record_allocation(p)                                               \
++  do {                                                                        \
++    hdr *alloc_hdr = HDR(p);                                                  \
++    GC_set_alloc_bit(alloc_hdr, MARK_BIT_NO(HBLKDISPL(p), alloc_hdr->hb_sz)); \
++  } while (0)
++
+ /* Important internal collector routines. */
+ 
+ /* Return the current stack pointer, approximately. */
+diff --git a/malloc.c b/malloc.c
+index 9846e67e..7bf77c81 100644
+--- a/malloc.c
++++ b/malloc.c
+@@ -91,6 +91,8 @@ GC_alloc_large(size_t lb_adjusted, int kind, unsigned flags, size_t align_m1)
+   }
+ 
+   GC_bytes_allocd += lb_adjusted;
++  GC_objects_allocd++;
++  GC_record_allocation(h);
+   if (lb_adjusted > HBLKSIZE) {
+     GC_large_allocd_bytes += HBLKSIZE * OBJ_SZ_TO_BLOCKS(lb_adjusted);
+     if (GC_large_allocd_bytes > GC_max_large_allocd_bytes)
+@@ -223,6 +225,8 @@ GC_generic_malloc_inner_small(size_t lb, int kind)
+   *opp = obj_link(op);
+   obj_link(op) = NULL;
+   GC_bytes_allocd += GRANULES_TO_BYTES((word)lg);
++  GC_objects_allocd++;
++  GC_record_allocation(op);
+   return op;
+ }
+ 
+@@ -385,6 +389,8 @@ GC_malloc_kind_aligned_global(size_t lb, int kind, size_t align_m1)
+       if (kind != PTRFREE)
+         obj_link(op) = NULL;
+       GC_bytes_allocd += GRANULES_TO_BYTES((word)lg);
++      GC_objects_allocd++;
++      GC_record_allocation(op);
+       UNLOCK();
+       GC_ASSERT((ADDR(op) & align_m1) == 0);
+       return op;
+@@ -453,6 +459,8 @@ GC_generic_malloc_uncollectable(size_t lb, int kind)
+       *opp = obj_link(op);
+       obj_link(op) = 0;
+       GC_bytes_allocd += GRANULES_TO_BYTES((word)lg);
++      GC_objects_allocd++;
++      GC_record_allocation(op);
+       /*
+        * Mark bit was already set on free list.  It will be cleared only
+        * temporarily during a collection, as a result of the normal
+@@ -688,6 +696,7 @@ free_internal(void *p, const hdr *hhdr)
+   int kind = hhdr->hb_obj_kind;
+ 
+   GC_bytes_freed += lb;
++  GC_record_released_object(p);
+   if (IS_UNCOLLECTABLE(kind))
+     GC_non_gc_bytes -= lb;
+   if (LIKELY(lg <= MAXOBJGRANULES)) {
+diff --git a/mallocx.c b/mallocx.c
+index f7b6ae59..cb471f1a 100644
+--- a/mallocx.c
++++ b/mallocx.c
+@@ -263,6 +263,7 @@ GC_get_expl_freed_bytes_since_gc(void)
+  * which is too expensive.)
+  */
+ STATIC volatile AO_t GC_bytes_allocd_tmp = 0;
++GC_INNER volatile AO_t GC_objects_allocd_tmp = 0;
+ #endif /* PARALLEL_MARK */
+ 
+ GC_API void GC_CALL
+@@ -338,6 +339,7 @@ GC_generic_malloc_many(size_t lb_adjusted, int kind, void **result)
+                                  (AO_t)(-my_bytes_allocd_tmp));
+           GC_bytes_allocd += (word)my_bytes_allocd_tmp;
+         }
++        GC_flush_object_counts();
+         GC_acquire_mark_lock();
+         ++GC_fl_builder_count;
+         UNLOCK();
+@@ -349,8 +351,11 @@ GC_generic_malloc_many(size_t lb_adjusted, int kind, void **result)
+       if (op != 0) {
+ #ifdef PARALLEL_MARK
+         if (GC_parallel) {
++          GC_record_allocation_list(op);
+           *result = op;
+           (void)AO_fetch_and_add(&GC_bytes_allocd_tmp, (AO_t)my_bytes_allocd);
++          (void)AO_fetch_and_add(&GC_objects_allocd_tmp,
++                                 (AO_t)(my_bytes_allocd / lb_adjusted));
+           GC_acquire_mark_lock();
+           --GC_fl_builder_count;
+           if (GC_fl_builder_count == 0)
+@@ -372,6 +377,7 @@ GC_generic_malloc_many(size_t lb_adjusted, int kind, void **result)
+         /* We also reclaimed memory, so we need to adjust that count. */
+         GC_bytes_found += (GC_signed_word)my_bytes_allocd;
+         GC_bytes_allocd += my_bytes_allocd;
++        GC_objects_allocd += my_bytes_allocd / lb_adjusted;
+         goto out;
+       }
+ #ifdef PARALLEL_MARK
+@@ -414,6 +420,7 @@ GC_generic_malloc_many(size_t lb_adjusted, int kind, void **result)
+       }
+     }
+     GC_bytes_allocd += my_bytes_allocd;
++    GC_objects_allocd += my_bytes_allocd / lb_adjusted;
+     goto out;
+   }
+ 
+@@ -426,6 +433,7 @@ GC_generic_malloc_many(size_t lb_adjusted, int kind, void **result)
+       if (IS_UNCOLLECTABLE(kind))
+         GC_set_hdr_marks(HDR(h));
+       GC_bytes_allocd += HBLKSIZE - (HBLKSIZE % lb_adjusted);
++      GC_objects_allocd += HBLKSIZE / lb_adjusted;
+ #ifdef PARALLEL_MARK
+       if (GC_parallel) {
+         GC_acquire_mark_lock();
+@@ -434,6 +442,7 @@ GC_generic_malloc_many(size_t lb_adjusted, int kind, void **result)
+         GC_release_mark_lock();
+ 
+         op = GC_build_fl(h, NULL, lg, ok->ok_init || GC_debugging_started);
++        GC_record_allocation_list(op);
+         *result = op;
+         GC_acquire_mark_lock();
+         --GC_fl_builder_count;
+@@ -459,6 +468,7 @@ GC_generic_malloc_many(size_t lb_adjusted, int kind, void **result)
+     obj_link(op) = NULL;
+ 
+ out:
++  GC_record_allocation_list(op);
+   *result = op;
+   UNLOCK();
+   (void)GC_clear_stack(0);
+diff --git a/misc.c b/misc.c
+index 8fcef675..a1759fb4 100644
+--- a/misc.c
++++ b/misc.c
+@@ -613,6 +613,9 @@ fill_prof_stats(struct GC_prof_stats_s *pstats)
+   pstats->reclaimed_bytes_before_gc = GC_reclaimed_bytes_before_gc;
+   pstats->expl_freed_bytes_since_gc = GC_bytes_freed; /*< since gc-7.7 */
+   pstats->obtained_from_os_bytes = GC_our_mem_bytes;  /*< since gc-8.2 */
++  pstats->objects_allocd = GC_objects_allocd_total;
++  pstats->objects_freed = GC_objects_freed_total;
++  pstats->objects_in_use = pstats->objects_allocd - pstats->objects_freed;
+ }
+ 
+ #  include <string.h> /*< for `memset()` */
+diff --git a/reclaim.c b/reclaim.c
+index 8123196a..c9fb3c75 100644
+--- a/reclaim.c
++++ b/reclaim.c
+@@ -25,8 +25,128 @@ GC_INNER GC_signed_word GC_bytes_found = 0;
+ 
+ #ifdef PARALLEL_MARK
+ GC_INNER GC_signed_word GC_fl_builder_count = 0;
++GC_INNER volatile AO_t GC_objects_freed_tmp = 0;
++
++GC_INNER void
++GC_flush_object_counts(void)
++{
++  AO_t allocated = AO_load(&GC_objects_allocd_tmp);
++  AO_t freed = AO_load(&GC_objects_freed_tmp);
++
++  GC_ASSERT(I_HOLD_LOCK());
++  if (allocated != 0) {
++    (void)AO_fetch_and_add(&GC_objects_allocd_tmp, (AO_t)(-allocated));
++    GC_objects_allocd += allocated;
++  }
++  if (freed != 0) {
++    (void)AO_fetch_and_add(&GC_objects_freed_tmp, (AO_t)(-freed));
++    GC_objects_freed += freed;
++  }
++}
+ #endif
+ 
++GC_INNER void
++GC_record_allocation_list(void *p)
++{
++  struct hblk *block = NULL;
++  hdr *hhdr = NULL;
++  word masks[MARK_BITS_PER_HBLK / CPP_WORDSZ] = { 0 };
++  size_t i;
++
++  for (;;) {
++    struct hblk *next_block = p != NULL ? HBLKPTR(p) : NULL;
++    if (next_block != block || p == NULL) {
++      if (hhdr != NULL) {
++        for (i = 0; i < MARK_BITS_PER_HBLK / CPP_WORDSZ; i++) {
++#ifdef PARALLEL_MARK
++          if (masks[i] != 0)
++            AO_or((volatile AO_t *)&hhdr->hb_alloc_bits[i], masks[i]);
++#else
++          hhdr->hb_alloc_bits[i] |= masks[i];
++#endif
++          masks[i] = 0;
++        }
++      }
++      if (next_block == NULL)
++        break;
++      block = next_block;
++      hhdr = HDR(block);
++    }
++    {
++      size_t bit_no = MARK_BIT_NO(HBLKDISPL(p), hhdr->hb_sz);
++      masks[divWORDSZ(bit_no)] |= (word)1 << modWORDSZ(bit_no);
++    }
++    p = obj_link(p);
++  }
++}
++
++GC_INNER void
++GC_record_released_object(void *p)
++{
++  hdr *hhdr = HDR(p);
++  size_t bit_no = MARK_BIT_NO(HBLKDISPL(p), hhdr->hb_sz);
++  word mask = (word)1 << modWORDSZ(bit_no);
++  word old_bits;
++#ifdef PARALLEL_MARK
++  volatile AO_t *bits
++      = (volatile AO_t *)&hhdr->hb_alloc_bits[divWORDSZ(bit_no)];
++  do {
++    old_bits = AO_load(bits);
++  } while (!AO_compare_and_swap_release(bits, old_bits, old_bits & ~mask));
++#else
++  word *bits = &hhdr->hb_alloc_bits[divWORDSZ(bit_no)];
++  old_bits = *bits;
++  *bits &= ~mask;
++#endif
++  if ((old_bits & mask) != 0)
++    GC_objects_freed++;
++}
++
++GC_INNER void
++GC_record_reclaimed_objects(hdr *hhdr, size_t sz)
++{
++  word reclaimed = 0;
++  size_t i;
++
++  for (i = 0; i < MARK_BITS_PER_HBLK / CPP_WORDSZ; i++) {
++    word marked = 0;
++    word old_bits, dead;
++#ifdef USE_MARK_BYTES
++    size_t j;
++    for (j = 0; j < CPP_WORDSZ; j++)
++      if (hhdr->hb_marks[i * CPP_WORDSZ + j])
++        marked |= (word)1 << j;
++#else
++    marked = hhdr->hb_marks[i];
++#endif
++    if (sz > MAXOBJBYTES)
++      marked = i == 0 ? (word)(mark_bit_from_hdr(hhdr, 0) != 0) : 0;
++#ifdef PARALLEL_MARK
++    {
++      volatile AO_t *bits = (volatile AO_t *)&hhdr->hb_alloc_bits[i];
++      do {
++        old_bits = AO_load(bits);
++      } while (
++          !AO_compare_and_swap_release(bits, old_bits, old_bits & marked));
++    }
++#else
++    old_bits = hhdr->hb_alloc_bits[i];
++    hhdr->hb_alloc_bits[i] = old_bits & marked;
++#endif
++    dead = old_bits & ~marked;
++    while (dead != 0) {
++      dead &= dead - 1;
++      reclaimed++;
++    }
++  }
++#ifdef PARALLEL_MARK
++  if (reclaimed != 0)
++    (void)AO_fetch_and_add(&GC_objects_freed_tmp, reclaimed);
++#else
++  GC_objects_freed += reclaimed;
++#endif
++}
++
+ /*
+  * We defer printing of leaked objects until we are done with the
+  * collection cycle, since the routine for printing objects needs
+@@ -500,6 +620,7 @@ GC_reclaim_generic(struct hblk *hbp, hdr *hhdr, size_t sz, GC_bool init,
+   }
+   if (IS_UNCOLLECTABLE(hhdr->hb_obj_kind))
+     GC_set_hdr_marks(hhdr);
++  GC_record_reclaimed_objects(hhdr, sz);
+   return result;
+ }
+ 
+@@ -612,6 +733,7 @@ GC_reclaim_block(struct hblk *hbp, void *report_if_found)
+           GC_large_allocd_bytes -= HBLKSIZE * OBJ_SZ_TO_BLOCKS(sz);
+         }
+         GC_bytes_found += (GC_signed_word)sz;
++        GC_record_reclaimed_objects(hhdr, sz);
+         GC_freehblk(hbp);
+         FREE_PROFILER_HOOK(hbp);
+       }
+@@ -672,6 +794,7 @@ GC_reclaim_block(struct hblk *hbp, void *report_if_found)
+ #endif
+       /* else */ {
+         GC_bytes_found += (GC_signed_word)HBLKSIZE;
++        GC_record_reclaimed_objects(hhdr, sz);
+         GC_freehblk(hbp);
+         FREE_PROFILER_HOOK(hbp);
+       }
+@@ -922,6 +1045,11 @@ GC_start_reclaim(GC_bool report_if_found)
+    */
+   GC_apply_to_all_blocks(GC_reclaim_block, NUMERIC_TO_VPTR(report_if_found));
+ 
++#ifdef PARALLEL_MARK
++  GC_flush_object_counts();
++#endif
++  GC_ASSERT(GC_objects_freed_total <= GC_objects_allocd_total);
++
+ #ifdef EAGER_SWEEP
+   /*
+    * This is a very stupid thing to do.  We make it possible anyway.
+diff --git a/tests/gctest.c b/tests/gctest.c
+index 71335dff..1e3728a4 100644
+--- a/tests/gctest.c
++++ b/tests/gctest.c
+@@ -2040,6 +2040,29 @@ count_reachable_objs(void *plocalcnt)
+   return NULL;
+ }
+ 
++#ifndef GC_GET_HEAP_USAGE_NOT_NEEDED
++static void GC_CALLBACK
++count_allocated_block(struct hblk *h, void *data)
++{
++  const hdr *hhdr = HDR(h);
++  unsigned long long *count = (unsigned long long *)data;
++  size_t bit_no;
++
++  for (bit_no = 0; bit_no < MARK_BITS_PER_HBLK; bit_no++)
++    if ((hhdr->hb_alloc_bits[divWORDSZ(bit_no)]
++         & ((word)1 << modWORDSZ(bit_no)))
++        != 0)
++      (*count)++;
++}
++
++static void *GC_CALLBACK
++count_allocated_objs(void *count)
++{
++  GC_apply_to_all_blocks(count_allocated_block, count);
++  return NULL;
++}
++#endif
++
+ /* A minimal testing of `LONG_MULT()`. */
+ static void
+ test_long_mult(void)
+@@ -2267,7 +2290,15 @@ check_heap_stats(void)
+   GC_get_heap_usage_safe(NULL, NULL, NULL, NULL, NULL);
+   {
+     struct GC_prof_stats_s stats;
++    unsigned long long allocated = 0;
+     (void)GC_get_prof_stats(&stats, sizeof(stats));
++    (void)GC_call_with_reader_lock(count_allocated_objs, &allocated, 0);
++    if (stats.objects_allocd < stats.objects_freed
++        || stats.objects_in_use != stats.objects_allocd - stats.objects_freed
++        || stats.objects_in_use != allocated) {
++      GC_printf("Inconsistent object counts\n");
++      FAIL;
++    }
+ #  ifdef THREADS
+     (void)GC_get_prof_stats_unsafe(&stats, sizeof(stats));
+ #  endif
+diff --git a/thread_local_alloc.c b/thread_local_alloc.c
+index ae35a4f5..a3501331 100644
+--- a/thread_local_alloc.c
++++ b/thread_local_alloc.c
+@@ -38,6 +38,11 @@ static GC_bool keys_initialized;
+ static void
+ return_single_freelist(void *fl, void **gfl)
+ {
++  void *released;
++
++  for (released = fl; released != NULL; released = obj_link(released))
++    GC_record_released_object(released);
++
+   if (NULL == *gfl) {
+     *gfl = fl;
+   } else {

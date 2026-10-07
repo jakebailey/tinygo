@@ -186,7 +186,9 @@ var gcMemStats libgc_prof_stats
 func ReadMemStats(m *MemStats) {
 	gcLock.Lock()
 
-	libgc_get_prof_stats(&gcMemStats, unsafe.Sizeof(gcMemStats))
+	if libgc_get_prof_stats(&gcMemStats, unsafe.Sizeof(gcMemStats)) != unsafe.Sizeof(gcMemStats) {
+		runtimeFatal("gc: collector does not provide object counts")
+	}
 
 	// Fill in MemStats as well as we can, given the information that bdwgc
 	// provides to us.
@@ -196,8 +198,10 @@ func ReadMemStats(m *MemStats) {
 	m.HeapSys = uint64(m.HeapInuse + m.HeapIdle)
 	m.GCSys = 0 // not provided by bdwgc
 	m.TotalAlloc = uint64(gcMemStats.allocd_bytes_before_gc + gcMemStats.bytes_allocd_since_gc)
-	m.Mallocs = gcMallocs
-	m.Frees = 0 // not provided by bdwgc
+	// Object and byte counts include Boehm's internal heap allocations.
+	m.Mallocs = gcMemStats.objects_allocd
+	m.Frees = gcMemStats.objects_freed
+	m.HeapObjects = gcMemStats.objects_in_use
 	m.Sys = uint64(gcMemStats.obtained_from_os_bytes)
 	m.NumGC = uint32(gcMemStats.gc_no)
 
@@ -279,4 +283,7 @@ type libgc_prof_stats struct {
 	reclaimed_bytes_before_gc uintptr
 	expl_freed_bytes_since_gc uintptr
 	obtained_from_os_bytes    uintptr
+	objects_allocd            uint64
+	objects_freed             uint64
+	objects_in_use            uint64
 }
