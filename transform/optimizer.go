@@ -235,6 +235,24 @@ func pruneRuntimeStartup(mod llvm.Module, runInitialDCE bool) error {
 	return nil
 }
 
+// PrepareRuntimeStartup resolves startup gates before interpreting initializers.
+func PrepareRuntimeStartup(mod llvm.Module) error {
+	linkages := make(map[llvm.Value]llvm.Linkage, len(functionsUsedInTransforms))
+	for _, name := range functionsUsedInTransforms {
+		fn := mod.NamedFunction(name)
+		if !fn.IsNil() {
+			linkages[fn] = fn.Linkage()
+			fn.SetLinkage(llvm.ExternalLinkage)
+		}
+	}
+	defer func() {
+		for fn, linkage := range linkages {
+			fn.SetLinkage(linkage)
+		}
+	}()
+	return pruneRuntimeStartup(mod, true)
+}
+
 func pruneUnusedRuntimeStartup(mod llvm.Module) bool {
 	changed := lowerRuntimeFeatureGate(mod,
 		"runtime.gorootEnvEnabled",
