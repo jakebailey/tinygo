@@ -247,6 +247,9 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 	if err != nil {
 		return BuildResult{}, err
 	}
+	if _, ok := globalValues["runtime"]["godebugDefault"]; !ok {
+		globalValues["runtime"]["godebugDefault"] = lprogram.MainPkg().DefaultGODEBUG
+	}
 	result := BuildResult{
 		ModuleRoot: lprogram.MainPkg().Module.Dir,
 		MainDir:    lprogram.MainPkg().Dir,
@@ -834,28 +837,36 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (BuildRe
 		linkerDependencies = append(linkerDependencies, job)
 	}
 
-	// Add jobs to compile C files in all packages. This is part of CGo.
+	// Add jobs to compile C and C++ files in all packages. This is part of CGo.
 	// TODO: do this as part of building the package to be able to link the
 	// bitcode files together.
 	for _, pkg := range lprogram.Sorted() {
-		for _, filename := range pkg.CFiles {
-			abspath := filepath.Join(pkg.OriginalDir(), filename)
-			job := &compileJob{
-				description: "compile CGo file " + abspath,
-				run: func(job *compileJob) error {
-					cflags := pkg.CFlags
-					var compileConfig *cFileCompileConfig
-					if config.TrimPath() {
-						compileConfig = &cFileCompileConfig{
-							recordedPath: config.CSourcePath(pkg.RecordedPath(abspath)),
+		for _, source := range []struct {
+			files []string
+			flags []string
+		}{
+			{pkg.CFiles, pkg.CFlags},
+			{pkg.CXXFiles, pkg.CXXFlags},
+		} {
+			for _, filename := range source.files {
+				abspath := filepath.Join(pkg.OriginalDir(), filename)
+				job := &compileJob{
+					description: "compile CGo file " + abspath,
+					run: func(job *compileJob) error {
+						cflags := source.flags
+						var compileConfig *cFileCompileConfig
+						if config.TrimPath() {
+							compileConfig = &cFileCompileConfig{
+								recordedPath: config.CSourcePath(pkg.RecordedPath(abspath)),
+							}
 						}
-					}
-					result, err := compileAndCacheCFile(abspath, tmpdir, cflags, compileConfig, config.Options.PrintCommands)
-					job.result = result
-					return err
-				},
+						result, err := compileAndCacheCFile(abspath, tmpdir, cflags, compileConfig, config.Options.PrintCommands)
+						job.result = result
+						return err
+					},
+				}
+				linkerDependencies = append(linkerDependencies, job)
 			}
-			linkerDependencies = append(linkerDependencies, job)
 		}
 	}
 
@@ -1326,6 +1337,9 @@ func createEmbedObjectFile(data, hexSum, sourceFile, sourceDir, tmpdir string, c
 // needed to convert a program to its final form. Some transformations are not
 // optional and must be run as the compiler expects them to run.
 func optimizeProgram(mod llvm.Module, config *compileopts.Config) error {
+	if err := transform.PrepareRuntimeStartup(mod); err != nil {
+		return err
+	}
 	err := interp.Run(mod, config.Options.InterpTimeout, config.Options.InterpMaxLoopIterations, config.DumpSSA())
 	if err != nil {
 		return err
