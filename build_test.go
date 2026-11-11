@@ -229,6 +229,26 @@ func TestBuild(t *testing.T) {
 			runTestWithConfig("print.go", t, opts, nil, nil)
 		})
 
+		if !testing.Short() {
+			for _, opt := range []string{"0", "z"} {
+				t.Run("wasip1-fmt-scheduler=none-opt="+opt, func(t *testing.T) {
+					t.Parallel()
+					opts := optionsFromTarget("wasip1", sema)
+					opts.Opt = opt
+					opts.Scheduler = "none"
+					runTestWithConfig("wasi-fmt-noscheduler.go", t, opts, nil, nil)
+				})
+			}
+			t.Run("wasip1-multipart-scheduler=none-opt=2", func(t *testing.T) {
+				t.Parallel()
+				opts := optionsFromTarget("wasip1", sema)
+				opts.Opt = "2"
+				opts.GC = "precise"
+				opts.Scheduler = "none"
+				runTestWithConfig("wasi-multipart-noscheduler.go", t, opts, nil, nil)
+			})
+		}
+
 		t.Run("opt=0-gc=boehm", func(t *testing.T) {
 			t.Parallel()
 			opts := optionsFromTarget("", sema)
