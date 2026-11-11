@@ -311,6 +311,17 @@ func TestBuild(t *testing.T) {
 			runTestWithConfig("print.go", t, opts, nil, nil)
 		})
 
+		if !testing.Short() {
+			t.Run("wasip1-multipart-scheduler=none-opt=2", func(t *testing.T) {
+				t.Parallel()
+				opts := optionsFromTarget("wasip1", sema)
+				opts.Opt = "2"
+				opts.GC = "precise"
+				opts.Scheduler = "none"
+				runTestWithConfig("wasi-multipart-noscheduler.go", t, opts, nil, nil)
+			})
+		}
+
 		t.Run("opt=0-gc=boehm", func(t *testing.T) {
 			t.Parallel()
 			opts := optionsFromTarget("", sema)

@@ -732,6 +732,82 @@ func ioLogger(t *testing.T, wg *sync.WaitGroup) io.WriteCloser {
 // This TestMain is necessary because TinyGo may also be invoked to run certain
 // LLVM tools in a separate process. Not capturing these invocations would lead
 // to recursive tests.
+func TestWASINoSchedulerPoll(t *testing.T) {
+	if testing.Short() {
+		t.Skip("WASI test needs a cross-target runner")
+	}
+	t.Parallel()
+	opts := optionsFromTarget("wasip1", sema)
+	opts.Opt = "0"
+	opts.Scheduler = "none"
+	config, err := builder.NewConfig(&opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"timeout", "", "timed out\nbad fd: 8\n"},
+		{"ready", "x", "ready: 1 <nil> x\nexpired: 0 i/o timeout\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader, writer, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			defer writer.Close()
+			if tc.input != "" {
+				if _, err := writer.Write([]byte(tc.input)); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			output := &bytes.Buffer{}
+			_, err = buildAndRun("testdata/wasi-poll-noscheduler.go", config, output, []string{tc.name}, nil, time.Minute, func(cmd *exec.Cmd, result *builder.BuildResult) error {
+				cmd.Stdin = reader
+				return cmd.Run()
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkOutputData(t, []byte(tc.want), output.Bytes())
+		})
+	}
+}
+
+func TestWASINoSchedulerSocketDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("WASI test needs a cross-target runner")
+	}
+	t.Parallel()
+	opts := optionsFromTarget("wasip1", sema)
+	opts.Opt = "0"
+	opts.Scheduler = "none"
+	config, err := builder.NewConfig(&opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	_, err = buildAndRun("testdata/wasi-poll-noscheduler-socket.go", config, output, nil, nil, time.Minute, func(cmd *exec.Cmd, result *builder.BuildResult) error {
+		cmd.Args = slices.Insert(cmd.Args, 2, "-S", "preview2=n", "-S", "tcplisten=127.0.0.1:0")
+		cmd.Stderr = stderr
+		return cmd.Run()
+	})
+	if err != nil {
+		if strings.Contains(stderr.String(), "the `-Spreview2=n` flag is no longer supported") {
+			t.Skip("Wasmtime no longer supports legacy Preview1 sockets")
+		}
+		t.Fatalf("%v\n%s", err, stderr.String())
+	}
+	checkOutputData(t, []byte("accept: -1 accept i/o timeout\n"), output.Bytes())
+}
+
 func TestMain(m *testing.M) {
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
