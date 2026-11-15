@@ -20,6 +20,7 @@ const (
 	valueFlagExported
 	valueFlagEmbedRO
 	valueFlagStickyRO
+	valueFlagBoxed
 
 	valueFlagRO = valueFlagEmbedRO | valueFlagStickyRO
 )
@@ -37,11 +38,9 @@ type Value struct {
 	flags    valueFlags
 }
 
-// isIndirect returns whether the value pointer in this Value is always a
-// pointer to the value. If it is false, it is only a pointer to the value if
-// the value is bigger than a pointer.
+// isIndirect reports whether value holds a pointer to its data.
 func (v Value) isIndirect() bool {
-	return v.flags&valueFlagIndirect != 0
+	return v.flags&(valueFlagIndirect|valueFlagBoxed) != 0
 }
 
 // isExported returns whether the value represented by this Value could be
@@ -93,13 +92,21 @@ func decomposeInterface(i interface{}) (unsafe.Pointer, unsafe.Pointer)
 //go:linkname runtimeKeepAlive runtime.KeepAlive
 func runtimeKeepAlive(x interface{})
 
+//go:linkname interfaceInteger runtime.interfaceInteger
+func interfaceInteger(bits uint64, size uintptr) unsafe.Pointer
+
+func integerKind(kind Kind) bool {
+	return kind == Bool || kind >= Int && kind <= Uintptr
+}
+
 func ValueOf(i interface{}) Value {
 	typecode, value := decomposeInterface(i)
-	return Value{
-		typecode: (*RawType)(typecode),
-		value:    value,
-		flags:    valueFlagExported,
+	typ := (*RawType)(typecode)
+	flags := valueFlagExported
+	if typ != nil && integerKind(typ.Kind()) {
+		flags |= valueFlagBoxed
 	}
+	return Value{typecode: typ, value: value, flags: flags}
 }
 
 // InterfaceData returns two unspecified words for an interface Value or panics.
@@ -171,7 +178,7 @@ func TypeAssert[T any](v Value) (T, bool) {
 		return zero, false
 	}
 	if !v.isIndirect() && v.typecode.Size() <= unsafe.Sizeof(uintptr(0)) {
-		return *(*T)(unsafe.Pointer(&v.value)), true
+		return *(*T)(v.inlineValuePointer()), true
 	}
 	return *(*T)(v.value), true
 }
@@ -185,6 +192,30 @@ func valueInterfaceUnsafe(v Value) interface{} {
 		//         X interface{}
 		//     }
 		return *(*interface{})(v.value)
+	}
+	if v.flags&valueFlagBoxed != 0 {
+		return composeInterface(unsafe.Pointer(v.typecode), v.value)
+	}
+	if integerKind(v.Kind()) {
+		if !v.isIndirect() && v.typecode.Size() > unsafe.Sizeof(uintptr(0)) {
+			return composeInterface(unsafe.Pointer(v.typecode), v.value)
+		}
+		var bits uint64
+		switch {
+		case v.Kind() == Bool:
+			if v.Bool() {
+				bits = 1
+			}
+		case v.Kind() >= Int && v.Kind() <= Int64:
+			bits = uint64(v.Int())
+		default:
+			bits = v.Uint()
+		}
+		size := v.typecode.Size()
+		if size < 8 {
+			bits &= uint64(1)<<(size*8) - 1
+		}
+		return composeInterface(unsafe.Pointer(v.typecode), interfaceInteger(bits, size))
 	}
 	if v.isIndirect() && v.typecode.Size() <= unsafe.Sizeof(uintptr(0)) {
 		// Value was indirect but must be put back directly in the interface
@@ -684,7 +715,7 @@ func (v Value) Bytes() []byte {
 		return *(*[]byte)(v.value)
 
 	case Array:
-		if !v.isIndirect() {
+		if !v.CanAddr() {
 			panic("reflect.Value.Bytes of unaddressable byte array")
 		}
 
@@ -915,12 +946,9 @@ func (v Value) Elem() Value {
 			flags:    flags,
 		}
 	case Interface:
-		typecode, value := decomposeInterface(*(*interface{})(v.value))
-		return Value{
-			typecode: (*RawType)(typecode),
-			value:    value,
-			flags:    v.flags &^ valueFlagIndirect,
-		}
+		elem := ValueOf(*(*interface{})(v.value))
+		elem.flags = v.flags&^(valueFlagIndirect|valueFlagBoxed) | elem.flags&valueFlagBoxed
+		return elem
 	default:
 		panic(&ValueError{Method: "Elem", Kind: v.Kind()})
 	}
@@ -1174,16 +1202,7 @@ func genericKeyPtr(vkey *RawType, key Value) unsafe.Pointer {
 			// key.value points to {typecode, data}.
 			return key.value
 		}
-		// Concrete value being used as an interface key.
-		// For small addressable values, key.value is a pointer to
-		// the data, but the interface value field stores the data
-		// directly; load it using the same endian-safe approach as
-		// valueInterfaceUnsafe.
-		val := key.value
-		if key.isIndirect() && key.typecode.Size() <= unsafe.Sizeof(uintptr(0)) {
-			val = loadInlineValue(key.value, key.typecode)
-		}
-		intf := composeInterface(unsafe.Pointer(key.typecode), val)
+		intf := valueInterfaceUnsafe(key)
 		return unsafe.Pointer(&intf)
 	}
 	if key.isIndirect() || key.typecode.Size() > unsafe.Sizeof(uintptr(0)) {
@@ -1279,7 +1298,7 @@ func (v Value) SetIterKey(iter *MapIter) {
 	if !iter.valid {
 		panic("reflect: Value.SetIterKey called on exhausted iterator")
 	}
-	if !v.isIndirect() {
+	if !v.CanAddr() {
 		panic("reflect.Value.SetIterKey using unaddressable value")
 	}
 	if v.isRO() || iter.m.isRO() {
@@ -1312,7 +1331,7 @@ func (v Value) SetIterValue(iter *MapIter) {
 	if !iter.valid {
 		panic("reflect: Value.SetIterValue called on exhausted iterator")
 	}
-	if !v.isIndirect() {
+	if !v.CanAddr() {
 		panic("reflect.Value.SetIterValue using unaddressable value")
 	}
 	if v.isRO() || iter.m.isRO() {
@@ -1356,7 +1375,7 @@ func (iter *MapIter) Reset(v Value) {
 }
 
 func (v Value) Set(x Value) {
-	if !v.isIndirect() {
+	if !v.CanAddr() {
 		panic("reflect.Value.Set using unaddressable value")
 	}
 	if v.isRO() {
@@ -1367,12 +1386,7 @@ func (v Value) Set(x Value) {
 	}
 
 	if v.typecode.Kind() == Interface && x.typecode.Kind() != Interface {
-		// move the value of x back into the interface, if possible
-		if x.isIndirect() && x.typecode.Size() <= unsafe.Sizeof(uintptr(0)) {
-			x.value = loadInlineValue(x.value, x.typecode)
-		}
-
-		intf := composeInterface(unsafe.Pointer(x.typecode), x.value)
+		intf := valueInterfaceUnsafe(x)
 		x = Value{
 			typecode: v.typecode,
 			value:    unsafe.Pointer(&intf),
@@ -1425,7 +1439,7 @@ func (v Value) SetInt(x int64) {
 }
 
 func (v Value) SetUint(x uint64) {
-	if !v.isIndirect() {
+	if !v.CanAddr() {
 		panic("reflect.Value.SetUint using unaddressable value")
 	}
 	v.checkRO()
@@ -1494,7 +1508,7 @@ func (v Value) SetString(x string) {
 }
 
 func (v Value) SetBytes(x []byte) {
-	if !v.isIndirect() {
+	if !v.CanAddr() {
 		panic("reflect.Value.SetBytes using unaddressable value")
 	}
 	v.checkRO()
@@ -1533,7 +1547,7 @@ func (v Value) SetLen(n int) {
 }
 
 func (v Value) checkAddressable() {
-	if !v.isIndirect() {
+	if !v.CanAddr() {
 		panic("reflect: value is not addressable")
 	}
 }
@@ -1616,8 +1630,7 @@ func convertOp(src Value, typ Type) (Value, bool) {
 		if src.Kind() == Interface {
 			iface = *(*interface{})(src.value)
 		} else {
-			value := cvtDirect(src, src.typecode)
-			iface = composeInterface(unsafe.Pointer(src.typecode), value.value)
+			iface = valueInterfaceUnsafe(src)
 		}
 		return Value{
 			typecode: rtype,
@@ -1783,7 +1796,7 @@ func cvtDirect(v Value, t *RawType) Value {
 	return Value{
 		typecode: t,
 		value:    value,
-		flags:    v.flags &^ valueFlagIndirect,
+		flags:    v.flags &^ (valueFlagIndirect | valueFlagBoxed),
 	}
 }
 
@@ -1820,7 +1833,7 @@ func makeInt(flags valueFlags, bits uint64, t *RawType) Value {
 
 	v := Value{
 		typecode: t,
-		flags:    flags,
+		flags:    flags &^ valueFlagBoxed,
 	}
 
 	ptr := unsafe.Pointer(&v.value)
@@ -1847,7 +1860,7 @@ func makeFloat(flags valueFlags, f float64, t *RawType) Value {
 
 	v := Value{
 		typecode: t,
-		flags:    flags,
+		flags:    flags &^ valueFlagBoxed,
 	}
 
 	ptr := unsafe.Pointer(&v.value)
@@ -1868,7 +1881,7 @@ func makeFloat(flags valueFlags, f float64, t *RawType) Value {
 func makeFloat32(flags valueFlags, f float32, t *RawType) Value {
 	v := Value{
 		typecode: t,
-		flags:    flags,
+		flags:    flags &^ valueFlagBoxed,
 	}
 	*(*float32)(unsafe.Pointer(&v.value)) = float32(f)
 	return v
@@ -2282,7 +2295,7 @@ func AppendSlice(s, t Value) Value {
 // It panics if v's Kind is not a Slice or if n is negative or too large to
 // allocate the memory.
 func (v Value) Grow(n int) {
-	if !v.isIndirect() {
+	if !v.CanAddr() {
 		panic("reflect.Value.Grow using unaddressable value")
 	}
 	v.checkRO()
@@ -2339,11 +2352,7 @@ func (v Value) SetMapIndex(key, elem Value) {
 
 	// make elem an interface if it needs to be converted
 	if !del && v.typecode.elem().Kind() == Interface && elem.typecode.Kind() != Interface {
-		val := elem.value
-		if elem.isIndirect() && elem.typecode.Size() <= unsafe.Sizeof(uintptr(0)) {
-			val = loadInlineValue(elem.value, elem.typecode)
-		}
-		intf := composeInterface(unsafe.Pointer(elem.typecode), val)
+		intf := valueInterfaceUnsafe(elem)
 		elem = Value{
 			typecode: v.typecode.elem(),
 			value:    unsafe.Pointer(&intf),

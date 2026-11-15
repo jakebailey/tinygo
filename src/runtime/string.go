@@ -73,6 +73,15 @@ func stringFromBytes(x struct {
 	len uintptr
 	cap uintptr
 }) _string {
+	if x.len == 0 {
+		return _string{}
+	}
+	if x.len == 1 {
+		return _string{
+			ptr:    (*byte)(interfaceInteger8(*x.ptr)),
+			length: 1,
+		}
+	}
 	buf := alloc(x.len, gclayout.NoPtrs.AsPtr())
 	memcpy(buf, unsafe.Pointer(x.ptr), x.len)
 	return _string{ptr: (*byte)(buf), length: x.len}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	arch "internal/goarch"
 	"internal/reflectlite"
 	"math/rand"
 	randv2 "math/rand/v2"
@@ -16,6 +17,128 @@ import (
 	"time"
 	"unsafe"
 )
+
+type integerInterfaceValue interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr
+}
+
+var integerInterfaceSink any
+var integerStringSink string
+
+//go:noinline
+func boxInteger[T integerInterfaceValue](value T) any {
+	return value
+}
+
+func checkIntegerInterfaces[T integerInterfaceValue](t *testing.T, values []T) {
+	t.Helper()
+	for _, want := range values {
+		boxed := boxInteger(want)
+		if got := boxed.(T); got != want {
+			t.Fatalf("integer assertion = %v, want %v", got, want)
+		}
+		ptr := (*[2]unsafe.Pointer)(unsafe.Pointer(&boxed))[1]
+		if got := *(*T)(ptr); got != want {
+			t.Fatalf("integer box = %v, want %v", got, want)
+		}
+		value := ValueOf(boxed)
+		if value.CanAddr() || value.CanSet() {
+			t.Fatal("boxed integer is addressable")
+		}
+		if got, ok := TypeAssert[T](value); !ok || got != want {
+			t.Fatalf("reflected integer assertion = %v, %v, want %v", got, ok, want)
+		}
+		if got := value.Interface().(T); got != want {
+			t.Fatalf("integer Interface = %v, want %v", got, want)
+		}
+		var dst any
+		ValueOf(&dst).Elem().Set(ValueOf(&want).Elem())
+		want = 0
+		if dst != boxed {
+			t.Fatal("Set did not preserve the integer snapshot")
+		}
+		runtime.GC()
+		if dst != boxed || value.Interface() != boxed {
+			t.Fatal("integer changed after GC")
+		}
+	}
+}
+
+func TestIntegerInterfaceStorage(t *testing.T) {
+	checkIntegerInterfaces(t, []int{0, 1, 255, 256, -1})
+	checkIntegerInterfaces(t, []int8{0, 1, 127, -128, -1})
+	checkIntegerInterfaces(t, []int16{0, 255, 256, 32767, -32768, -1})
+	checkIntegerInterfaces(t, []int32{0, 255, 256, 1<<31 - 1, -1 << 31, -1})
+	checkIntegerInterfaces(t, []int64{0, 255, 256, 1<<63 - 1, -1 << 63, -1})
+	checkIntegerInterfaces(t, []uint{0, 255, 256, ^uint(0)})
+	checkIntegerInterfaces(t, []uint8{0, 1, 127, 128, 255})
+	checkIntegerInterfaces(t, []uint16{0, 255, 256, ^uint16(0)})
+	checkIntegerInterfaces(t, []uint32{0, 255, 256, ^uint32(0)})
+	checkIntegerInterfaces(t, []uint64{0, 255, 256, ^uint64(0)})
+	checkIntegerInterfaces(t, []uintptr{0, 255, 256, ^uintptr(0)})
+	checkIntegerInterfaces(t, []boxedMethodInteger{0, 255, 256, -1})
+	for _, want := range []boxedMethodInteger{0, 255, 256, -1} {
+		value := boxInteger(want).(interface{ Integer() int64 })
+		if got := value.Integer(); got != int64(want) {
+			t.Fatalf("integer receiver = %v, want %v", got, want)
+		}
+	}
+	for _, want := range []bool{false, true} {
+		var boxed any = want
+		if boxed.(bool) != want || ValueOf(boxed).Bool() != want || ValueOf(boxed).Interface() != boxed {
+			t.Fatal("bool interface did not round trip")
+		}
+	}
+}
+
+type boxedMethodInteger int64
+
+func (n boxedMethodInteger) Integer() int64 {
+	return int64(n)
+}
+
+func TestStaticIntegerStringStorage(t *testing.T) {
+	for i := uint64(0); i < 256; i++ {
+		boxed := boxInteger(i)
+		ptr := (*[2]unsafe.Pointer)(unsafe.Pointer(&boxed))[1]
+		if arch.BigEndian {
+			ptr = unsafe.Add(ptr, 7)
+		}
+		bytes := []byte{byte(i)}
+		s := string(bytes)
+		bytes[0]++
+		if s[0] != byte(i) {
+			t.Fatal("one-byte string changed after slice mutation")
+		}
+		if unsafe.Pointer(unsafe.StringData(s)) != ptr {
+			t.Fatal("string and integer did not share static storage")
+		}
+	}
+	if allocs := testing.AllocsPerRun(100, func() {
+		for i := uint64(0); i < 256; i++ {
+			integerInterfaceSink = boxInteger(i)
+			integerStringSink = string([]byte{byte(i)})
+		}
+	}); allocs != 0 {
+		t.Fatalf("small integers and one-byte strings allocated %v times", allocs)
+	}
+}
+
+func BenchmarkIntegerInterface(b *testing.B) {
+	b.Run("Small", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			integerInterfaceSink = boxInteger(uint64(i & 255))
+		}
+	})
+	b.Run("Large", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			integerInterfaceSink = boxInteger(uint64(i&255) + 256)
+		}
+	})
+}
 
 func TestTinyIndirectPointers(t *testing.T) {
 	var m = map[string]int{}

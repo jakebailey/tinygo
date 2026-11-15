@@ -197,6 +197,7 @@ func TestCompiler(t *testing.T) {
 		{"string.go", "", ""},
 		{"float.go", "", ""},
 		{"interface.go", "", ""},
+		{"interface.go", "arduino", ""},
 		{"func.go", "", ""},
 		{"defer.go", "cortex-m-qemu", ""},
 		{"pragma.go", "", ""},

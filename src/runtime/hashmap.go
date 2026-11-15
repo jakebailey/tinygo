@@ -690,7 +690,8 @@ func hashmapMakeReflect(keySize, valueSize, sizeHint uintptr, typeInfo, keyType 
 // rawToInterface reconstructs an interface{} from raw bytes at ptr.
 func rawToInterface(t *reflectlite.RawType, ptr unsafe.Pointer) interface{} {
 	var val unsafe.Pointer
-	if t.Size() <= unsafe.Sizeof(uintptr(0)) {
+	kind := t.Kind()
+	if kind != reflectlite.Bool && (kind < reflectlite.Int || kind > reflectlite.Uintptr) && t.Size() <= unsafe.Sizeof(uintptr(0)) {
 		val = reflectliteLoadInlineValue(ptr, t)
 	} else {
 		val = ptr
