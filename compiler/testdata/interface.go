@@ -8,6 +8,14 @@ func simpleType() interface{} {
 	return 0
 }
 
+func integerType(value uint64) interface{} {
+	return value
+}
+
+func integerAssertion(value interface{}) uint64 {
+	return value.(uint64)
+}
+
 func pointerType() interface{} {
 	// Pointers have an element type, in this case int.
 	var v *int

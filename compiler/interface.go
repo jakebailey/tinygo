@@ -216,7 +216,26 @@ const (
 //
 // An interface value is a {typecode, value} tuple named runtime._interface.
 func (b *builder) createMakeInterface(val llvm.Value, typ types.Type, pos token.Pos) llvm.Value {
-	itfValue := b.emitPointerPack([]llvm.Value{val}, pos)
+	var itfValue llvm.Value
+	if val.Type().TypeKind() == llvm.IntegerTypeKind {
+		if val.IsAConstantInt().IsNil() || val.ZExtValue() < 256 {
+			bits := val
+			if bits.Type() == b.i1 {
+				bits = b.CreateZExt(bits, b.i8, "interface.bits")
+			}
+			name := "interfaceInteger" + strconv.Itoa(bits.Type().IntTypeWidth())
+			itfValue = b.createRuntimeCall(name, []llvm.Value{bits}, "")
+		} else {
+			global := llvm.AddGlobal(b.mod, val.Type(), b.pkg.Path()+"$interface.integer")
+			global.SetInitializer(val)
+			global.SetGlobalConstant(true)
+			global.SetUnnamedAddr(true)
+			global.SetLinkage(llvm.InternalLinkage)
+			itfValue = global
+		}
+	} else {
+		itfValue = b.emitPointerPack([]llvm.Value{val}, pos)
+	}
 	return b.createMakeInterfaceFromPointer(itfValue, typ)
 }
 
@@ -236,6 +255,9 @@ func (b *builder) extractValueFromInterface(itf llvm.Value, llvmType llvm.Type) 
 	valuePtr := b.CreateExtractValue(itf, 1, "typeassert.value.ptr")
 	if b.isIndirectAggregate(llvmType) {
 		return valuePtr
+	}
+	if llvmType.TypeKind() == llvm.IntegerTypeKind {
+		return b.CreateLoad(llvmType, valuePtr, "typeassert.value")
 	}
 	return b.emitPointerUnpack(valuePtr, []llvm.Type{llvmType})[0]
 }
@@ -1883,6 +1905,9 @@ func (c *context) getInterfaceInvokeWrapper(fn *ssa.Function, llvmFnType llvm.Ty
 	receiverParam := wrapperParams[resultOffset]
 	if receiverIndirect {
 		params = append(params, receiverParam)
+	} else if receiverType.TypeKind() == llvm.IntegerTypeKind {
+		receiverValue := b.CreateLoad(receiverType, receiverParam, "receiver")
+		params = append(params, b.expandFormalParam(receiverValue)...)
 	} else {
 		receiverValue := b.emitPointerUnpack(receiverParam, []llvm.Type{receiverType})[0]
 		params = append(params, b.expandFormalParam(receiverValue)...)

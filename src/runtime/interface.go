@@ -6,6 +6,8 @@ package runtime
 // anything (including non-pointers).
 
 import (
+	"internal/gclayout"
+	"internal/goarch"
 	"internal/reflectlite"
 	"unsafe"
 )
@@ -13,6 +15,66 @@ import (
 type _interface struct {
 	typecode unsafe.Pointer
 	value    unsafe.Pointer
+}
+
+// getStaticuint64s is implemented by the compiler as a read-only table.
+func getStaticuint64s() *[256]uint64
+
+func staticInteger(bits uint8, size uintptr) unsafe.Pointer {
+	ptr := unsafe.Pointer(&getStaticuint64s()[bits])
+	if goarch.BigEndian {
+		ptr = unsafe.Add(ptr, 8-size)
+	}
+	return ptr
+}
+
+func interfaceInteger8(bits uint8) unsafe.Pointer {
+	return staticInteger(bits, 1)
+}
+
+//go:inline
+func interfaceInteger16(bits uint16) unsafe.Pointer {
+	if bits < 256 {
+		return staticInteger(uint8(bits), 2)
+	}
+	ptr := alloc(2, gclayout.NoPtrs.AsPtr())
+	*(*uint16)(ptr) = bits
+	return ptr
+}
+
+//go:inline
+func interfaceInteger32(bits uint32) unsafe.Pointer {
+	if bits < 256 {
+		return staticInteger(uint8(bits), 4)
+	}
+	ptr := alloc(4, gclayout.NoPtrs.AsPtr())
+	*(*uint32)(ptr) = bits
+	return ptr
+}
+
+//go:inline
+func interfaceInteger64(bits uint64) unsafe.Pointer {
+	if bits < 256 {
+		return staticInteger(uint8(bits), 8)
+	}
+	ptr := alloc(8, gclayout.NoPtrs.AsPtr())
+	*(*uint64)(ptr) = bits
+	return ptr
+}
+
+func interfaceInteger(bits uint64, size uintptr) unsafe.Pointer {
+	switch size {
+	case 1:
+		return interfaceInteger8(uint8(bits))
+	case 2:
+		return interfaceInteger16(uint16(bits))
+	case 4:
+		return interfaceInteger32(uint32(bits))
+	case 8:
+		return interfaceInteger64(bits)
+	default:
+		panic("runtime: invalid integer interface size")
+	}
 }
 
 //go:inline

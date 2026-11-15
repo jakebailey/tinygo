@@ -25,6 +25,19 @@ func (b *builder) defineIntrinsicFunction() {
 		b.createMemoryZeroImpl()
 	case name == "runtime.stacksave":
 		b.createStackSaveImpl()
+	case name == "runtime.getStaticuint64s":
+		b.createFunctionStart(true)
+		values := make([]llvm.Value, 256)
+		for i := range values {
+			values[i] = llvm.ConstInt(b.i64, uint64(i), false)
+		}
+		initializer := llvm.ConstArray(b.i64, values)
+		global := llvm.AddGlobal(b.mod, initializer.Type(), "runtime.staticuint64s")
+		global.SetInitializer(initializer)
+		global.SetGlobalConstant(true)
+		global.SetLinkage(llvm.InternalLinkage)
+		global.SetAlignment(b.targetData.ABITypeAlignment(b.i64))
+		b.CreateRet(global)
 	case name == "runtime.KeepAlive":
 		b.createKeepAliveImpl()
 	case name == "machine.keepAliveNoEscape":

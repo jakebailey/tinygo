@@ -9,6 +9,9 @@ target triple = "wasm32-unknown-wasip1"
 
 @"reflect/types.type:basic:int" = linkonce_odr constant { i8, ptr } { i8 -62, ptr @"reflect/types.type:pointer:basic:int" }, align 4
 @"reflect/types.type:pointer:basic:int" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:basic:int" }, align 4
+@"reflect/types.type:basic:uint64" = linkonce_odr constant { i8, ptr } { i8 -53, ptr @"reflect/types.type:pointer:basic:uint64" }, align 4
+@"reflect/types.type:pointer:basic:uint64" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:basic:uint64" }, align 4
+@"reflect/types.typeid:basic:uint64" = external constant i8
 @"reflect/types.type:pointer:named:error" = linkonce_odr constant { i8, i16, ptr } { i8 -43, i16 0, ptr @"reflect/types.type:named:error" }, align 4
 @"reflect/types.type:named:error" = linkonce_odr constant { i8, i16, ptr, ptr, ptr, { i32, [1 x ptr], [1 x ptr], [1 x ptr] }, [7 x i8] } { i8 116, i16 -32767, ptr @"reflect/types.type:pointer:named:error", ptr @"reflect/types.type:interface:{Error:func:{}{basic:string}}", ptr @"reflect/types.type.pkgpath.empty", { i32, [1 x ptr], [1 x ptr], [1 x ptr] } { i32 1, [1 x ptr] [ptr @"reflect/types.signature:Error:func:{}{basic:string}"], [1 x ptr] [ptr @"reflect/types.methodname:Error:func:{}{basic:string}"], [1 x ptr] [ptr getelementptr ({ [2 x i32], i8, i8, i16, ptr, [1 x ptr] }, ptr @"reflect/types.type:func:{}{basic:string}", i32 0, i32 1)] }, [7 x i8] c".error\00" }, align 4
 @"reflect/types.signature:Error:func:{}{basic:string}" = linkonce_odr constant i8 0, align 1
@@ -55,10 +58,47 @@ entry:
 define hidden %runtime._interface @main.simpleType(ptr %context) unnamed_addr #1 {
 entry:
   %stackalloc = alloca i8, align 1
+  %0 = call ptr @runtime.interfaceInteger(i64 0, i32 4, ptr undef) #7
+  %1 = insertvalue %runtime._interface { ptr @"reflect/types.type:basic:int", ptr undef }, ptr %0, 1
   call void @runtime.trackPointer(ptr nonnull @"reflect/types.type:basic:int", ptr nonnull %stackalloc, ptr undef) #7
-  call void @runtime.trackPointer(ptr null, ptr nonnull %stackalloc, ptr undef) #7
-  ret %runtime._interface { ptr @"reflect/types.type:basic:int", ptr null }
+  call void @runtime.trackPointer(ptr %0, ptr nonnull %stackalloc, ptr undef) #7
+  ret %runtime._interface %1
 }
+
+declare ptr @runtime.interfaceInteger(i64, i32, ptr) #0
+
+; Function Attrs: nounwind
+define hidden %runtime._interface @main.integerType(i64 %value, ptr %context) unnamed_addr #1 {
+entry:
+  %stackalloc = alloca i8, align 1
+  %0 = call ptr @runtime.interfaceInteger(i64 %value, i32 8, ptr undef) #7
+  %1 = insertvalue %runtime._interface { ptr @"reflect/types.type:basic:uint64", ptr undef }, ptr %0, 1
+  call void @runtime.trackPointer(ptr nonnull @"reflect/types.type:basic:uint64", ptr nonnull %stackalloc, ptr undef) #7
+  call void @runtime.trackPointer(ptr %0, ptr nonnull %stackalloc, ptr undef) #7
+  ret %runtime._interface %1
+}
+
+; Function Attrs: nounwind
+define hidden i64 @main.integerAssertion(ptr %value.typecode, ptr %value.value, ptr %context) unnamed_addr #1 {
+entry:
+  %typecode = call i1 @runtime.typeAssert(ptr %value.typecode, ptr nonnull @"reflect/types.typeid:basic:uint64", ptr undef) #7
+  br i1 %typecode, label %typeassert.ok, label %typeassert.throw
+
+typeassert.ok:                                    ; preds = %entry
+  %typeassert.value = load i64, ptr %value.value, align 8
+  ret i64 %typeassert.value
+
+typeassert.throw:                                 ; preds = %entry
+  call void @runtime.interfaceTypeAssert(i1 false, ptr undef) #7
+  br label %unwind.return
+
+unwind.return:                                    ; preds = %typeassert.throw
+  ret i64 undef
+}
+
+declare i1 @runtime.typeAssert(ptr, ptr dereferenceable_or_null(1), ptr) #0
+
+declare void @runtime.interfaceTypeAssert(i1, ptr) #0
 
 ; Function Attrs: nounwind
 define hidden %runtime._interface @main.pointerType(ptr %context) unnamed_addr #1 {
@@ -128,8 +168,6 @@ typeassert.next:                                  ; preds = %typeassert.ok, %ent
 typeassert.ok:                                    ; preds = %entry
   br label %typeassert.next
 }
-
-declare i1 @runtime.typeAssert(ptr, ptr dereferenceable_or_null(1), ptr) #0
 
 ; Function Attrs: nounwind
 define hidden i1 @main.assertionOnlyTypes(ptr %itf.typecode, ptr %itf.value, ptr %context) unnamed_addr #1 {
