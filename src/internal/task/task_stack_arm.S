@@ -25,7 +25,8 @@ tinygo_startTask:
 
     // Branch to the "goroutine start" function. By using blx instead of bx,
     // we'll return here instead of tail calling.
-    blx   r4
+    mov   lr, pc
+    bx    r4
 
     // After return, exit this goroutine. This is a tail call.
     bl    tinygo_task_exit
