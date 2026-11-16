@@ -9,6 +9,7 @@ import (
 	"debug/dwarf"
 	"debug/elf"
 	"debug/pe"
+	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
@@ -375,6 +376,61 @@ func main() {
 			containsPath := bytes.Contains(binary, []byte(sourceDir)) || bytes.Contains(binary, []byte(filepath.ToSlash(sourceDir)))
 			if containsPath == trim {
 				t.Errorf("trimpath=%v: contains local runtime source directory=%v", trim, containsPath)
+			}
+		})
+	}
+}
+
+func TestPY32StackSizes(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	source := `package main
+func main() {
+	done := make(chan bool)
+	go func() { done <- true }()
+	<-done
+	println("done")
+}
+`
+	src := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(src, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"py32f030x4", "py32t020x5", "py32e407xe"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+			options := optionsFromTarget(target, sema)
+			options.Scheduler = "tasks"
+			options.GC = "conservative"
+			options.StackSize = 4096
+			config, err := builder.NewConfig(&options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outpath := filepath.Join(t.TempDir(), "main.elf")
+			if err := Build(src, outpath, config); err != nil {
+				t.Fatal(err)
+			}
+			file, err := elf.Open(outpath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			section := file.Section(".tinygo_stacksizes")
+			if section == nil {
+				t.Fatal("missing automatic stack sizes")
+			}
+			data, err := section.Data()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(data) < 8 || len(data)%4 != 0 {
+				t.Fatalf("invalid stack-size data: %d bytes", len(data))
+			}
+			for i := 0; i < len(data); i += 4 {
+				if size := binary.LittleEndian.Uint32(data[i:]); size == 0 || size > 512 {
+					t.Errorf("goroutine stack size = %d, want at most 512 bytes", size)
+				}
 			}
 		})
 	}
