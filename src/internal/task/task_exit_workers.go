@@ -1,4 +1,4 @@
-//go:build scheduler.workers
+//go:build exec.workers
 
 package task
 

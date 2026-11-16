@@ -1,4 +1,4 @@
-//go:build scheduler.tasks && esp8266
+//go:build exec.single && esp8266
 
 package task
 

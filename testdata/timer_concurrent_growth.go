@@ -1,5 +1,5 @@
 // Several goroutines grow and drain the timer queue at the same time, and
-// every short timer must fire exactly once. With -scheduler=cores this also
+// every short timer must fire exactly once. With -cores=2 this also
 // covers two cores growing the queue at once.
 package main
 

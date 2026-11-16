@@ -170,7 +170,7 @@ func main() {
 	}
 }
 
-// Tests that need a scheduler that runs goroutines on a pool of threads.
+// Tests that require the workers execution mode.
 var workersTests = []string{
 	"lockosthread.go",
 	"workers.go",
@@ -274,7 +274,7 @@ func TestBuild(t *testing.T) {
 		for _, name := range gcStackNativeTests {
 			t.Run(name, func(t *testing.T) {
 				if runtime.GOOS == "windows" && (name == "gcstacks-stale.go" || name == "gcstacks-blocked.go") {
-					t.Skip("boehm scans whole goroutine stacks with the tasks scheduler")
+					t.Skip("boehm scans whole goroutine stacks with the workers execution mode")
 				}
 				t.Parallel()
 				runTest(name, hostOptions, t, nil, nil)
@@ -296,7 +296,7 @@ func TestBuild(t *testing.T) {
 
 		if hostSpec, err := compileopts.LoadTarget(&hostOptions); err != nil {
 			t.Fatal("failed to load target spec:", err)
-		} else if (&compileopts.Config{Options: &hostOptions, Target: hostSpec}).Scheduler() == "workers" {
+		} else if (&compileopts.Config{Options: &hostOptions, Target: hostSpec}).ExecutionMode() == "workers" {
 			for _, procs := range []string{"1", "3"} {
 				t.Run("workers.go-GOMAXPROCS="+procs, func(t *testing.T) {
 					t.Parallel()
@@ -306,26 +306,25 @@ func TestBuild(t *testing.T) {
 		}
 
 		if runtime.GOOS == "linux" {
-			t.Run("tasks", func(t *testing.T) {
+			t.Run("single", func(t *testing.T) {
 				t.Parallel()
 				options := compileopts.Options(hostOptions)
-				options.Scheduler = "tasks"
+				options.Cores = 1
 				runPlatTests(options, tests, t)
 			})
 		}
 
-		// scheduler.threads needs threadID, which exists only on Linux and Darwin.
 		// scheduler.none does not link on Windows.
 		switch runtime.GOOS {
 		case "darwin", "linux":
-			t.Run("gcstacks-blocked.go-gc=boehm-scheduler=tasks", func(t *testing.T) {
+			t.Run("gcstacks-blocked.go-gc=boehm-cores=1", func(t *testing.T) {
 				t.Parallel()
 				options := compileopts.Options(hostOptions)
 				options.GC = "boehm"
-				options.Scheduler = "tasks"
+				options.Cores = 1
 				runTest("gcstacks-blocked.go", options, t, nil, nil)
 			})
-			for _, scheduler := range []string{"threads", "none"} {
+			for _, scheduler := range []string{"unified", "none"} {
 				t.Run("finalizerinvariants.go-gc-conservative-scheduler-"+scheduler, func(t *testing.T) {
 					t.Parallel()
 					options := compileopts.Options(hostOptions)
@@ -522,11 +521,11 @@ func TestBuild(t *testing.T) {
 
 		t.Run("EmulatedRISCV", func(t *testing.T) {
 			t.Parallel()
-			for _, scheduler := range []string{"cores", "tasks"} {
-				t.Run(scheduler, func(t *testing.T) {
+			for _, cores := range []int{1, 4} {
+				t.Run(fmt.Sprintf("cores=%d", cores), func(t *testing.T) {
 					t.Parallel()
 					opts := optionsFromTarget("riscv-qemu", sema)
-					opts.Scheduler = scheduler
+					opts.Cores = cores
 					runPlatTests(opts, tests, t)
 				})
 			}
@@ -733,7 +732,7 @@ func runPlatTests(options compileopts.Options, tests []string, t *testing.T) {
 		t.Fatal("failed to load target spec:", err)
 	}
 
-	scheduler := (&compileopts.Config{Options: &options, Target: spec}).Scheduler()
+	executionMode := (&compileopts.Config{Options: &options, Target: spec}).ExecutionMode()
 
 	// FIXME: this should really be:
 	// isWebAssembly := strings.HasPrefix(spec.Triple, "wasm")
@@ -746,9 +745,9 @@ func runPlatTests(options compileopts.Options, tests []string, t *testing.T) {
 	}
 
 	for _, name := range tests {
-		if name == "goroutines.go" && (scheduler == "threads" || scheduler == "cores" || scheduler == "workers") {
+		if name == "goroutines.go" && (executionMode == "multicore" || executionMode == "workers") {
 			// This test intentionally checks concurrent scheduling by comparing
-			// output order, so only run it with non-threaded schedulers.
+			// output order, so only run it in single-threaded execution mode.
 			continue
 		}
 		if name == "timer_node_reuse_gc.go" {
@@ -758,16 +757,16 @@ func runPlatTests(options compileopts.Options, tests []string, t *testing.T) {
 				continue
 			}
 		}
-		if (name == "workers.go" || name == "lockosthread.go") && scheduler != "workers" {
-			// These need a scheduler that runs goroutines on a pool of threads.
+		if (name == "workers.go" || name == "lockosthread.go") && executionMode != "workers" {
+			// These require the workers execution mode.
 			continue
 		}
 		if name == "lockosthread.go" && spec.GOOS != "linux" {
 			// This test uses syscall.Gettid to identify threads.
 			continue
 		}
-		if (name == "coreassign.go" || name == "coreswake.go") && scheduler != "cores" {
-			// These tests need the cores scheduler.
+		if (name == "coreassign.go" || name == "coreswake.go") && executionMode != "multicore" {
+			// These tests need the multicore execution mode.
 			continue
 		}
 		if name == "slicegrow.go" && (isBaremetal || spec.GC == "leaking") {
@@ -798,8 +797,8 @@ func runPlatTests(options compileopts.Options, tests []string, t *testing.T) {
 			// Too many goroutines for the LM3S6965's RAM.
 			continue
 		}
-		if options.Target == "riscv-qemu" && name == "gcstacks.go" && scheduler == "tasks" {
-			// Other targets cover the tasks scheduler, and this run takes 34 seconds.
+		if options.Target == "riscv-qemu" && name == "gcstacks.go" && executionMode == "single" {
+			// Other targets cover single-core execution, and this run takes 34 seconds.
 			continue
 		}
 		if options.Target == "simavr" {

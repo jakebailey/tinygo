@@ -1,4 +1,4 @@
-//go:build scheduler.tasks && avr
+//go:build exec.single && avr
 
 package task
 

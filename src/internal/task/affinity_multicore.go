@@ -1,4 +1,4 @@
-//go:build scheduler.cores
+//go:build exec.multicore
 
 package task
 

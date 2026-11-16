@@ -33,8 +33,8 @@ type Task struct {
 	// SynctestBlocked is set while this task is durably blocked.
 	SynctestBlocked bool
 
-	// Affinity is the assigned core used by the cores scheduler.
-	// It fits in the padding before DeferFrame, and is empty for other schedulers.
+	// Affinity is the assigned core used by multicore execution.
+	// It fits in the padding before DeferFrame, and is empty otherwise.
 	Affinity Affinity
 
 	// DeferFrame stores a pointer to the (stack allocated) defer frame of the

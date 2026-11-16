@@ -142,18 +142,35 @@ func (c *Config) GOMIPS() string {
 // BuildTags returns the complete list of build tags used during this build.
 func (c *Config) BuildTags() []string {
 	tags := append([]string(nil), c.Target.BuildTags...) // copy slice (avoid a race)
+	if c.Target.MaxCores > 1 {
+		tags = append(tags, fmt.Sprintf("tinygo.cores%d", c.NumCores()))
+	}
 	tags = append(tags, []string{
 		"tinygo",                                     // that's the compiler
 		"purego",                                     // to get various crypto packages to work
 		"osusergo",                                   // to get os/user to work
 		"math_big_pure_go",                           // to get math/big to work
-		"gc." + c.GC(), "scheduler." + c.Scheduler(), // used inside the runtime package
+		"gc." + c.GC(),
 		"tinygo.unwind." + c.PanicUnwind(),
 		"serial." + c.Serial()}...) // used inside the machine package
 	switch c.Scheduler() {
-	case "threads", "cores", "workers":
-	default:
-		tags = append(tags, "tinygo.unicore")
+	case "none":
+		tags = append(tags, "scheduler.none", "tinygo.unicore")
+	case "unified":
+		tags = append(tags, "scheduler.unified")
+		switch c.ExecutionMode() {
+		case "multicore":
+			tags = append(tags, "exec.multicore")
+		case "workers":
+			tags = append(tags, "exec.workers")
+		case "asyncify":
+			tags = append(tags, "exec.asyncify", "tinygo.unicore")
+		default:
+			tags = append(tags, "exec.single", "tinygo.unicore")
+		}
+		if c.StackSwitching() == "asyncify" {
+			tags = append(tags, "stack.asyncify")
+		}
 	}
 	for i := 1; i <= c.GoMinorVersion; i++ {
 		tags = append(tags, fmt.Sprintf("go1.%d", i))
@@ -185,9 +202,7 @@ func (c *Config) NeedsStackObjects() bool {
 	}
 }
 
-// Scheduler returns the scheduler implementation. Valid values are "none",
-// "tasks", "asyncify", "threads", "cores" and "workers". The "unified" option is
-// resolved to one of these for the target.
+// Scheduler returns the scheduler implementation.
 func (c *Config) Scheduler() string {
 	scheduler := c.Options.Scheduler
 	if scheduler == "" {
@@ -196,32 +211,59 @@ func (c *Config) Scheduler() string {
 	switch scheduler {
 	case "":
 		return "none"
-	case "unified":
-		return c.unifiedScheduler()
+	case "unified", "tasks", "asyncify", "threads", "cores":
+		return "unified"
+	case "none":
+		return "none"
 	}
 	return scheduler
 }
 
-// unifiedScheduler returns the scheduler implementation used for
-// -scheduler=unified. Hosted targets run goroutines on a pool of worker
-// threads where the platform supports it. Other targets keep their default
-// scheduler, or get the cooperative scheduler if they have none.
-func (c *Config) unifiedScheduler() string {
-	switch c.Target.Scheduler {
-	case "unified":
+// ExecutionMode reports how the unified scheduler runs goroutines.
+func (c *Config) ExecutionMode() string {
+	if c.Scheduler() != "unified" {
+		return ""
+	}
+	if c.StackSwitching() == "asyncify" {
+		return "asyncify"
+	}
+	if c.Options.Cores == 1 {
+		return "single"
+	}
+	switch c.Target.Libc {
+	case "musl", "glibc", "darwin-libSystem", "mingw-w64":
 		switch c.GOOS() + "/" + c.GOARCH() {
 		case "linux/amd64", "linux/arm64", "linux/386", "linux/arm", "linux/mips", "linux/mipsle",
 			"darwin/amd64", "darwin/arm64", "windows/amd64", "windows/arm64":
 			return "workers"
 		}
-		return "tasks"
-	case "", "none":
-		if strings.HasPrefix(c.Triple(), "wasm") {
-			return "asyncify"
-		}
-		return "tasks"
 	}
-	return c.Target.Scheduler
+	if c.NumCores() > 1 {
+		return "multicore"
+	}
+	return "single"
+}
+
+// NumCores returns the number of embedded CPU cores used by the scheduler.
+func (c *Config) NumCores() int {
+	if c.Options.Cores != 0 {
+		return c.Options.Cores
+	}
+	return 1
+}
+
+// StackSwitching returns the mechanism used to suspend a goroutine.
+func (c *Config) StackSwitching() string {
+	if c.Scheduler() != "unified" {
+		return "native"
+	}
+	if c.Target.StackSwitching != "" {
+		return c.Target.StackSwitching
+	}
+	if strings.HasPrefix(c.Triple(), "wasm") {
+		return "asyncify"
+	}
+	return "native"
 }
 
 // Serial returns the serial implementation for this build configuration: uart,
@@ -278,7 +320,7 @@ func (c *Config) PanicUnwind() string {
 		// deferred calls, but calls need no code to propagate an unwind.
 		return "none"
 	}
-	if c.Scheduler() == "asyncify" {
+	if c.StackSwitching() == "asyncify" {
 		return "asyncify"
 	}
 	if requested == "explicit" {
@@ -309,7 +351,7 @@ func (c *Config) SupportsExplicitUnwind() bool {
 // automatically at compile time, if possible. If it is false, no attempt is
 // made.
 func (c *Config) AutomaticStackSize() bool {
-	if c.Target.AutoStackSize != nil && c.Scheduler() == "tasks" {
+	if c.Target.AutoStackSize != nil && c.ExecutionMode() == "single" {
 		return *c.Target.AutoStackSize
 	}
 	return false
@@ -623,7 +665,7 @@ func (c *Config) ExtraFiles() []string {
 	if c.GC() == "boehm" && !slices.Contains(files, "src/runtime/gc_boehm.c") {
 		files = append(slices.Clone(files), "src/runtime/gc_boehm.c")
 	}
-	if c.Scheduler() == "asyncify" && !slices.Contains(files, "src/internal/task/task_asyncify_wasm.S") {
+	if c.Scheduler() == "unified" && c.StackSwitching() == "asyncify" && !slices.Contains(files, "src/internal/task/task_asyncify_wasm.S") {
 		files = append(slices.Clone(files), "src/internal/task/task_asyncify_wasm.S")
 	}
 	return files

@@ -1,4 +1,4 @@
-//go:build (scheduler.tasks || scheduler.workers) && 386
+//go:build (exec.single || exec.workers) && 386
 
 package task
 

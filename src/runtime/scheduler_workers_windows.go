@@ -1,4 +1,4 @@
-//go:build scheduler.workers
+//go:build scheduler.unified && exec.workers
 
 package runtime
 

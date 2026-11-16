@@ -1,7 +1,7 @@
 package main
 
 // Tickers and time.After in many goroutines while the main goroutine runs the GC.
-// This used to hang or crash with -scheduler=cores on riscv-qemu, see #6047.
+// This used to hang or crash with multicore execution on riscv-qemu, see #6047.
 
 import (
 	"runtime"

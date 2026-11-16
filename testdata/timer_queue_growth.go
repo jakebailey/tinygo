@@ -1,5 +1,5 @@
 // Stress test for growing the timer queue while other goroutines sleep and
-// allocate. With -scheduler=cores, growing the queue must not allocate while
+// allocate. With -cores=2, growing the queue must not allocate while
 // schedulerLock is held. A GC started there waits for a core that is spinning
 // on the lock with interrupts off, and the program hangs.
 package main

@@ -17,10 +17,10 @@
 #include <unistd.h>
 
 #ifdef __linux__
-// BDWGC and the threads scheduler use the same signal.
+// BDWGC and the worker execution mode use the same signal.
 #define workerGCSignal (SIGRTMIN + 6)
 #else
-// macOS has no real-time signals. The threads scheduler uses SIGIO too.
+// macOS has no real-time signals. The worker execution mode uses SIGIO too.
 #define workerGCSignal SIGIO
 #endif
 

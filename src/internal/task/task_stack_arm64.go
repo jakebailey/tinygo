@@ -1,4 +1,4 @@
-//go:build (scheduler.tasks || scheduler.workers) && arm64
+//go:build (exec.single || exec.workers) && arm64
 
 package task
 

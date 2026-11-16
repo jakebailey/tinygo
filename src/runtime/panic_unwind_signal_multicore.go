@@ -1,8 +1,8 @@
-//go:build tinygo.unwind.explicit && scheduler.cores
+//go:build tinygo.unwind.explicit && exec.multicore
 
 package runtime
 
-var unwindPendingSignal [numCPU]bool
+var unwindPendingSignal [maxCPU]bool
 
 //go:inline
 func getUnwindSignal() bool {

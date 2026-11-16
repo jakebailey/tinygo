@@ -14,6 +14,7 @@
 		"machine.psram"
 	],
 	"serial": "uart",
+	"max-cores": 2,
 	"rtlib": "compiler-rt",
 	"libc": "picolibc",
 	"default-stack-size": 32768,

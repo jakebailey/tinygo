@@ -1,4 +1,4 @@
-//go:build scheduler.tasks || scheduler.asyncify || scheduler.cores || scheduler.workers
+//go:build scheduler.unified && (exec.single || exec.asyncify || exec.multicore || exec.workers)
 
 package runtime
 
@@ -7,12 +7,12 @@ package runtime
 // goroutines wait in a sleep queue ordered by wakeup time, next to the timer
 // queue.
 //
-// The same scheduler runs on a single thread, on the cores of a microcontroller,
-// and on a pool of OS threads. A backend provides the scheduler lock and the
+// The same scheduler runs on one thread, on microcontroller cores, and on a
+// pool of OS threads. A backend provides the scheduler lock and the
 // functions that pick, wake and wait for work:
 //   - scheduler_single.go runs everything on one thread. Its scheduler lock
 //     does nothing and the multicore parts compile away.
-//   - scheduler_cores.go runs goroutines on all cores of a microcontroller.
+//   - scheduler_multicore.go runs goroutines on all active microcontroller cores.
 //   - scheduler_workers.go runs goroutines on a pool of OS threads.
 
 import "internal/task"
@@ -262,7 +262,7 @@ func sleep(duration int64) {
 // There are a few special cases:
 //   - When returnAtDeadlock is true, it also returns when there are no more
 //     runnable goroutines.
-//   - When using the asyncify scheduler, it returns when it has to wait
+//   - When using asyncify stack switching, it returns when it has to wait
 //     (JavaScript uses setTimeout so the scheduler must return to the JS
 //     environment).
 func scheduler(returnAtDeadlock bool) {

@@ -1,4 +1,4 @@
-//go:build scheduler.tasks
+//go:build exec.single
 
 package runtime
 

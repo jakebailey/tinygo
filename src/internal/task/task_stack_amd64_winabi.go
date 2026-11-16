@@ -1,4 +1,4 @@
-//go:build (scheduler.tasks || scheduler.workers) && amd64 && (windows || uefi)
+//go:build (exec.single || exec.workers) && amd64 && (windows || uefi)
 
 package task
 

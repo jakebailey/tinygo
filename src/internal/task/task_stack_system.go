@@ -1,4 +1,4 @@
-//go:build (scheduler.tasks || scheduler.workers) && (amd64 || arm64 || 386 || (arm && !cortexm && !avr && !xtensa && !tinygo.riscv) || mips || mipsle)
+//go:build (exec.single || exec.workers) && (amd64 || arm64 || 386 || (arm && !cortexm && !avr && !xtensa && !tinygo.riscv) || mips || mipsle)
 
 package task
 

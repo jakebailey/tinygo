@@ -1,4 +1,4 @@
-//go:build scheduler.asyncify
+//go:build stack.asyncify
 
 package runtime
 

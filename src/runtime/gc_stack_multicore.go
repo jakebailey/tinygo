@@ -1,4 +1,4 @@
-//go:build scheduler.cores && (gc.conservative || gc.precise || gc.boehm)
+//go:build exec.multicore && (gc.conservative || gc.precise || gc.boehm)
 
 package runtime
 
@@ -36,7 +36,7 @@ func gcMarkReachable() {
 
 	// Interrupt all other cores.
 	gcScanState.Store(1)
-	for i := uint32(0); i < numCPU; i++ {
+	for i := uint32(0); i < uint32(numCPU); i++ {
 		if i == core {
 			continue
 		}
@@ -44,7 +44,7 @@ func gcMarkReachable() {
 	}
 
 	// Busy-wait until all the other cores are ready.
-	for gcScanState.Load() != numCPU {
+	for gcScanState.Load() != uint32(numCPU) {
 		spinLoopWait()
 	}
 	gcScanState.Store(0)
@@ -60,7 +60,7 @@ func gcMarkReachable() {
 	markGlobals()
 
 	// Signal each core in turn that they can scan the stack.
-	for i := uint32(0); i < numCPU; i++ {
+	for i := uint32(0); i < uint32(numCPU); i++ {
 		if i == core {
 			continue
 		}
@@ -106,7 +106,7 @@ func gcResumeWorld() {
 
 	// Signal each core that they can resume.
 	hartID := currentCPU()
-	for i := uint32(0); i < numCPU; i++ {
+	for i := uint32(0); i < uint32(numCPU); i++ {
 		if i == hartID {
 			continue
 		}
@@ -117,7 +117,7 @@ func gcResumeWorld() {
 
 	// Busy-wait until the core acknowledges the signal (and is going to return
 	// from the interrupt handler).
-	for gcScanState.Load() != numCPU-1 {
+	for gcScanState.Load() != uint32(numCPU)-1 {
 		spinLoopWait()
 	}
 	gcScanState.Store(0)

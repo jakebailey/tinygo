@@ -1,4 +1,4 @@
-//go:build (rp2040 || rp2350) && !scheduler.cores
+//go:build (rp2040 || rp2350) && !exec.multicore
 
 package runtime
 

@@ -18,8 +18,6 @@ const (
 	timerConfig  = esp.TIMG_TCONFIG_EN | esp.TIMG_TCONFIG_INCREASE | timerDivider<<esp.TIMG_TCONFIG_DIVIDER_Pos
 )
 
-const numCPU = 2
-
 // This is the function called on startup after the flash (IROM/DROM) is
 // initialized and the stack pointer has been set.
 //

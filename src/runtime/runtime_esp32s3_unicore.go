@@ -1,4 +1,4 @@
-//go:build esp32s3 && !scheduler.cores
+//go:build esp32s3 && !exec.multicore
 
 package runtime
 

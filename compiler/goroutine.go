@@ -129,7 +129,7 @@ func (b *builder) createGo(instr *ssa.Go) {
 	} else {
 		// The stack size is fixed at compile time. By emitting it here as a
 		// constant, it can be optimized.
-		if (b.Scheduler == "tasks" || b.Scheduler == "asyncify" || b.Scheduler == "workers") && b.DefaultStackSize == 0 {
+		if b.Scheduler == "unified" && b.DefaultStackSize == 0 {
 			b.addError(instr.Pos(), "default stack size for goroutines is not set")
 		}
 		stackSize = llvm.ConstInt(b.uintptrType, b.DefaultStackSize, false)
@@ -322,7 +322,7 @@ func (c *context) createGoroutineStartWrapper(fnType llvm.Type, fn llvm.Value, p
 
 	var exitGoroutine llvm.Value
 	var exitGoroutineType llvm.Type
-	if c.Scheduler == "asyncify" {
+	if c.StackSwitching == "asyncify" {
 		exitGoroutineType, exitGoroutine = c.getFunction(c.program.ImportedPackage("runtime").Members["exitGoroutine"].(*ssa.Function))
 	}
 
@@ -387,7 +387,7 @@ func (c *context) createGoroutineStartWrapper(fnType llvm.Type, fn llvm.Value, p
 			// Create the call.
 			b.CreateCall(fnType, fn, params, "")
 
-			if c.Scheduler == "asyncify" {
+			if c.StackSwitching == "asyncify" {
 				b.CreateCall(exitGoroutineType, exitGoroutine, []llvm.Value{
 					c.dataPtrUndef,
 				}, "")
@@ -538,14 +538,14 @@ func (c *context) createGoroutineStartWrapper(fnType llvm.Type, fn llvm.Value, p
 		// Create the call.
 		b.CreateCall(fnType, fnPtr, params, "")
 
-		if c.Scheduler == "asyncify" {
+		if c.StackSwitching == "asyncify" {
 			b.CreateCall(exitGoroutineType, exitGoroutine, []llvm.Value{
 				c.dataPtrUndef,
 			}, "")
 		}
 	}
 
-	if c.Scheduler == "asyncify" {
+	if c.StackSwitching == "asyncify" {
 		b.CreateUnreachable()
 	} else {
 		// Finish the function. Every basic block must end in a terminator, and
