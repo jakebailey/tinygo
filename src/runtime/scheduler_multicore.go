@@ -19,13 +19,17 @@ const hasParallelism = true
 var mainExited atomic.Uint32
 
 var (
-	sleepQueue *task.Task
-	runqueue   task.Queue
+	sleepQueue      *task.Task
+	runqueue        task.Queue
+	deadlockedTasks task.Queue
 )
 
 func deadlock() {
-	// Call yield without requesting a wakeup.
-	synctestTaskBlock(task.Current())
+	// Keep permanently blocked tasks reachable so their suspended stacks remain
+	// GC roots, but never put them back on the runnable queue.
+	current := task.Current()
+	synctestTaskBlock(current)
+	deadlockedTasks.Push(current)
 	task.Pause()
 	trap()
 }
