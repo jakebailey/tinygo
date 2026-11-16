@@ -129,6 +129,22 @@ func main() {
 	}
 }
 
+// Tests that need a scheduler that runs goroutines on a pool of threads.
+var workersTests = []string{
+	"lockosthread.go",
+	"workers.go",
+}
+
+// Tests for the unified scheduler on emulated Linux architectures. These
+// focus on the scheduler, the full list already runs with the default one.
+var unifiedEmulatedTests = append([]string{
+	"channel.go",
+	"gc.go",
+	"gcstacks.go",
+	"signal.go",
+	"timers.go",
+}, workersTests...)
+
 func TestBuild(t *testing.T) {
 	t.Parallel()
 
@@ -227,6 +243,21 @@ func TestBuild(t *testing.T) {
 			t.Parallel()
 			runTest("testing-verbose.go", hostOptions, t, nil, nil)
 		})
+
+		if runtime.GOOS == "linux" {
+			t.Run("unified", func(t *testing.T) {
+				t.Parallel()
+				options := compileopts.Options(hostOptions)
+				options.Scheduler = "unified"
+				runPlatTests(options, append(tests[:len(tests):len(tests)], workersTests...), t)
+				for _, procs := range []string{"1", "3"} {
+					t.Run("workers.go-GOMAXPROCS="+procs, func(t *testing.T) {
+						t.Parallel()
+						runTest("workers.go", options, t, nil, []string{"GOMAXPROCS=" + procs})
+					})
+				}
+			})
+		}
 
 		// scheduler.threads needs threadID, which exists only on Linux and Darwin.
 		// scheduler.none does not link on Windows.
@@ -514,6 +545,11 @@ func TestBuild(t *testing.T) {
 				t.Run(name, func(t *testing.T) {
 					runPlatTests(options, tests, t)
 				})
+				t.Run(name+"-unified", func(t *testing.T) {
+					options := compileopts.Options(options)
+					options.Scheduler = "unified"
+					runPlatTests(options, unifiedEmulatedTests, t)
+				})
 			}
 		}
 		t.Run("MIPS little-endian", func(t *testing.T) {
@@ -636,10 +672,7 @@ func runPlatTests(options compileopts.Options, tests []string, t *testing.T) {
 		t.Fatal("failed to load target spec:", err)
 	}
 
-	scheduler := options.Scheduler
-	if scheduler == "" {
-		scheduler = spec.Scheduler
-	}
+	scheduler := (&compileopts.Config{Options: &options, Target: spec}).Scheduler()
 
 	// FIXME: this should really be:
 	// isWebAssembly := strings.HasPrefix(spec.Triple, "wasm")
@@ -652,7 +685,7 @@ func runPlatTests(options compileopts.Options, tests []string, t *testing.T) {
 	}
 
 	for _, name := range tests {
-		if name == "goroutines.go" && (scheduler == "threads" || scheduler == "cores") {
+		if name == "goroutines.go" && (scheduler == "threads" || scheduler == "cores" || scheduler == "workers") {
 			// This test intentionally checks concurrent scheduling by comparing
 			// output order, so only run it with non-threaded schedulers.
 			continue
@@ -663,6 +696,10 @@ func runPlatTests(options compileopts.Options, tests []string, t *testing.T) {
 			if !isHost && options.Target != "wasip1" && options.Target != "riscv-qemu" {
 				continue
 			}
+		}
+		if (name == "workers.go" || name == "lockosthread.go") && scheduler != "workers" {
+			// These need a scheduler that runs goroutines on a pool of threads.
+			continue
 		}
 		if name == "coreassign.go" && scheduler != "cores" {
 			// Core assignment needs the cores scheduler.

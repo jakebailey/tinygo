@@ -678,6 +678,12 @@ smoketest-flags: | build/smoke
 	GOOS=windows GOARCH=arm64 $(TINYGO) build -size short -o $(SMOKE_OUT).exe   ./testdata/cgo
 	GOOS=darwin GOARCH=amd64 $(TINYGO) build  -size short -o $(SMOKE_OUT)       ./testdata/cgo
 	GOOS=darwin GOARCH=arm64 $(TINYGO) build  -size short -o $(SMOKE_OUT)       ./testdata/cgo
+	# -scheduler=unified picks a different scheduler for each of these
+	GOOS=windows GOARCH=amd64 $(TINYGO) build -size short -o $(SMOKE_OUT).exe -scheduler=unified ./testdata/channel.go
+	GOOS=darwin GOARCH=arm64 $(TINYGO) build  -size short -o $(SMOKE_OUT)     -scheduler=unified ./testdata/channel.go
+	$(TINYGO) build -size short -o $(SMOKE_OUT).wasm -target=wasip1 -scheduler=unified ./testdata/channel.go
+	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico2 -scheduler=unified ./testdata/channel.go
+	$(TINYGO) build -size short -o $(SMOKE_OUT)      -scheduler=unified -gc=leaking ./testdata/channel.go
 ifneq ($(OS),Windows_NT)
 	# TODO: this does not yet work on Windows. Somehow, unused functions are
 	# not garbage collected.
