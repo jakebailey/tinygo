@@ -5,7 +5,7 @@
 	"goarch": "arm",
 	"gc": "conservative",
 	"linker": "ld.lld",
-	"scheduler": "none",
+	"scheduler": "unified",
 	"rtlib": "compiler-rt",
 	"libc": "picolibc",
 	"default-stack-size": 256,
