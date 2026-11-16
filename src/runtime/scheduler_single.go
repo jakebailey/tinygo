@@ -43,40 +43,21 @@ func unlockTimers(mask interrupt.State) {
 	interrupt.Restore(mask)
 }
 
-// run is called by the program entry point to execute the go program.
-// With a scheduler, init and the main function are invoked in a goroutine before starting the scheduler.
-func run() {
-	initRand()
-	initHeap()
-	go func() {
-		initAll()
-		callMain()
-		mainExited = true
-	}()
-	scheduler(false)
-}
-
 // NumCPU returns the number of logical CPUs usable by the current process.
 func NumCPU() int {
 	return 1
 }
 
+func schedulerStartCores() {}
+
+func schedulerSetMainExited() {
+	mainExited = true
+}
+
 // The only thread always runs the scheduler.
 func schedulerAcquireSlot() {}
 
-func schedulerQueue(t *task.Task) {
-	runqueue.Push(t)
-}
-
 func schedulerWakeTask(t *task.Task) {}
-
-func schedulerPop() *task.Task {
-	return runqueue.Pop()
-}
-
-func schedulerCanRun(t *task.Task) bool {
-	return true
-}
 
 // The internal/task package keeps track of the current task.
 func setCurrentTask(t *task.Task) {}
