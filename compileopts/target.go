@@ -493,6 +493,7 @@ func defaultTarget(options *Options) (*TargetSpec, error) {
 			"src/internal/task/task_threads.c",
 			"src/runtime/os_darwin.c",
 			"src/runtime/runtime_unix.c",
+			"src/runtime/scheduler_workers.c",
 			"src/runtime/signal.c")
 	case "linux":
 		spec.GC = "boehm"

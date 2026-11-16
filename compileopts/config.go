@@ -205,9 +205,10 @@ func (c *Config) Scheduler() string {
 // -scheduler=unified. Targets without a scheduler by default get the
 // cooperative scheduler.
 func (c *Config) unifiedScheduler() string {
-	if c.Target.Scheduler == "threads" && c.GOOS() == "linux" {
-		switch c.GOARCH() {
-		case "amd64", "arm64", "386", "arm", "mips", "mipsle":
+	if c.Target.Scheduler == "threads" {
+		switch c.GOOS() + "/" + c.GOARCH() {
+		case "linux/amd64", "linux/arm64", "linux/386", "linux/arm", "linux/mips", "linux/mipsle",
+			"darwin/amd64", "darwin/arm64":
 			// Run goroutines on a pool of worker threads.
 			return "workers"
 		}

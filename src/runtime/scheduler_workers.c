@@ -1,12 +1,14 @@
 //go:build none
 
-// Thread support for the workers scheduler on Linux. This file is always
-// linked on Linux, unused functions are removed by the linker.
+// Thread support for the workers scheduler on Linux and macOS. This file is
+// always linked on these systems, unused functions are removed by the linker.
 
 #define _GNU_SOURCE
+#ifdef __linux__
+#include <sched.h>
+#endif
 #include <errno.h>
 #include <pthread.h>
-#include <sched.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -14,8 +16,13 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+#ifdef __linux__
 // BDWGC and the threads scheduler use the same signal.
 #define workerGCSignal (SIGRTMIN + 6)
+#else
+// macOS has no real-time signals. The threads scheduler uses SIGIO too.
+#define workerGCSignal SIGIO
+#endif
 
 // The worker structure of the current thread.
 static __thread void *current_worker;
@@ -59,6 +66,7 @@ int tinygo_worker_init(void *worker, uintptr_t *mainStackSize) {
     }
     *mainStackSize = size;
 
+#ifdef __linux__
     cpu_set_t set;
     if (sched_getaffinity(0, sizeof(set), &set) == 0) {
         int n = CPU_COUNT(&set);
@@ -66,6 +74,7 @@ int tinygo_worker_init(void *worker, uintptr_t *mainStackSize) {
             return n;
         }
     }
+#endif
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     if (n > 0) {
         return n;
