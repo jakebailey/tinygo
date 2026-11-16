@@ -8,7 +8,7 @@ package runtime
 // blocked in a system call.
 //
 // Goroutines switch stacks cooperatively like with the cores scheduler, and
-// share the run queue, sleep queue and timers with it (scheduler_multicore.go).
+// share the run queue, sleep queue and timers with it (scheduler_cooperative.go).
 //
 // Limitations:
 //   - Goroutines are not preempted. A goroutine that runs without blocking or
@@ -216,7 +216,7 @@ func run() {
 	lockWorker(w, t)
 	w.lockedInt = 1
 	w.lockedReady = true
-	scheduler(false)
+	schedule(false)
 	schedulerLock.Unlock()
 }
 
@@ -235,7 +235,7 @@ func workerStart(w *worker) {
 	workersLock.Unlock()
 
 	schedulerLock.Lock()
-	scheduler(false)
+	schedule(false)
 	schedulerLock.Unlock()
 }
 

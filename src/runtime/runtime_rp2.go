@@ -120,7 +120,7 @@ func runCore1() {
 
 	// Now start running the scheduler on this core.
 	schedulerLock.Lock()
-	scheduler(false)
+	schedule(false)
 	schedulerLock.Unlock()
 
 	// The main function returned.

@@ -88,7 +88,7 @@ func run() {
 
 	// The scheduler must always be entered while the scheduler lock is taken.
 	schedulerLock.Lock()
-	scheduler(false)
+	schedule(false)
 	schedulerLock.Unlock()
 }
 

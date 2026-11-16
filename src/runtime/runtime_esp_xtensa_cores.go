@@ -94,7 +94,7 @@ func runCore1() {
 	waitForSecondaryCoresReady()
 
 	schedulerLock.Lock()
-	scheduler(false)
+	schedule(false)
 	schedulerLock.Unlock()
 
 	exit(0)
