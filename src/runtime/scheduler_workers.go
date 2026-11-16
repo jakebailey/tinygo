@@ -23,6 +23,7 @@ import (
 	"internal/futex"
 	"internal/task"
 	"runtime/interrupt"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -102,6 +103,17 @@ var (
 	// Number of workers with a locked goroutine that isn't blocked.
 	lockedRunning int32
 
+	// Number of idle workers that keep their slot and poll for work before
+	// they park.
+	spinningWorkers int32
+
+	// Number of schedulerWake calls while a worker spins.
+	spinWakes atomic.Uint32
+
+	// Wakeups the last spinner received beyond its own. They go to other
+	// workers once the spinner has taken a goroutine.
+	extraSpinWakes uint32
+
 	numCPU     int32
 	gomaxprocs int32
 
@@ -118,11 +130,6 @@ type hostMutex struct {
 func (m *hostMutex) Lock() {
 	if m.futex.CompareAndSwap(0, 1) {
 		return
-	}
-	for i := 0; i < 100; i++ {
-		if m.futex.Load() == 0 && m.futex.CompareAndSwap(0, 1) {
-			return
-		}
 	}
 	for m.futex.Swap(2) != 0 {
 		m.futex.Wait(2)
@@ -284,6 +291,10 @@ func schedulerAcquireSlot() {
 // Wake a worker to run goroutines from the run queue, if there is a free slot.
 // Call with the scheduler lock held.
 func schedulerWake() {
+	if spinningWorkers > 0 {
+		spinWakes.Add(1)
+		return
+	}
 	if slotsUsed >= gomaxprocs {
 		// All slots are in use. Those workers will find the work.
 		return
@@ -332,7 +343,12 @@ func schedulerWakeTask(t *task.Task) {
 }
 
 func schedulerPop() *task.Task {
-	return runqueue.Pop()
+	t := runqueue.Pop()
+	for ; extraSpinWakes > 0 && !runqueue.Empty(); extraSpinWakes-- {
+		schedulerWake()
+	}
+	extraSpinWakes = 0
+	return t
 }
 
 // Locked tasks only run on their own worker, which doesn't run this loop.
@@ -384,9 +400,31 @@ func interruptSleepTicksMulticore(wakeup timeUnit) {
 // scheduler lock held, it is held again on return.
 func schedulerUnlockAndWait() {
 	w := currentWorker()
+	if spinningWorkers == 0 && spinForWork() {
+		return
+	}
 	releaseSlot(w)
 	checkDeadlock()
 	parkWorker(w)
+}
+
+// Poll for new work without the scheduler lock, so a goroutine woken shortly
+// after this worker went idle avoids a futex wake and a thread switch. Call
+// with the scheduler lock held, it is held again on return. Returns true if
+// schedulerWake was called while spinning.
+func spinForWork() bool {
+	spinningWorkers++
+	spinWakes.Store(0)
+	schedulerLock.Unlock()
+	for i := 0; i < 1000 && spinWakes.Load() == 0; i++ {
+	}
+	schedulerLock.Lock()
+	spinningWorkers--
+	wakes := spinWakes.Load()
+	if wakes > 1 {
+		extraSpinWakes = wakes - 1
+	}
+	return wakes != 0
 }
 
 // Abort if no worker runs and nothing can wake one. Call with the scheduler
