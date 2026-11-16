@@ -16,3 +16,6 @@ func run() {
 
 	scheduler(false)
 }
+
+// Embedded scheduler modes have no worker-slot limit.
+func schedulerAcquireSlot() {}
