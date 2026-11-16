@@ -71,9 +71,6 @@ func schedulerSetMainExited() {
 // Maximum number of cores that run the scheduler at the same time.
 const maxSchedulerThreads = numCPU
 
-// Every core always runs the scheduler.
-func schedulerAcquireSlot() {}
-
 func currentTask() *task.Task {
 	return cpuTasks[currentCPU()]
 }

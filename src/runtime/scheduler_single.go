@@ -54,9 +54,6 @@ func schedulerSetMainExited() {
 	mainExited = true
 }
 
-// The only thread always runs the scheduler.
-func schedulerAcquireSlot() {}
-
 func schedulerWakeTask(t *task.Task) {}
 
 // The internal/task package keeps track of the current task.
