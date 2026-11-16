@@ -23,6 +23,10 @@ func TestFinalizerRunnerSchedulerCoverage(t *testing.T) {
 
 	for _, gc := range []string{"conservative", "precise", "boehm"} {
 		for _, sched := range validSchedulerOptions {
+			if sched == "unified" {
+				// Resolved to one of the other schedulers.
+				continue
+			}
 			tags := map[string]bool{
 				"gc." + gc:           true,
 				"scheduler." + sched: true,

@@ -1814,7 +1814,7 @@ func main() {
 	libc := flag.String("libc", "", "libc to use on linux (musl, glibc)")
 	panicStrategy := flag.String("panic", "print", "panic strategy (print, trap)")
 	panicUnwind := flag.String("panic-unwind", "", "panic unwind strategy (auto, explicit, none)")
-	scheduler := flag.String("scheduler", "", "which scheduler to use (none, tasks, cores, threads, asyncify)")
+	scheduler := flag.String("scheduler", "", "which scheduler to use (none, tasks, cores, threads, asyncify, unified)")
 	serial := flag.String("serial", "", "which serial output to use (none, uart, usb, rtt)")
 	work := flag.Bool("work", false, "print the name of the temporary build directory and do not delete this directory on exit")
 	interpTimeout := flag.Duration("interp-timeout", 180*time.Second, "interp optimization pass timeout")
