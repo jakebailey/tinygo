@@ -203,21 +203,18 @@ func (c *Config) Scheduler() string {
 }
 
 // unifiedScheduler returns the scheduler implementation used for
-// -scheduler=unified. Targets without a scheduler by default get the
-// cooperative scheduler.
+// -scheduler=unified. Hosted targets run goroutines on a pool of worker
+// threads where the platform supports it. Other targets keep their default
+// scheduler, or get the cooperative scheduler if they have none.
 func (c *Config) unifiedScheduler() string {
-	switch c.GOOS() + "/" + c.GOARCH() {
-	case "linux/amd64", "linux/arm64", "linux/386", "linux/arm", "linux/mips", "linux/mipsle",
-		"darwin/amd64", "darwin/arm64":
-		if c.Target.Scheduler == "threads" {
-			// Run goroutines on a pool of worker threads.
+	switch c.Target.Scheduler {
+	case "unified":
+		switch c.GOOS() + "/" + c.GOARCH() {
+		case "linux/amd64", "linux/arm64", "linux/386", "linux/arm", "linux/mips", "linux/mipsle",
+			"darwin/amd64", "darwin/arm64", "windows/amd64", "windows/arm64":
 			return "workers"
 		}
-	case "windows/amd64", "windows/arm64":
-		// Windows targets have no threads scheduler to key on.
-		return "workers"
-	}
-	switch c.Target.Scheduler {
+		return "tasks"
 	case "", "none":
 		if strings.HasPrefix(c.Triple(), "wasm") {
 			return "asyncify"

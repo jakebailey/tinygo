@@ -476,7 +476,7 @@ func defaultTarget(options *Options) (*TargetSpec, error) {
 			platformVersion = "11.0.0" // first macosx platform with arm64 support
 		}
 		llvmvendor = "apple"
-		spec.Scheduler = "threads"
+		spec.Scheduler = "unified"
 		spec.Linker = "ld.lld"
 		spec.Libc = "darwin-libSystem"
 		// Use macosx* instead of darwin, otherwise darwin/arm64 will refer to
@@ -497,7 +497,7 @@ func defaultTarget(options *Options) (*TargetSpec, error) {
 			"src/runtime/signal.c")
 	case "linux":
 		spec.GC = "boehm"
-		spec.Scheduler = "threads"
+		spec.Scheduler = "unified"
 		spec.Linker = "ld.lld"
 		spec.RTLib = "compiler-rt"
 		spec.Libc = "musl"
@@ -540,7 +540,7 @@ func defaultTarget(options *Options) (*TargetSpec, error) {
 			"src/runtime/signal.c")
 	case "windows":
 		spec.GC = "boehm"
-		spec.Scheduler = "tasks"
+		spec.Scheduler = "unified"
 		spec.Linker = "ld.lld"
 		spec.Libc = "mingw-w64"
 		switch options.GOARCH {

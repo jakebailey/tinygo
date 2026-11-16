@@ -41,12 +41,12 @@ func TestSchedulerUnified(t *testing.T) {
 	for _, tc := range []struct {
 		goos, goarch, triple, target, want string
 	}{
-		{"linux", "amd64", "x86_64-unknown-linux-musl", "threads", "workers"},
-		{"linux", "mipsle", "mipsel-unknown-linux-musl", "threads", "workers"},
-		{"linux", "riscv64", "riscv64-unknown-linux-musl", "threads", "threads"},
-		{"darwin", "arm64", "arm64-apple-macosx11.0.0", "threads", "workers"},
-		{"windows", "amd64", "x86_64-unknown-windows-gnu", "tasks", "workers"},
-		{"windows", "386", "i386-unknown-windows-gnu", "tasks", "tasks"},
+		{"linux", "amd64", "x86_64-unknown-linux-musl", "unified", "workers"},
+		{"linux", "mipsle", "mipsel-unknown-linux-musl", "unified", "workers"},
+		{"linux", "riscv64", "riscv64-unknown-linux-musl", "unified", "tasks"},
+		{"darwin", "arm64", "arm64-apple-macosx11.0.0", "unified", "workers"},
+		{"windows", "amd64", "x86_64-unknown-windows-gnu", "unified", "workers"},
+		{"windows", "386", "i386-unknown-windows-gnu", "unified", "tasks"},
 		{"linux", "riscv", "riscv32-unknown-none", "cores", "cores"},
 		{"linux", "arm", "avr", "none", "tasks"},
 		{"linux", "arm", "thumbv6m-unknown-unknown-eabi", "", "tasks"},

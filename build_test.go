@@ -224,7 +224,7 @@ func TestBuild(t *testing.T) {
 	t.Run("Host", func(t *testing.T) {
 		t.Parallel()
 		hostOptions := optionsFromTarget("", sema)
-		runPlatTests(hostOptions, tests, t)
+		runPlatTests(hostOptions, slices.Concat(tests, workersTests), t)
 		for _, name := range gcStackNativeTests {
 			t.Run(name, func(t *testing.T) {
 				if runtime.GOOS == "windows" && (name == "gcstacks-stale.go" || name == "gcstacks-blocked.go") {
@@ -244,18 +244,23 @@ func TestBuild(t *testing.T) {
 			runTest("testing-verbose.go", hostOptions, t, nil, nil)
 		})
 
+		if hostSpec, err := compileopts.LoadTarget(&hostOptions); err != nil {
+			t.Fatal("failed to load target spec:", err)
+		} else if (&compileopts.Config{Options: &hostOptions, Target: hostSpec}).Scheduler() == "workers" {
+			for _, procs := range []string{"1", "3"} {
+				t.Run("workers.go-GOMAXPROCS="+procs, func(t *testing.T) {
+					t.Parallel()
+					runTest("workers.go", hostOptions, t, nil, []string{"GOMAXPROCS=" + procs})
+				})
+			}
+		}
+
 		if runtime.GOOS == "linux" {
-			t.Run("unified", func(t *testing.T) {
+			t.Run("tasks", func(t *testing.T) {
 				t.Parallel()
 				options := compileopts.Options(hostOptions)
-				options.Scheduler = "unified"
-				runPlatTests(options, append(tests[:len(tests):len(tests)], workersTests...), t)
-				for _, procs := range []string{"1", "3"} {
-					t.Run("workers.go-GOMAXPROCS="+procs, func(t *testing.T) {
-						t.Parallel()
-						runTest("workers.go", options, t, nil, []string{"GOMAXPROCS=" + procs})
-					})
-				}
+				options.Scheduler = "tasks"
+				runPlatTests(options, tests, t)
 			})
 		}
 
@@ -704,6 +709,10 @@ func runPlatTests(options compileopts.Options, tests []string, t *testing.T) {
 		}
 		if (name == "workers.go" || name == "lockosthread.go") && scheduler != "workers" {
 			// These need a scheduler that runs goroutines on a pool of threads.
+			continue
+		}
+		if name == "lockosthread.go" && spec.GOOS != "linux" {
+			// This test uses syscall.Gettid to identify threads.
 			continue
 		}
 		if name == "coreassign.go" && scheduler != "cores" {
