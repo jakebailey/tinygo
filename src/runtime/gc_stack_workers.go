@@ -2,50 +2,20 @@
 
 package runtime
 
-import (
-	"internal/futex"
-	"unsafe"
-)
+import "unsafe"
 
-// Odd while the world is stopped. The GC signal handler waits until it changes.
-var gcEpoch futex.Futex
-
-// Number of workers that stopped for the current GC cycle.
-var gcStopped futex.Futex
-
-//export tinygo_worker_send_gc_signal
-func tinygo_worker_send_gc_signal(thread uintptr)
-
-//export tinygo_worker_gc_init
-func tinygo_worker_gc_init()
-
-func init() {
-	tinygo_worker_gc_init()
-}
+// Whether the world is stopped. Only used by the goroutine running the GC.
+var gcWorldStopped bool
 
 // Stop all other workers and scan all stacks and globals. The world stays
 // stopped until gcResumeWorld.
 func gcMarkReachable() {
 	self := currentWorker()
-	if gcEpoch.Load()&1 == 0 {
+	if !gcWorldStopped {
 		// Keep new workers from starting while the world is stopped.
 		workersLock.Lock()
-		gcStopped.Store(0)
-		gcEpoch.Add(1)
-		var n uint32
-		for w := allWorkers; w != nil; w = w.next {
-			if w != self {
-				tinygo_worker_send_gc_signal(w.thread)
-				n++
-			}
-		}
-		for {
-			stopped := gcStopped.Load()
-			if stopped == n {
-				break
-			}
-			gcStopped.Wait(stopped)
-		}
+		gcWorldStopped = true
+		stopTheWorld(self)
 	}
 
 	for w := allWorkers; w != nil; w = w.next {
@@ -56,27 +26,15 @@ func gcMarkReachable() {
 		start = uintptr(unsafe.Pointer(&w.locked))
 		markRoots(start, start+unsafe.Sizeof(w.locked))
 		if w != self {
+			if unsafe.Sizeof(w.gcRegs) != 0 {
+				start = uintptr(unsafe.Pointer(&w.gcRegs))
+				markRoots(start, start+unsafe.Sizeof(w.gcRegs))
+			}
 			scanWorkerStack(w, w.gcSP)
 		}
 	}
 	scanCurrentStack()
 	markGlobals()
-}
-
-// Called from the GC signal handler on each other worker.
-//
-//export tinygo_worker_gc_pause
-func workerGCPause() {
-	// The handler runs on the interrupted stack, so this frame is below the
-	// saved registers of the interrupted code.
-	w := currentWorker()
-	w.gcSP = uintptr(stacksave())
-	epoch := gcEpoch.Load()
-	gcStopped.Add(1)
-	gcStopped.Wake()
-	for gcEpoch.Load() == epoch {
-		gcEpoch.Wait(epoch)
-	}
 }
 
 // Scan the stack of a worker from sp upwards. If the worker is running a
@@ -100,11 +58,10 @@ func scanstack(sp uintptr) {
 }
 
 func gcResumeWorld() {
-	if gcEpoch.Load()&1 == 0 {
-		// The world wasn't stopped.
+	if !gcWorldStopped {
 		return
 	}
-	gcEpoch.Add(1)
-	gcEpoch.WakeAll()
+	gcWorldStopped = false
+	startTheWorld(currentWorker())
 	workersLock.Unlock()
 }

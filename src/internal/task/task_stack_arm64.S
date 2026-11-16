@@ -48,7 +48,7 @@ tinygo_swapTask:
     // x1 = oldStack *uintptr
 
     // Save all callee-saved registers:
-    stp     x19, x20, [sp, #-160]!
+    stp     x19, x20, [sp, #-176]!
     stp     x21, x22, [sp, #16]
     stp     x23, x24, [sp, #32]
     stp     x25, x26, [sp, #48]
@@ -58,6 +58,11 @@ tinygo_swapTask:
     stp     d10, d11, [sp, #112]
     stp     d12, d13, [sp, #128]
     stp     d14, d15, [sp, #144]
+#if defined(_WIN32) && __STDC_HOSTED__
+    // Save Windows NT_TIB.StackBase ([x18, #8]) and StackLimit ([x18, #16]).
+    ldp     x9,  x10, [x18, #8]
+    stp     x9,  x10, [sp, #160]
+#endif
 
     // Save the current stack pointer in oldStack.
     mov x8, sp
@@ -67,6 +72,11 @@ tinygo_swapTask:
     mov sp, x0
 
     // Restore stack state and return.
+#if defined(_WIN32) && __STDC_HOSTED__
+    // Restore Windows NT_TIB.StackBase ([x18, #8]) and StackLimit ([x18, #16]).
+    ldp     x9,  x10, [sp, #160]
+    stp     x9,  x10, [x18, #8]
+#endif
     ldp     d14, d15, [sp, #144]
     ldp     d12, d13, [sp, #128]
     ldp     d10, d11, [sp, #112]
@@ -76,5 +86,5 @@ tinygo_swapTask:
     ldp     x25, x26, [sp, #48]
     ldp     x23, x24, [sp, #32]
     ldp     x21, x22, [sp, #16]
-    ldp     x19, x20, [sp], #160
+    ldp     x19, x20, [sp], #176
     ret

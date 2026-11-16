@@ -578,6 +578,14 @@ func defaultTarget(options *Options) (*TargetSpec, error) {
 		)
 		spec.ExtraFiles = append(spec.ExtraFiles,
 			"src/runtime/runtime_windows.c")
+		if options.GOARCH != "386" {
+			// The mingw TLS directory is only pulled in after LTO, which is
+			// too late for lld to keep it as a GC root.
+			spec.LDFlags = append(spec.LDFlags, "--undefined=_tls_used")
+			spec.ExtraFiles = append(spec.ExtraFiles,
+				"src/internal/futex/futex_windows.c",
+				"src/runtime/scheduler_workers_windows.c")
+		}
 	case "wasm", "wasip1", "wasip2":
 		return nil, fmt.Errorf("GOOS=%s but GOARCH is unset. Please set GOARCH to wasm", options.GOOS)
 	default:

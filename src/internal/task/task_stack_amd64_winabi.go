@@ -1,4 +1,4 @@
-//go:build scheduler.tasks && amd64 && (windows || uefi)
+//go:build (scheduler.tasks || scheduler.workers) && amd64 && (windows || uefi)
 
 package task
 
@@ -18,6 +18,12 @@ import "unsafe"
 // > R15, and XMM6-XMM15 nonvolatile. They must be saved and restored by a
 // > function that uses them.
 type calleeSavedRegs struct {
+	// Windows TEB stack bounds (NT_TIB.StackLimit / StackBase), saved and
+	// restored across task switches so Windows __chkstk and SEH see the
+	// active stack. Unused on UEFI.
+	stackLimit uintptr
+	stackBase  uintptr
+
 	// Note: rbx is placed here so that the stack is correctly aligned when
 	// loading/storing the xmm registers.
 	rbx   uintptr
@@ -46,6 +52,10 @@ type calleeSavedRegs struct {
 func (s *state) archInit(r *calleeSavedRegs, fn uintptr, args unsafe.Pointer) {
 	// Store the initial sp for the startTask function (implemented in assembly).
 	s.sp = uintptr(unsafe.Pointer(r))
+
+	// Initialize Windows TEB stack bounds for this goroutine stack.
+	r.stackLimit = uintptr(unsafe.Pointer(s.canaryPtr))
+	r.stackBase = uintptr(unsafe.Add(unsafe.Pointer(r), unsafe.Sizeof(*r)))
 
 	// Initialize the registers.
 	// These will be popped off of the stack on the first resume of the goroutine.

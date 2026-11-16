@@ -29,12 +29,22 @@ type calleeSavedRegs struct {
 	d13 uintptr
 	d14 uintptr
 	d15 uintptr
+
+	// Windows TEB stack bounds (NT_TIB.StackBase / StackLimit), saved and
+	// restored across task switches so Windows __chkstk and SEH see the
+	// active stack. Unused on other platforms.
+	stackBase  uintptr
+	stackLimit uintptr
 }
 
 // archInit runs architecture-specific setup for the goroutine startup.
 func (s *state) archInit(r *calleeSavedRegs, fn uintptr, args unsafe.Pointer) {
 	// Store the initial sp for the startTask function (implemented in assembly).
 	s.sp = uintptr(unsafe.Pointer(r))
+
+	// Initialize Windows TEB stack bounds for this goroutine stack.
+	r.stackBase = uintptr(unsafe.Add(unsafe.Pointer(r), unsafe.Sizeof(*r)))
+	r.stackLimit = uintptr(unsafe.Pointer(s.canaryPtr))
 
 	// Initialize the registers.
 	// These will be popped off of the stack on the first resume of the goroutine.

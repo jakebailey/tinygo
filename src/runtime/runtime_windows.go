@@ -3,7 +3,7 @@ package runtime
 import "unsafe"
 
 //export exit
-func libc_exit(code int)
+func exit(code int)
 
 //export putchar
 func libc_putchar(c int) int
@@ -73,7 +73,7 @@ func mainCRTStartup() int {
 	// Exiting this way (instead of returning) also fixes an issue where not all
 	// output would be sent to stdout before exit.
 	// See: https://github.com/tinygo-org/tinygo/pull/4589
-	libc_exit(0)
+	exit(0)
 
 	// Unreachable, since we've already exited. But we need to return something
 	// here to make this valid Go code.
@@ -130,7 +130,7 @@ func putchar(c byte) {
 }
 
 func abort() {
-	libc_exit(1)
+	exit(1)
 	trap()
 }
 
@@ -234,7 +234,7 @@ func now() (sec int64, nsec int32, mono int64) {
 
 //go:linkname syscall_Exit syscall.Exit
 func syscall_Exit(code int) {
-	libc_exit(code)
+	exit(code)
 }
 
 // Starting with Go 1.26, the syscall package on Windows defines function bodies

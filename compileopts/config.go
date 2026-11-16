@@ -37,6 +37,7 @@ var libVersions = map[string]int{
 	"picolibc":         2,
 	"wasmbuiltins":     1,
 	"compiler-rt":      1,
+	"mingw-w64":        1,
 	"wasi-libc":        1,
 	"wasi-libc-wasip2": 1,
 }
@@ -205,13 +206,16 @@ func (c *Config) Scheduler() string {
 // -scheduler=unified. Targets without a scheduler by default get the
 // cooperative scheduler.
 func (c *Config) unifiedScheduler() string {
-	if c.Target.Scheduler == "threads" {
-		switch c.GOOS() + "/" + c.GOARCH() {
-		case "linux/amd64", "linux/arm64", "linux/386", "linux/arm", "linux/mips", "linux/mipsle",
-			"darwin/amd64", "darwin/arm64":
+	switch c.GOOS() + "/" + c.GOARCH() {
+	case "linux/amd64", "linux/arm64", "linux/386", "linux/arm", "linux/mips", "linux/mipsle",
+		"darwin/amd64", "darwin/arm64":
+		if c.Target.Scheduler == "threads" {
 			// Run goroutines on a pool of worker threads.
 			return "workers"
 		}
+	case "windows/amd64", "windows/arm64":
+		// Windows targets have no threads scheduler to key on.
+		return "workers"
 	}
 	switch c.Target.Scheduler {
 	case "", "none":

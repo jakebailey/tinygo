@@ -37,7 +37,7 @@ type worker struct {
 	// Next worker in idleWorkers, guarded by schedulerLock.
 	idleNext *worker
 
-	// The pthread_t of this worker.
+	// The thread of this worker: a pthread_t, or a handle on Windows.
 	thread uintptr
 
 	// Goroutine running on this worker, or nil while in the scheduler.
@@ -56,8 +56,9 @@ type worker struct {
 	// Whether this worker may run goroutines, guarded by schedulerLock.
 	hasSlot bool
 
-	// Stack pointer where the worker stopped for the GC.
-	gcSP uintptr
+	// Stack pointer and registers where the worker stopped for the GC.
+	gcSP   uintptr
+	gcRegs workerGCRegs
 
 	// Goroutine locked to this worker with LockOSThread, guarded by
 	// schedulerLock. The worker runs no other goroutine while it is set.

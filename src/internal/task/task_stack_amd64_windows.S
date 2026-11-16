@@ -16,6 +16,7 @@ tinygo_startTask:
     // Set the first argument of the goroutine start wrapper, which contains all
     // the arguments.
     movq %r13, %rcx
+    subq $32, %rsp // Win64 caller shadow space.
 
     // Branch to the "goroutine start" function.
     callq *%r12
@@ -51,6 +52,15 @@ tinygo_swapTask:
     movaps  %xmm14, 16(%rsp)
     movaps  %xmm15,  0(%rsp)
     pushq %rbx
+#if defined(_WIN32) && __STDC_HOSTED__
+    // Save Windows NT_TIB.StackBase (gs:0x08) and StackLimit (gs:0x10).
+    movq %gs:0x08, %rax
+    pushq %rax
+    movq %gs:0x10, %rax
+    pushq %rax
+#else
+    subq $16, %rsp
+#endif
 
     // Save the current stack pointer in oldStack.
     movq %rsp, (%rdx)
@@ -59,6 +69,15 @@ tinygo_swapTask:
     movq %rcx, %rsp
 
     // Load saved register from the new stack.
+#if defined(_WIN32) && __STDC_HOSTED__
+    // Restore Windows NT_TIB.StackLimit (gs:0x10) and StackBase (gs:0x08).
+    popq %rax
+    movq %rax, %gs:0x10
+    popq %rax
+    movq %rax, %gs:0x08
+#else
+    addq $16, %rsp
+#endif
     popq %rbx
     movaps 0(%rsp),   %xmm15
     movaps 16(%rsp),  %xmm14
