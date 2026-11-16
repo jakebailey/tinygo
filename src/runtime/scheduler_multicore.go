@@ -35,11 +35,6 @@ func schedulerWakeTask(t *task.Task) {
 	}
 }
 
-// Mark the given task as runnable. Call with the scheduler lock held.
-func schedulerQueue(t *task.Task) {
-	runqueue.Push(t)
-}
-
 //go:linkname assignCore machine.assignCore
 func assignCore(core int) {
 	if core < 0 || core >= numCPU {
@@ -64,32 +59,13 @@ func assignCore(core int) {
 	task.PauseLocked()
 }
 
-// This function is called on the first core in the system. It will wake up the
-// other cores when ready.
-func run() {
-	initRand()
-	initHeap()
+func schedulerStartCores() {
+	startSecondaryCores()
+	secondaryCoresReady.Store(1)
+}
 
-	go func() {
-		// Package initializers are currently run single-threaded.
-		// This might help with registering interrupts and such.
-		initAll()
-
-		// After package initializers have finished, start all the other cores.
-		startSecondaryCores()
-		secondaryCoresReady.Store(1)
-
-		// Run main.main.
-		callMain()
-
-		// main.main has exited, so the program should exit.
-		mainExited.Store(1)
-	}()
-
-	// The scheduler must always be entered while the scheduler lock is taken.
-	schedulerLock.Lock()
-	schedule(false)
-	schedulerLock.Unlock()
+func schedulerSetMainExited() {
+	mainExited.Store(1)
 }
 
 // Maximum number of cores that run the scheduler at the same time.
@@ -97,17 +73,6 @@ const maxSchedulerThreads = numCPU
 
 // Every core always runs the scheduler.
 func schedulerAcquireSlot() {}
-
-// Remove the next task that may run on this core from the runqueue.
-// Call with the scheduler lock held.
-func schedulerPop() *task.Task {
-	return runqueue.PopCore(currentCPU())
-}
-
-// Report whether t may run on this core.
-func schedulerCanRun(t *task.Task) bool {
-	return t.CanRunOn(currentCPU())
-}
 
 func currentTask() *task.Task {
 	return cpuTasks[currentCPU()]

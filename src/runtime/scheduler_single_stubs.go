@@ -14,3 +14,5 @@ func interruptSleepTicksMulticore(wakeup timeUnit) {}
 func schedulerUnlockAndWait() {}
 
 func schedulerWake() {}
+
+func schedulerWakeCore(uint32) {}
