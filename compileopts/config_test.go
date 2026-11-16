@@ -44,7 +44,7 @@ func TestSchedulerUnified(t *testing.T) {
 		{"linux", "amd64", "x86_64-unknown-linux-musl", "threads", "workers"},
 		{"linux", "mipsle", "mipsel-unknown-linux-musl", "threads", "workers"},
 		{"linux", "riscv64", "riscv64-unknown-linux-musl", "threads", "threads"},
-		{"darwin", "arm64", "arm64-apple-macosx11.0.0", "threads", "threads"},
+		{"darwin", "arm64", "arm64-apple-macosx11.0.0", "threads", "workers"},
 		{"windows", "amd64", "x86_64-unknown-windows-gnu", "tasks", "tasks"},
 		{"linux", "riscv", "riscv32-unknown-none", "cores", "cores"},
 		{"linux", "arm", "avr", "none", "tasks"},

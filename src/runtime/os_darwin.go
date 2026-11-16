@@ -87,11 +87,15 @@ func call_syscall6X(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr
 //     the error condition is met.
 
 // syscall_syscalln is a wrapper around the libc call with variable arguments.
+// Other goroutines may run while the call blocks.
 //
 //go:nosplit
 //go:linkname syscall_syscalln syscall.syscalln
 func syscall_syscalln(fn uintptr, args ...uintptr) (uintptr, uintptr, uintptr) {
-	return syscall_rawsyscalln(fn, args...)
+	entersyscall()
+	r1, r2, err := syscall_rawsyscalln(fn, args...)
+	exitsyscall()
+	return r1, r2, err
 }
 
 // syscall_rawsyscalln is a wrapper around the libc call with variable arguments.
