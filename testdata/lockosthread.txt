@@ -1,0 +1,4 @@
+main stays on the main thread
+locked goroutines: 499500
+exited locked threads were distinct: true
+ok
