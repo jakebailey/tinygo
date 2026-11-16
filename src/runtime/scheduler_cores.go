@@ -90,6 +90,9 @@ func run() {
 // Maximum number of cores that run the scheduler at the same time.
 const maxSchedulerThreads = numCPU
 
+// Every core always runs the scheduler.
+func schedulerAcquireSlot() {}
+
 // Remove the next task that may run on this core from the runqueue.
 // Call with the scheduler lock held.
 func schedulerPop() *task.Task {

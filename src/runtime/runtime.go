@@ -58,11 +58,6 @@ func initAll()
 //go:linkname callMain main.main
 func callMain()
 
-func GOMAXPROCS(n int) int {
-	// Note: setting GOMAXPROCS is ignored.
-	return 1
-}
-
 var goroot string // set by the builder
 
 func gorootEnvEnabled() bool

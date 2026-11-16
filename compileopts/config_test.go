@@ -39,20 +39,22 @@ func TestExtraFilesBoehm(t *testing.T) {
 
 func TestSchedulerUnified(t *testing.T) {
 	for _, tc := range []struct {
-		goos, triple, target, want string
+		goos, goarch, triple, target, want string
 	}{
-		{"linux", "x86_64-unknown-linux-musl", "threads", "threads"},
-		{"darwin", "arm64-apple-macosx11.0.0", "threads", "threads"},
-		{"windows", "x86_64-unknown-windows-gnu", "tasks", "tasks"},
-		{"linux", "riscv32-unknown-none", "cores", "cores"},
-		{"linux", "avr", "none", "tasks"},
-		{"linux", "thumbv6m-unknown-unknown-eabi", "", "tasks"},
-		{"wasip1", "wasm32-unknown-wasi", "asyncify", "asyncify"},
-		{"linux", "wasm32-unknown-unknown", "none", "asyncify"},
+		{"linux", "amd64", "x86_64-unknown-linux-musl", "threads", "workers"},
+		{"linux", "mipsle", "mipsel-unknown-linux-musl", "threads", "workers"},
+		{"linux", "riscv64", "riscv64-unknown-linux-musl", "threads", "threads"},
+		{"darwin", "arm64", "arm64-apple-macosx11.0.0", "threads", "threads"},
+		{"windows", "amd64", "x86_64-unknown-windows-gnu", "tasks", "tasks"},
+		{"linux", "riscv", "riscv32-unknown-none", "cores", "cores"},
+		{"linux", "arm", "avr", "none", "tasks"},
+		{"linux", "arm", "thumbv6m-unknown-unknown-eabi", "", "tasks"},
+		{"wasip1", "wasm", "wasm32-unknown-wasi", "asyncify", "asyncify"},
+		{"linux", "arm", "wasm32-unknown-unknown", "none", "asyncify"},
 	} {
 		config := &Config{
 			Options: &Options{Scheduler: "unified"},
-			Target:  &TargetSpec{GOOS: tc.goos, Triple: tc.triple, Scheduler: tc.target},
+			Target:  &TargetSpec{GOOS: tc.goos, GOARCH: tc.goarch, Triple: tc.triple, Scheduler: tc.target},
 		}
 		if got := config.Scheduler(); got != tc.want {
 			t.Errorf("%s with target scheduler %q: got %q, want %q", tc.triple, tc.target, got, tc.want)

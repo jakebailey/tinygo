@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,33 @@ func main() {
 	}
 	if !strings.Contains(output.String(), "GC returned") {
 		t.Fatalf("GC did not return:\n%s", output.String())
+	}
+}
+
+func TestWorkerSleepOverflow(t *testing.T) {
+	t.Parallel()
+
+	options := optionsFromTarget("", sema)
+	options.Scheduler = "unified"
+	config, err := builder.NewConfig(&options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := config.BuildTags()
+	if !slices.Contains(tags, "scheduler.workers") && !slices.Contains(tags, "exec.workers") {
+		t.Skip("target does not use workers")
+	}
+	output := &bytes.Buffer{}
+	_, err = buildAndRun("testdata/worker-sleep-overflow.go", config, output, nil, []string{"GOMAXPROCS=2"}, 10*time.Second, func(cmd *exec.Cmd, result *builder.BuildResult) error {
+		cmd.Stdout = output
+		cmd.Stderr = output
+		return cmd.Run()
+	})
+	if err != nil {
+		t.Fatalf("worker sleep program failed: %v\n%s", err, output)
+	}
+	if strings.TrimSpace(output.String()) != "earlier timer fired" {
+		t.Fatalf("unexpected output:\n%s", output)
 	}
 }
 

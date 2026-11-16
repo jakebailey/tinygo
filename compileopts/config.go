@@ -150,7 +150,7 @@ func (c *Config) BuildTags() []string {
 		"tinygo.unwind." + c.PanicUnwind(),
 		"serial." + c.Serial()}...) // used inside the machine package
 	switch c.Scheduler() {
-	case "threads", "cores":
+	case "threads", "cores", "workers":
 	default:
 		tags = append(tags, "tinygo.unicore")
 	}
@@ -185,7 +185,7 @@ func (c *Config) NeedsStackObjects() bool {
 }
 
 // Scheduler returns the scheduler implementation. Valid values are "none",
-// "tasks", "asyncify", "threads" and "cores". The "unified" option is
+// "tasks", "asyncify", "threads", "cores" and "workers". The "unified" option is
 // resolved to one of these for the target.
 func (c *Config) Scheduler() string {
 	scheduler := c.Options.Scheduler
@@ -205,6 +205,13 @@ func (c *Config) Scheduler() string {
 // -scheduler=unified. Targets without a scheduler by default get the
 // cooperative scheduler.
 func (c *Config) unifiedScheduler() string {
+	if c.Target.Scheduler == "threads" && c.GOOS() == "linux" {
+		switch c.GOARCH() {
+		case "amd64", "arm64", "386", "arm", "mips", "mipsle":
+			// Run goroutines on a pool of worker threads.
+			return "workers"
+		}
+	}
 	switch c.Target.Scheduler {
 	case "", "none":
 		if strings.HasPrefix(c.Triple(), "wasm") {

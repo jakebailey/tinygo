@@ -1,4 +1,4 @@
-//go:build scheduler.cores
+//go:build scheduler.cores || scheduler.workers
 
 package runtime
 
@@ -211,6 +211,8 @@ func sleep(duration int64) {
 
 func scheduler(_ bool) {
 	for mainExited.Load() == 0 {
+		schedulerAcquireSlot()
+
 		var now timeUnit
 		if sleepQueue != nil || timerQueuePeek() != nil {
 			now = ticks()
