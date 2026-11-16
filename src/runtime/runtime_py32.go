@@ -6,6 +6,7 @@ import (
 	"device/arm"
 	"machine"
 	"runtime/volatile"
+	_ "unsafe"
 )
 
 var tickCounter volatile.Register64
@@ -57,8 +58,14 @@ func waitForEvents() {
 }
 
 func putchar(c byte) {
-	machine.Serial.WriteByte(c)
+	if !py32Putchar(c) {
+		// A serial failure cannot be reported through serial.
+		trap()
+	}
 }
+
+//go:linkname py32Putchar machine.py32Putchar
+func py32Putchar(c byte) bool
 
 func getchar() byte {
 	for machine.Serial.Buffered() == 0 {
