@@ -72,8 +72,8 @@ func NewConfig(options *compileopts.Options) (*compileopts.Config, error) {
 	if config.PanicUnwind() == "explicit" && !config.SupportsExplicitUnwind() {
 		return nil, fmt.Errorf("explicit panic unwinding is not supported on %s", config.Triple())
 	}
-	if config.PanicUnwind() == "explicit" && config.Scheduler() == "threads" {
-		return nil, errors.New("explicit panic unwinding is not supported with the threads scheduler")
+	if config.PanicUnwind() == "explicit" && (config.Scheduler() == "threads" || config.Scheduler() == "workers") {
+		return nil, errors.New("explicit panic unwinding is not supported with the " + config.Scheduler() + " scheduler")
 	}
 	return config, nil
 }

@@ -1,4 +1,4 @@
-//go:build scheduler.tasks && (mips || mipsle)
+//go:build (scheduler.tasks || scheduler.workers) && (mips || mipsle)
 
 package task
 

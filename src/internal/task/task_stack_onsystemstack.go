@@ -1,4 +1,4 @@
-//go:build (scheduler.tasks || scheduler.cores) && !tinygo.riscv
+//go:build (scheduler.tasks || scheduler.cores || scheduler.workers) && !tinygo.riscv
 
 package task
 

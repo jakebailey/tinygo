@@ -129,7 +129,7 @@ func (b *builder) createGo(instr *ssa.Go) {
 	} else {
 		// The stack size is fixed at compile time. By emitting it here as a
 		// constant, it can be optimized.
-		if (b.Scheduler == "tasks" || b.Scheduler == "asyncify") && b.DefaultStackSize == 0 {
+		if (b.Scheduler == "tasks" || b.Scheduler == "asyncify" || b.Scheduler == "workers") && b.DefaultStackSize == 0 {
 			b.addError(instr.Pos(), "default stack size for goroutines is not set")
 		}
 		stackSize = llvm.ConstInt(b.uintptrType, b.DefaultStackSize, false)

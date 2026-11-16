@@ -535,6 +535,7 @@ func defaultTarget(options *Options) (*TargetSpec, error) {
 			"src/internal/futex/futex_linux.c",
 			"src/internal/task/task_threads.c",
 			"src/runtime/runtime_unix.c",
+			"src/runtime/scheduler_workers.c",
 			"src/runtime/signal.c")
 	case "windows":
 		spec.GC = "boehm"

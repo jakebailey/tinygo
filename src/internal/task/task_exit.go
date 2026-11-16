@@ -1,4 +1,4 @@
-//go:build scheduler.tasks || scheduler.asyncify || scheduler.cores
+//go:build scheduler.tasks || scheduler.asyncify || scheduler.cores || scheduler.workers
 
 package task
 
