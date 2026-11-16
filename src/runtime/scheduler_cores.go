@@ -235,7 +235,13 @@ func sleep(duration int64) {
 		return
 	}
 
-	wakeup := ticks() + nanosecondsToTicks(duration)
+	delay := nanosecondsToTicks(duration)
+	now := ticks()
+	maxTime := timeUnit(1<<63 - 1)
+	wakeup := maxTime
+	if delay <= 0 || now <= maxTime-delay {
+		wakeup = now + delay
+	}
 
 	// While the scheduler is locked:
 	// - add this task to the sleep queue

@@ -8,14 +8,14 @@ func readUSARTData(bus *py32.USART_Type) uint32 {
 	return bus.RDR.Get()
 }
 
-func writeUSARTData(bus *py32.USART_Type, value uint32) {
+func uartWriteData(bus *py32.USART_Type, value uint32) {
 	bus.TDR.Set(value)
 }
 
-func usartTXReady(bus *py32.USART_Type) bool {
+func uartTXReady(bus *py32.USART_Type) bool {
 	return bus.SR.Get()&py32.USART_SR_TXE_TXFNF != 0
 }
 
-func usartTXComplete(bus *py32.USART_Type) bool {
+func uartTXComplete(bus *py32.USART_Type) bool {
 	return bus.SR.Get()&py32.USART_SR_TC != 0
 }

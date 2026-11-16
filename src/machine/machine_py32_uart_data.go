@@ -8,15 +8,15 @@ func readUSARTData(bus *py32.USART_Type) uint32 {
 	return bus.DR.Get()
 }
 
-func writeUSARTData(bus *py32.USART_Type, value uint32) {
+func uartWriteData(bus *py32.USART_Type, value uint32) {
 	bus.DR.Set(value)
 }
 
-func usartTXReady(bus *py32.USART_Type) bool {
+func uartTXReady(bus *py32.USART_Type) bool {
 	const txEmpty = 1 << 7 // TXE or TXE_TXFNF, depending on the family.
 	return bus.SR.Get()&txEmpty != 0
 }
 
-func usartTXComplete(bus *py32.USART_Type) bool {
+func uartTXComplete(bus *py32.USART_Type) bool {
 	return bus.SR.Get()&py32.USART_SR_TC != 0
 }
