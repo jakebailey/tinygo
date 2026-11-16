@@ -1,6 +1,6 @@
-//go:build !scheduler.cores
+//go:build !scheduler.cores && !scheduler.workers
 
 package task
 
-// Affinity is only used by the cores scheduler.
+// Affinity is only used by the cores and workers schedulers.
 type Affinity struct{}

@@ -44,6 +44,7 @@ func exit(goexit bool, next *Task) {
 		synctestTaskWake(next)
 	}
 	exitSynctest(t)
+	exitWorker(t)
 	remaining := atomic.AddUint32(&liveTasks, ^uint32(0))
 	if t == mainTask {
 		if goexit {

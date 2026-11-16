@@ -35,6 +35,11 @@ func schedulerWakeTask(t *task.Task) {
 	}
 }
 
+// Mark the given task as runnable. Call with the scheduler lock held.
+func schedulerQueue(t *task.Task) {
+	runqueue.Push(t)
+}
+
 //go:linkname assignCore machine.assignCore
 func assignCore(core int) {
 	if core < 0 || core >= numCPU {

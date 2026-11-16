@@ -104,3 +104,9 @@ void tinygo_worker_send_gc_signal(pthread_t thread) {
 void *tinygo_worker_calloc(uintptr_t size) {
     return calloc(1, size);
 }
+
+// End the current worker thread. The worker is no longer in allWorkers.
+void tinygo_worker_exit(void *worker) {
+    free(worker);
+    pthread_exit(NULL);
+}

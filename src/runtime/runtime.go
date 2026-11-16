@@ -127,17 +127,6 @@ func os_sigpipe() {
 	runtimeFatal("too many writes on closed pipe")
 }
 
-// LockOSThread wires the calling goroutine to its current operating system thread.
-// Stub for now
-// Called by go1.18 standard library on windows, see https://github.com/golang/go/issues/49320
-func LockOSThread() {
-}
-
-// UnlockOSThread undoes an earlier call to LockOSThread.
-// Stub for now
-func UnlockOSThread() {
-}
-
 // KeepAlive makes sure the value in the interface is alive until at least the
 // point of the call.
 func KeepAlive(x interface{})

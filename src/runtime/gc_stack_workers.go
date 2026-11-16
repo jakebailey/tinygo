@@ -49,10 +49,12 @@ func gcMarkReachable() {
 	}
 
 	for w := allWorkers; w != nil; w = w.next {
-		// Worker structures are not on the GC heap, so mark the goroutine
+		// Worker structures are not on the GC heap, so mark the goroutines
 		// they run explicitly.
 		start := uintptr(unsafe.Pointer(&w.task))
 		markRoots(start, start+unsafe.Sizeof(w.task))
+		start = uintptr(unsafe.Pointer(&w.locked))
+		markRoots(start, start+unsafe.Sizeof(w.locked))
 		if w != self {
 			scanWorkerStack(w, w.gcSP)
 		}
