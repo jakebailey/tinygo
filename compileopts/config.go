@@ -185,16 +185,34 @@ func (c *Config) NeedsStackObjects() bool {
 }
 
 // Scheduler returns the scheduler implementation. Valid values are "none",
-// "asyncify" and "tasks".
+// "tasks", "asyncify", "threads" and "cores". The "unified" option is
+// resolved to one of these for the target.
 func (c *Config) Scheduler() string {
-	if c.Options.Scheduler != "" {
-		return c.Options.Scheduler
+	scheduler := c.Options.Scheduler
+	if scheduler == "" {
+		scheduler = c.Target.Scheduler
 	}
-	if c.Target.Scheduler != "" {
-		return c.Target.Scheduler
+	switch scheduler {
+	case "":
+		return "none"
+	case "unified":
+		return c.unifiedScheduler()
 	}
-	// Fall back to none.
-	return "none"
+	return scheduler
+}
+
+// unifiedScheduler returns the scheduler implementation used for
+// -scheduler=unified. Targets without a scheduler by default get the
+// cooperative scheduler.
+func (c *Config) unifiedScheduler() string {
+	switch c.Target.Scheduler {
+	case "", "none":
+		if strings.HasPrefix(c.Triple(), "wasm") {
+			return "asyncify"
+		}
+		return "tasks"
+	}
+	return c.Target.Scheduler
 }
 
 // Serial returns the serial implementation for this build configuration: uart,
@@ -595,6 +613,9 @@ func (c *Config) ExtraFiles() []string {
 	files := c.Target.ExtraFiles
 	if c.GC() == "boehm" && !slices.Contains(files, "src/runtime/gc_boehm.c") {
 		files = append(slices.Clone(files), "src/runtime/gc_boehm.c")
+	}
+	if c.Scheduler() == "asyncify" && !slices.Contains(files, "src/internal/task/task_asyncify_wasm.S") {
+		files = append(slices.Clone(files), "src/internal/task/task_asyncify_wasm.S")
 	}
 	return files
 }
