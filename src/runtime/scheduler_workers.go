@@ -58,6 +58,25 @@ type worker struct {
 
 	// Stack pointer where the worker stopped for the GC.
 	gcSP uintptr
+
+	// Goroutine locked to this worker with LockOSThread, guarded by
+	// schedulerLock. The worker runs no other goroutine while it is set.
+	locked *task.Task
+
+	// Whether the locked goroutine is ready to run, guarded by schedulerLock.
+	lockedReady bool
+
+	// Whether this worker waits for its locked goroutine to become ready,
+	// guarded by schedulerLock.
+	lockedParked bool
+
+	// Whether the locked goroutine has exited. Only used by this worker.
+	lockedExited bool
+
+	// LockOSThread calls by the program and by the runtime. Only used by the
+	// locked goroutine.
+	lockedExt uint32
+	lockedInt uint32
 }
 
 var (
@@ -77,6 +96,10 @@ var (
 	clockDeadline timeUnit
 	slotsUsed     int32
 	inSyscall     int32
+	mainWorker    *worker
+
+	// Number of workers with a locked goroutine that isn't blocked.
+	lockedRunning int32
 
 	numCPU     int32
 	gomaxprocs int32
@@ -127,6 +150,9 @@ func tinygo_worker_spawn(w *worker, stackSize uintptr) int32
 //export tinygo_worker_self
 func tinygo_worker_self() uintptr
 
+//export tinygo_worker_exit
+func tinygo_worker_exit(w *worker)
+
 //export tinygo_worker_calloc
 func tinygo_worker_calloc(size uintptr) unsafe.Pointer
 
@@ -165,28 +191,31 @@ func run() {
 	w.stackTop = stackTop
 	w.stackBottom = stackTop - w.stackBottom
 	allWorkers = w
-
-	gomaxprocs = numCPU
-	if n := envGOMAXPROCS(); n > 0 {
-		gomaxprocs = n
-	}
-	maxSchedulerThreads = int(gomaxprocs)
-
-	// The main thread starts out running goroutines.
-	w.hasSlot = true
-	slotsUsed = 1
+	mainWorker = w
 
 	initRand()
 	initHeap()
 
+	// Package initializers run on the main thread, like in Go. gomaxprocs is
+	// still zero here, so no other worker starts and takes the main goroutine.
 	go func() {
 		initAll()
+		unlockOSThread()
 		callMain()
 		// Other goroutines may still be running, so exit right away.
 		exit(0)
 	}()
 
 	schedulerLock.Lock()
+	gomaxprocs = numCPU
+	if n := envGOMAXPROCS(); n > 0 {
+		gomaxprocs = n
+	}
+	maxSchedulerThreads = int(gomaxprocs)
+	t := runqueue.Pop()
+	lockWorker(w, t)
+	w.lockedInt = 1
+	w.lockedReady = true
 	scheduler(false)
 	schedulerLock.Unlock()
 }
@@ -238,6 +267,9 @@ func parkWorker(w *worker) {
 // start of each iteration of the scheduler loop with the lock held.
 func schedulerAcquireSlot() {
 	w := currentWorker()
+	if w.locked != nil {
+		runLocked(w)
+	}
 	if w.hasSlot {
 		return
 	}
@@ -273,7 +305,28 @@ func schedulerWake() {
 	}
 }
 
+// Mark the given task as runnable. Call with the scheduler lock held.
+func schedulerQueue(t *task.Task) {
+	if t.Affinity.Worker != 0 {
+		(*worker)(unsafe.Pointer(t.Affinity.Worker)).lockedReady = true
+		return
+	}
+	runqueue.Push(t)
+}
+
+// Wake a worker that may run the given task. Call with the scheduler lock
+// held.
 func schedulerWakeTask(t *task.Task) {
+	if t.Affinity.Worker != 0 {
+		w := (*worker)(unsafe.Pointer(t.Affinity.Worker))
+		if w.lockedParked {
+			w.lockedParked = false
+			lockedRunning++
+			w.wake.Store(1)
+			w.wake.Wake()
+		}
+		return
+	}
 	schedulerWake()
 }
 
@@ -281,8 +334,9 @@ func schedulerPop() *task.Task {
 	return runqueue.Pop()
 }
 
+// Locked tasks only run on their own worker, which doesn't run this loop.
 func schedulerCanRun(t *task.Task) bool {
-	return true
+	return t.Affinity.Worker == 0
 }
 
 func hasSleepingCore() bool {
@@ -330,27 +384,39 @@ func interruptSleepTicksMulticore(wakeup timeUnit) {
 func schedulerUnlockAndWait() {
 	w := currentWorker()
 	releaseSlot(w)
-	if slotsUsed == 0 && inSyscall == 0 && clockWorker == nil && runqueue.Empty() && sleepQueue == nil && timerQueuePeek() == nil {
-		// No worker is running and nothing can wake one.
+	checkDeadlock()
+	parkWorker(w)
+}
+
+// Abort if no worker runs and nothing can wake one. Call with the scheduler
+// lock held.
+func checkDeadlock() {
+	if slotsUsed == 0 && inSyscall == 0 && lockedRunning == 0 && clockWorker == nil && runqueue.Empty() && sleepQueue == nil && timerQueuePeek() == nil {
 		runtimeFatal("all goroutines are asleep - deadlock!")
 	}
-	parkWorker(w)
+}
+
+// Wake a worker if there is work that no worker takes care of. Call with the
+// scheduler lock held.
+func wakeForPendingWork() {
+	if !runqueue.Empty() || ((sleepQueue != nil || timerQueuePeek() != nil) && clockWorker == nil) {
+		schedulerWake()
+	}
 }
 
 // Release the slot of this worker before a call that may block the thread, so
 // that other goroutines can run in the meantime.
 func entersyscall() {
 	w := currentWorker()
-	if w.task == nil {
-		// Running in the scheduler (a timer callback), don't touch the slot.
+	if w.task == nil || w.locked != nil {
+		// Running in the scheduler (a timer callback), or on a locked worker
+		// which has no slot.
 		return
 	}
 	schedulerLock.Lock()
 	releaseSlot(w)
 	inSyscall++
-	if !runqueue.Empty() || ((sleepQueue != nil || timerQueuePeek() != nil) && clockWorker == nil) {
-		schedulerWake()
-	}
+	wakeForPendingWork()
 	schedulerLock.Unlock()
 }
 
@@ -358,7 +424,7 @@ func entersyscall() {
 // goroutine and park the worker.
 func exitsyscall() {
 	w := currentWorker()
-	if w.task == nil {
+	if w.task == nil || w.locked != nil {
 		return
 	}
 	schedulerLock.Lock()
@@ -371,6 +437,139 @@ func exitsyscall() {
 	// The scheduler loop parks this worker because it has no slot. A worker
 	// with a slot picks up this goroutine.
 	runqueue.Push(w.task)
+	task.PauseLocked()
+}
+
+// Lock the given task to the worker. Call with the scheduler lock held.
+func lockWorker(w *worker, t *task.Task) {
+	w.locked = t
+	t.Affinity.Worker = uintptr(unsafe.Pointer(w))
+	lockedRunning++
+	if w.hasSlot {
+		releaseSlot(w)
+	}
+	wakeForPendingWork()
+}
+
+// Run the locked goroutine of this worker until it is unlocked. Call with the
+// scheduler lock held, it is held again on return.
+func runLocked(w *worker) {
+	for w.locked != nil {
+		if w.lockedExited {
+			exitLockedWorker(w)
+		}
+		if !w.lockedReady {
+			w.lockedParked = true
+			lockedRunning--
+			checkDeadlock()
+			w.wake.Store(0)
+			schedulerLock.Unlock()
+			for w.wake.Load() == 0 {
+				w.wake.Wait(0)
+			}
+			schedulerLock.Lock()
+			continue
+		}
+		t := w.locked
+		w.lockedReady = false
+		setCurrentTask(t)
+		t.RunState = task.RunStateRunning
+		schedulerLock.Unlock()
+		t.Resume()
+		setCurrentTask(nil)
+	}
+}
+
+// End the thread of a worker whose locked goroutine exited, like Go does.
+// Call with the scheduler lock held.
+func exitLockedWorker(w *worker) {
+	w.locked = nil
+	lockedRunning--
+	checkDeadlock()
+	schedulerLock.Unlock()
+	if w == mainWorker {
+		// The main thread can't exit without ending the process.
+		for {
+			w.wake.Store(0)
+			w.wake.Wait(0)
+		}
+	}
+
+	workersLock.Lock()
+	for p := &allWorkers; *p != nil; p = &(*p).next {
+		if *p == w {
+			*p = w.next
+			break
+		}
+	}
+	workersLock.Unlock()
+	tinygo_worker_exit(w)
+}
+
+// Called by the task package when a goroutine exits.
+func workerTaskExit(t *task.Task) {
+	if t.Affinity.Worker != 0 {
+		currentWorker().lockedExited = true
+	}
+}
+
+// LockOSThread wires the calling goroutine to its current operating system
+// thread. Until it calls UnlockOSThread as often as LockOSThread, the goroutine
+// runs only on this thread and no other goroutine runs on it. If the goroutine
+// exits while locked, the thread exits too.
+func LockOSThread() {
+	w := lockOSThread()
+	w.lockedExt++
+	if w.lockedExt == 0 {
+		runtimeFatal("LockOSThread nesting overflow")
+	}
+}
+
+// UnlockOSThread undoes an earlier call to LockOSThread.
+func UnlockOSThread() {
+	w := currentWorker()
+	if w.locked == nil || w.lockedExt == 0 {
+		return
+	}
+	w.lockedExt--
+	if w.lockedExt == 0 && w.lockedInt == 0 {
+		unlockWorker(w)
+	}
+}
+
+func lockOSThread() *worker {
+	w := currentWorker()
+	if w.locked == nil {
+		schedulerLock.Lock()
+		lockWorker(w, w.task)
+		schedulerLock.Unlock()
+	}
+	return w
+}
+
+// Undo the lock by the runtime of the main goroutine during init.
+func unlockOSThread() {
+	w := currentWorker()
+	w.lockedInt--
+	if w.lockedExt == 0 && w.lockedInt == 0 {
+		unlockWorker(w)
+	}
+}
+
+// Unlock the current goroutine from its worker. It continues on this worker
+// if there is a free slot, otherwise another worker picks it up.
+func unlockWorker(w *worker) {
+	t := w.task
+	schedulerLock.Lock()
+	w.locked = nil
+	t.Affinity.Worker = 0
+	lockedRunning--
+	if slotsUsed < gomaxprocs {
+		takeSlot(w)
+		schedulerLock.Unlock()
+		return
+	}
+	runqueue.Push(t)
 	task.PauseLocked()
 }
 

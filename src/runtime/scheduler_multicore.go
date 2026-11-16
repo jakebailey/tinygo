@@ -51,7 +51,7 @@ func scheduleTaskNoWake(t *task.Task) {
 	case task.RunStatePaused:
 		// Paused, state is saved on the stack.
 		// Add it to the runqueue...
-		runqueue.Push(t)
+		schedulerQueue(t)
 		// ...and wake up a sleeping core, if there is one.
 		// (If all cores are already busy, this is a no-op).
 		schedulerWakeTask(t)
@@ -97,7 +97,7 @@ func addSleepTask(t *task.Task, wakeup timeUnit) {
 
 func Gosched() {
 	schedulerLock.Lock()
-	runqueue.Push(task.Current())
+	schedulerQueue(task.Current())
 	task.PauseLocked()
 }
 
@@ -225,7 +225,7 @@ func scheduler(_ bool) {
 
 				if !schedulerCanRun(sleepingTask) {
 					// Assigned to another core, so hand it over.
-					runqueue.Push(sleepingTask)
+					schedulerQueue(sleepingTask)
 					schedulerWakeTask(sleepingTask)
 					continue
 				}
