@@ -43,8 +43,7 @@ static void gc_signal_handler(int sig) {
     errno = saved;
 }
 
-// Install the signal handler that stops workers for the GC. Only called with
-// a GC that scans stacks, other GCs don't link tinygo_worker_gc_pause.
+// Install the signal handler that stops workers for the GC.
 void tinygo_worker_gc_init(void) {
     struct sigaction act = { 0 };
     act.sa_handler = gc_signal_handler;

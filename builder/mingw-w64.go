@@ -45,6 +45,11 @@ var libMinGW = Library{
 				"-D_CRTBLD",
 				"-Wno-pragma-pack",
 			)
+		} else {
+			flags = append(flags,
+				"-D__MSVCRT_VERSION__=0xE00", // UCRT
+				"-D_WIN32_WINNT=0x0a00",      // target Windows 10
+			)
 		}
 		return flags
 	},
@@ -87,6 +92,12 @@ var libMinGW = Library{
 				"mingw-w64-crt/stdio/ucrt_vsprintf.c",
 			}
 		}
+		// Thread-local storage support, for __thread variables.
+		sources = append(sources,
+			"mingw-w64-crt/crt/tlsmcrt.c",
+			"mingw-w64-crt/crt/tlssup.c",
+			"mingw-w64-crt/crt/tlsthrd.c",
+		)
 		return sources, nil
 	},
 }
@@ -117,6 +128,7 @@ func makeMinGWExtraLibs(tmpdir, goarch string) []*compileJob {
 		libs = []string{
 			"advapi32.def.in",
 			"kernel32.def.in",
+			"api-ms-win-core-synch-l1-2-0.def", // WaitOnAddress
 			"api-ms-win-crt-conio-l1-1-0.def",
 			"api-ms-win-crt-convert-l1-1-0.def.in",
 			"api-ms-win-crt-environment-l1-1-0.def",

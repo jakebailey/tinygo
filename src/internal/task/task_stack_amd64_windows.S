@@ -16,6 +16,7 @@ tinygo_startTask:
     // Set the first argument of the goroutine start wrapper, which contains all
     // the arguments.
     movq %r13, %rcx
+    subq $32, %rsp // Win64 caller shadow space.
 
     // Branch to the "goroutine start" function.
     callq *%r12
