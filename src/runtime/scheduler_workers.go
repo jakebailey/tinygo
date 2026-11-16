@@ -35,7 +35,7 @@ type worker struct {
 	// Next worker in allWorkers, guarded by workersLock.
 	next *worker
 
-	// Next worker in idleWorkers, guarded by schedulerLock.
+	// Next worker in an idle or locked-slot queue, guarded by schedulerLock.
 	idleNext *worker
 
 	// The thread of this worker: a pthread_t, or a handle on Windows.
@@ -56,6 +56,9 @@ type worker struct {
 
 	// Whether this worker may run goroutines, guarded by schedulerLock.
 	hasSlot bool
+
+	// Whether this worker has entered the scheduler since taking its slot.
+	slotActive bool
 
 	// Stack pointer and registers where the worker stopped for the GC.
 	gcSP   uintptr
@@ -94,6 +97,9 @@ var (
 
 	// The rest is guarded by schedulerLock.
 	idleWorkers   *worker
+	lockedWaiters *worker
+	lockedWaitEnd *worker
+	preferLocked  bool
 	clockWorker   *worker
 	clockDeadline timeUnit
 	slotsUsed     int32
@@ -250,6 +256,7 @@ func workerStart(w *worker) {
 // Give a slot to the given worker. Call with the scheduler lock held.
 func takeSlot(w *worker) {
 	w.hasSlot = true
+	w.slotActive = false
 	slotsUsed++
 }
 
@@ -271,6 +278,30 @@ func parkWorker(w *worker) {
 	schedulerLock.Lock()
 }
 
+// Wait for a slot without moving the locked goroutine to another worker.
+func waitLockedSlot(w *worker) {
+	if w.hasSlot {
+		return
+	}
+	if slotsUsed < gomaxprocs {
+		takeSlot(w)
+		return
+	}
+	w.wake.Store(0)
+	w.idleNext = nil
+	if lockedWaitEnd == nil {
+		lockedWaiters = w
+	} else {
+		lockedWaitEnd.idleNext = w
+	}
+	lockedWaitEnd = w
+	schedulerLock.Unlock()
+	for w.wake.Load() == 0 {
+		w.wake.Wait(0)
+	}
+	schedulerLock.Lock()
+}
+
 // Make sure this worker holds a slot before it looks for work. Called at the
 // start of each iteration of the scheduler loop with the lock held.
 func schedulerAcquireSlot() {
@@ -279,13 +310,22 @@ func schedulerAcquireSlot() {
 		runLocked(w)
 	}
 	if w.hasSlot {
+		// Run one scheduler iteration before handing the slot back.
+		if w.slotActive && lockedWaiters != nil {
+			releaseSlot(w)
+			preferLocked = true
+			schedulerWake()
+			parkWorker(w)
+		}
+		w.slotActive = true
 		return
 	}
 	if slotsUsed < gomaxprocs {
 		takeSlot(w)
-		return
+	} else {
+		parkWorker(w)
 	}
-	parkWorker(w)
+	w.slotActive = true
 }
 
 // Wake a worker to run goroutines from the run queue, if there is a free slot.
@@ -293,12 +333,28 @@ func schedulerAcquireSlot() {
 func schedulerWake() {
 	if spinningWorkers > 0 {
 		spinWakes.Add(1)
-		return
+		if lockedWaiters == nil {
+			return
+		}
 	}
 	if slotsUsed >= gomaxprocs {
 		// All slots are in use. Those workers will find the work.
 		return
 	}
+	// Alternate slots between pinned waiters and other pending work.
+	if w := lockedWaiters; w != nil && (spinningWorkers > 0 || !hasUnpinnedWork() || preferLocked) {
+		lockedWaiters = w.idleNext
+		if lockedWaiters == nil {
+			lockedWaitEnd = nil
+		}
+		w.idleNext = nil
+		preferLocked = false
+		takeSlot(w)
+		w.wake.Store(1)
+		w.wake.Wake()
+		return
+	}
+	preferLocked = true
 	if w := idleWorkers; w != nil {
 		idleWorkers = w.idleNext
 		w.idleNext = nil
@@ -374,6 +430,7 @@ func sleepTicksMulticore(d timeUnit) {
 		clockDeadline += d
 	}
 	w.wake.Store(0)
+	wakeForPendingWork()
 	schedulerLock.Unlock()
 	w.wake.WaitUntil(0, uint64(ticksToNanoseconds(d)))
 	schedulerLock.Lock()
@@ -404,6 +461,7 @@ func schedulerUnlockAndWait() {
 		return
 	}
 	releaseSlot(w)
+	wakeForPendingWork()
 	checkDeadlock()
 	parkWorker(w)
 }
@@ -435,10 +493,13 @@ func checkDeadlock() {
 	}
 }
 
-// Wake a worker if there is work that no worker takes care of. Call with the
-// scheduler lock held.
+func hasUnpinnedWork() bool {
+	return !runqueue.Empty() || ((sleepQueue != nil || timerQueuePeek() != nil) && clockWorker == nil)
+}
+
+// Wake a worker for pending work. Call with the scheduler lock held.
 func wakeForPendingWork() {
-	if !runqueue.Empty() || ((sleepQueue != nil || timerQueuePeek() != nil) && clockWorker == nil) {
+	if lockedWaiters != nil || hasUnpinnedWork() {
 		schedulerWake()
 	}
 }
@@ -447,9 +508,8 @@ func wakeForPendingWork() {
 // that other goroutines can run in the meantime.
 func entersyscall() {
 	w := currentWorker()
-	if w.task == nil || w.locked != nil {
-		// Running in the scheduler (a timer callback), or on a locked worker
-		// which has no slot.
+	if w.task == nil {
+		// Running in the scheduler, such as a timer callback.
 		return
 	}
 	schedulerLock.Lock()
@@ -463,7 +523,7 @@ func entersyscall() {
 // goroutine and park the worker.
 func exitsyscall() {
 	w := currentWorker()
-	if w.task == nil || w.locked != nil {
+	if w.task == nil {
 		return
 	}
 	schedulerLock.Lock()
@@ -473,9 +533,7 @@ func exitsyscall() {
 		schedulerLock.Unlock()
 		return
 	}
-	// The scheduler loop parks this worker because it has no slot. A worker
-	// with a slot picks up this goroutine.
-	runqueue.Push(w.task)
+	schedulerQueue(w.task)
 	task.PauseLocked()
 }
 
@@ -484,9 +542,6 @@ func lockWorker(w *worker, t *task.Task) {
 	w.locked = t
 	t.Affinity.Worker = uintptr(unsafe.Pointer(w))
 	lockedRunning++
-	if w.hasSlot {
-		releaseSlot(w)
-	}
 	wakeForPendingWork()
 }
 
@@ -500,6 +555,10 @@ func runLocked(w *worker) {
 		if !w.lockedReady {
 			w.lockedParked = true
 			lockedRunning--
+			if w.hasSlot {
+				releaseSlot(w)
+			}
+			wakeForPendingWork()
 			checkDeadlock()
 			w.wake.Store(0)
 			schedulerLock.Unlock()
@@ -509,13 +568,20 @@ func runLocked(w *worker) {
 			schedulerLock.Lock()
 			continue
 		}
+		waitLockedSlot(w)
 		t := w.locked
 		w.lockedReady = false
+		schedulerHandOffClock()
 		setCurrentTask(t)
 		t.RunState = task.RunStateRunning
 		schedulerLock.Unlock()
 		t.Resume()
 		setCurrentTask(nil)
+		// Let other work run when the locked goroutine yields.
+		if w.locked != nil && w.lockedReady && w.hasSlot && (lockedWaiters != nil || hasUnpinnedWork()) {
+			releaseSlot(w)
+			wakeForPendingWork()
+		}
 	}
 }
 
@@ -524,6 +590,10 @@ func runLocked(w *worker) {
 func exitLockedWorker(w *worker) {
 	w.locked = nil
 	lockedRunning--
+	if w.hasSlot {
+		releaseSlot(w)
+	}
+	wakeForPendingWork()
 	checkDeadlock()
 	schedulerLock.Unlock()
 	if w == mainWorker {
@@ -595,21 +665,14 @@ func unlockOSThread() {
 	}
 }
 
-// Unlock the current goroutine from its worker. It continues on this worker
-// if there is a free slot, otherwise another worker picks it up.
+// Unlock the current goroutine from its worker.
 func unlockWorker(w *worker) {
 	t := w.task
 	schedulerLock.Lock()
 	w.locked = nil
 	t.Affinity.Worker = 0
 	lockedRunning--
-	if slotsUsed < gomaxprocs {
-		takeSlot(w)
-		schedulerLock.Unlock()
-		return
-	}
-	runqueue.Push(t)
-	task.PauseLocked()
+	schedulerLock.Unlock()
 }
 
 func NumCPU() int {
