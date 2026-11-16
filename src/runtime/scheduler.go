@@ -179,8 +179,8 @@ func timerQueueRemove(t *timer) *timerNode {
 }
 
 // firingTimers is a list of timer nodes whose callback is currently running.
-// It is only used by schedulers that run timer callbacks concurrently with user
-// goroutines (the threads and cores schedulers), so that a timer stopped or
+// It is only used by execution modes that run timer callbacks concurrently
+// with user goroutines (workers and multicore), so that a timer stopped or
 // reset while its callback is running is not re-added to the timer queue by a
 // periodic timer's callback. Access is protected by the scheduler's timer lock.
 var firingTimers *timerNode

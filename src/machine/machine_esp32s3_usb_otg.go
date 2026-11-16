@@ -165,7 +165,7 @@ var (
 )
 
 // usbRegLock serializes FIFO and endpoint register access between the USB
-// interrupt and senders on the other core with scheduler=cores.
+// interrupt and senders on the other core with -cores=2.
 var usbRegLock atomic.Uint32
 
 func lockUSBRegs() interrupt.State {

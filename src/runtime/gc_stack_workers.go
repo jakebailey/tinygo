@@ -1,4 +1,4 @@
-//go:build scheduler.workers && (gc.conservative || gc.precise || gc.boehm)
+//go:build exec.workers && (gc.conservative || gc.precise || gc.boehm)
 
 package runtime
 

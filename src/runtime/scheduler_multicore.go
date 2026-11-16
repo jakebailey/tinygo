@@ -1,4 +1,4 @@
-//go:build scheduler.cores
+//go:build scheduler.unified && exec.multicore
 
 package runtime
 
@@ -18,7 +18,7 @@ func waitForSecondaryCoresReady() {
 
 // Which task is running on a given core (or nil if there is no task running on
 // the core).
-var cpuTasks [numCPU]*task.Task
+var cpuTasks [maxCPU]*task.Task
 
 // NumCPU returns the number of CPU cores on this system.
 func NumCPU() int {
@@ -141,7 +141,7 @@ func unlockAtomics(mask interrupt.State) {
 	interrupt.Restore(mask)
 }
 
-var systemStack [numCPU]uintptr
+var systemStack [maxCPU]uintptr
 
 // Implementation detail of the internal/task package.
 // It needs to store the system stack pointer somewhere, and needs to know how

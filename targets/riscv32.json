@@ -5,7 +5,7 @@
 	"target-abi": "ilp32",
 	"arch": "rv32imac",
 	"build-tags": ["tinygo.riscv32"],
-	"scheduler": "tasks",
+	"scheduler": "unified",
 	"default-stack-size": 2048,
 	"ldflags": [
 		"-melf32lriscv",

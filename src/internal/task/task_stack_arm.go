@@ -1,4 +1,4 @@
-//go:build (scheduler.tasks || scheduler.workers) && arm && !cortexm && !avr && !xtensa && !tinygo.riscv
+//go:build (exec.single || exec.workers) && arm && !cortexm && !avr && !xtensa && !tinygo.riscv
 
 package task
 

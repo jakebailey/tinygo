@@ -255,7 +255,7 @@ func (b *builder) createRawSyscall(call *ssa.CallCommon) (llvm.Value, error) {
 func (b *builder) createSyscall(call *ssa.CallCommon, blocking bool) (llvm.Value, error) {
 	switch b.GOOS {
 	case "linux":
-		blocking = blocking && b.Scheduler == "workers"
+		blocking = blocking && b.ExecutionMode == "workers"
 		if blocking {
 			b.createRuntimeCall("entersyscall", nil, "")
 		}
@@ -332,7 +332,7 @@ func (b *builder) createSyscall(call *ssa.CallCommon, blocking bool) (llvm.Value
 		// On windows/386, we also need to save/restore the stack pointer. I'm
 		// not entirely sure why this is needed, but without it these calls
 		// change the stack pointer leading to a crash soon after.
-		blocking = blocking && b.Scheduler == "workers"
+		blocking = blocking && b.ExecutionMode == "workers"
 		if blocking {
 			b.createRuntimeCall("entersyscall", nil, "")
 		}
@@ -417,7 +417,7 @@ func (b *builder) createSyscalln(call *ssa.CallCommon) (llvm.Value, error) {
 	retType := b.ctx.StructType([]llvm.Type{b.uintptrType, b.uintptrType, b.uintptrType}, false)
 
 	// Other goroutines may run while the call blocks.
-	blocking := b.Scheduler == "workers"
+	blocking := b.ExecutionMode == "workers"
 	if blocking {
 		b.createRuntimeCall("entersyscall", nil, "")
 	}

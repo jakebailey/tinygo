@@ -19,7 +19,7 @@ func TestBoehmFinalizerInterior(t *testing.T) {
 		{"wasm", "asyncify"},
 		{"wasm", "none"},
 		{"", "tasks"},
-		{"", "threads"},
+		{"", "unified"},
 		{"", "none"},
 	} {
 		if test.target == "" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
@@ -75,7 +75,7 @@ func TestFinalizerRunnerRegistration(t *testing.T) {
 		{"wasm", "boehm", "asyncify"},
 		{"wasm", "conservative", "asyncify"},
 		{"", "boehm", "tasks"},
-		{"", "boehm", "threads"},
+		{"", "boehm", "unified"},
 	} {
 		if test.target == "" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 			continue

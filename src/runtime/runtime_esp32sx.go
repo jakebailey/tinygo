@@ -86,7 +86,7 @@ func ticksToNanoseconds(ticks timeUnit) int64 {
 // CPU interrupt number used for the TIMG0 timer alarm.
 const timerAlarmCPUInterrupt = 9
 
-var interruptPending [numCPU]volatile.Register8
+var interruptPending [maxCPU]volatile.Register8
 
 func signalInterrupt() {
 	interruptPending[currentCPU()].Set(1)

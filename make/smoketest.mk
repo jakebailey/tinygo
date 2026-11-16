@@ -289,9 +289,9 @@ smoketest-rp2xxx: | build/smoke
 	@$(MD5SUM) $(SMOKE_OUT).hex
 	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico -gc=leaking    examples/blinky1
 	@$(MD5SUM) $(SMOKE_OUT).hex
-	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico -scheduler=cores examples/core-assign
+	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico -scheduler=unified -cores=2 examples/core-assign
 	@$(MD5SUM) $(SMOKE_OUT).hex
-	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico2 -scheduler=cores examples/core-assign
+	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico2 -scheduler=unified -cores=2 examples/core-assign
 	@$(MD5SUM) $(SMOKE_OUT).hex
 	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico-w              examples/blinky1
 	@$(MD5SUM) $(SMOKE_OUT).hex
@@ -481,7 +481,7 @@ smoketest-avr: | build/smoke
 	@$(MD5SUM) $(SMOKE_OUT).hex
 	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=arduino-uno         examples/pwm
 	@$(MD5SUM) $(SMOKE_OUT).hex
-	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=arduino-uno -scheduler=tasks  examples/blinky1
+	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=arduino-uno -scheduler=unified -cores=1  examples/blinky1
 	@$(MD5SUM) $(SMOKE_OUT).hex
 	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=arduino-mega1280    examples/blinky1
 	@$(MD5SUM) $(SMOKE_OUT).hex
@@ -513,15 +513,15 @@ ifneq ($(XTENSA), 0)
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic     examples/machinetest
 	@$(MD5SUM) $(SMOKE_OUT).bin
-	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic -scheduler=cores examples/machinetest
+	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic -scheduler=unified -cores=2 examples/machinetest
 	@$(MD5SUM) $(SMOKE_OUT).bin
-	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic -scheduler=cores examples/core-assign
+	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic -scheduler=unified -cores=2 examples/core-assign
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32c3-generic     examples/flash
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic     examples/flash
 	@$(MD5SUM) $(SMOKE_OUT).bin
-	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic -scheduler=cores examples/flash
+	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic -scheduler=unified -cores=2 examples/flash
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32-mini32      	examples/blinky1
 	@$(MD5SUM) $(SMOKE_OUT).bin
@@ -579,7 +579,7 @@ ifneq ($(XTENSA), 0)
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=xiao-esp32s3 -tags=usbotg examples/hid-joystick
 	@$(MD5SUM) $(SMOKE_OUT).bin
-	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=xiao-esp32s3 -tags=usbotg -scheduler=cores examples/usb-storage
+	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=xiao-esp32s3 -tags=usbotg -scheduler=unified -cores=2 examples/usb-storage
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	# esp32s3-supermini
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-supermini	    examples/blinky1

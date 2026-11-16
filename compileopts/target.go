@@ -38,6 +38,8 @@ type TargetSpec struct {
 	GC               string   `json:"gc,omitempty"`
 	PanicUnwind      string   `json:"panic-unwind,omitempty"`
 	Scheduler        string   `json:"scheduler,omitempty"`
+	StackSwitching   string   `json:"stack-switching,omitempty"`
+	MaxCores         uint32   `json:"max-cores,omitempty"`
 	Serial           string   `json:"serial,omitempty"` // which serial output to use (uart, usb, none)
 	Linker           string   `json:"linker,omitempty"`
 	LinkerFlavor     string   `json:"linker-flavor,omitempty"` // how to drive the configured linker (for example: gnu, coff, darwin)
@@ -490,7 +492,6 @@ func defaultTarget(options *Options) (*TargetSpec, error) {
 		)
 		spec.ExtraFiles = append(spec.ExtraFiles,
 			"src/internal/futex/futex_darwin.c",
-			"src/internal/task/task_threads.c",
 			"src/runtime/os_darwin.c",
 			"src/runtime/runtime_unix.c",
 			"src/runtime/scheduler_workers.c",
@@ -534,7 +535,6 @@ func defaultTarget(options *Options) (*TargetSpec, error) {
 		}
 		spec.ExtraFiles = append(spec.ExtraFiles,
 			"src/internal/futex/futex_linux.c",
-			"src/internal/task/task_threads.c",
 			"src/runtime/runtime_unix.c",
 			"src/runtime/scheduler_workers.c",
 			"src/runtime/signal.c")

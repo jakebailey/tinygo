@@ -1,14 +1,14 @@
-//go:build scheduler.workers
+//go:build scheduler.unified && exec.workers
 
 package runtime
 
-// The workers scheduler runs goroutines on a pool of OS threads (workers).
+// The workers execution mode runs goroutines on a pool of OS threads.
 // At most gomaxprocs workers run goroutines at the same time: each of them
 // holds a slot. A worker without a slot is idle, watches the clock, or is
 // blocked in a system call.
 //
-// Goroutines switch stacks cooperatively like with the cores scheduler, and
-// share the run queue, sleep queue and timers with it (scheduler_cooperative.go).
+// Goroutines switch stacks cooperatively and share the run queue, sleep queue
+// and timers with the other execution modes (scheduler_cooperative.go).
 //
 // Limitations:
 //   - Goroutines are not preempted. A goroutine that runs without blocking or

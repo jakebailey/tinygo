@@ -1,4 +1,4 @@
-//go:build (rp2040 || rp2350) && scheduler.cores
+//go:build (rp2040 || rp2350) && exec.multicore
 
 package runtime
 
@@ -20,7 +20,7 @@ const (
 var rp2FlashSafeState volatile.Register8
 
 // rp2EnterFlashSafeSection enters a section where flash operations may disable XIP.
-// With scheduler=cores it must not be called from an interrupt handler or with
+// With -cores=2 it must not be called from an interrupt handler or with
 // interrupts disabled; the GC stop-the-world path has the same constraint (see #5610).
 func rp2EnterFlashSafeSection() (interrupt.State, bool) {
 	multicore := secondaryCoresReady.Load() != 0

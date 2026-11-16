@@ -1,4 +1,4 @@
-//go:build esp32s3 && scheduler.cores
+//go:build esp32s3 && exec.multicore
 
 package runtime
 
@@ -13,7 +13,7 @@ import (
 	"unsafe"
 )
 
-const numCPU = 2
+const maxCPU = 2
 
 // Level 1, level triggered line for the FROM_CPU software interrupts.
 // See esp-idf components/esp_hw_support/port/esp32s3/esp_cpu_intr.c.
@@ -69,10 +69,10 @@ var crossCoreInterrupt interrupt.Interrupt
 
 var (
 	core1Started         atomic.Uint32
-	schedulerWakePending [numCPU]atomic.Uint32
-	sleepWake            [numCPU]atomic.Uint32
-	gcPauseRequest       [numCPU]atomic.Uint32
-	gcSignalWait         [numCPU]atomic.Uint32
+	schedulerWakePending [maxCPU]atomic.Uint32
+	sleepWake            [maxCPU]atomic.Uint32
+	gcPauseRequest       [maxCPU]atomic.Uint32
+	gcSignalWait         [maxCPU]atomic.Uint32
 )
 
 // Set (1) or clear (0) the FROM_CPU interrupt of the given core.
@@ -114,7 +114,7 @@ const (
 
 var (
 	flashSafeLock     spinLock
-	flashPauseRequest [numCPU]atomic.Uint32
+	flashPauseRequest [maxCPU]atomic.Uint32
 	flashParkState    uint32
 )
 
@@ -173,6 +173,10 @@ func interruptEnableLocal(mask uint32)
 // Start core 1, following start_other_core in esp-idf
 // components/esp_system/port/cpu_start.c.
 func startSecondaryCores() {
+	if numCPU < 2 {
+		return
+	}
+
 	esp.INTERRUPT_CORE0.SetCPU_INTR_FROM_CPU_0_MAP(crossCoreCPUInterrupt)
 	esp.INTERRUPT_CORE1.SetCPU_INTR_FROM_CPU_1_MAP(crossCoreCPUInterrupt)
 	signalCore(0, 0)

@@ -245,6 +245,8 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (*BuildR
 		TrimPath:        config.TrimPath(),
 
 		Scheduler:          config.Scheduler(),
+		ExecutionMode:      config.ExecutionMode(),
+		StackSwitching:     config.StackSwitching(),
 		AutomaticStackSize: config.AutomaticStackSize(),
 		DefaultStackSize:   config.StackSize(),
 		MaxStackAlloc:      config.MaxStackAlloc(),
@@ -1065,7 +1067,7 @@ func Build(pkgName, outpath, tmpdir string, config *compileopts.Config) (*BuildR
 
 				var args []string
 
-				if config.Scheduler() == "asyncify" {
+				if config.StackSwitching() == "asyncify" {
 					args = append(args, "--asyncify")
 				}
 

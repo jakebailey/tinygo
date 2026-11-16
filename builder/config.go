@@ -62,18 +62,29 @@ func NewConfig(options *compileopts.Options) (*compileopts.Config, error) {
 		GoMinorVersion: gorootMinor,
 		TestConfig:     options.TestConfig,
 	}
+	if options.Cores > 0 {
+		if config.Scheduler() != "unified" {
+			return nil, fmt.Errorf("-cores is not supported on target %s", options.Target)
+		}
+		if options.Cores > 1 && spec.MaxCores <= 1 {
+			return nil, fmt.Errorf("-cores is not supported on target %s", options.Target)
+		}
+		if options.Cores > 1 && options.Cores > int(spec.MaxCores) {
+			return nil, fmt.Errorf("-cores=%d exceeds the %d cores supported by target %s", options.Cores, spec.MaxCores, options.Target)
+		}
+	}
 	requestedPanicUnwind := options.PanicUnwind
 	if requestedPanicUnwind == "" {
 		requestedPanicUnwind = spec.PanicUnwind
 	}
-	if requestedPanicUnwind == "explicit" && config.Scheduler() == "asyncify" {
-		return nil, errors.New("explicit panic unwinding cannot be used with the asyncify scheduler")
+	if requestedPanicUnwind == "explicit" && config.Scheduler() == "unified" && config.StackSwitching() == "asyncify" {
+		return nil, errors.New("explicit panic unwinding cannot be used with asyncify stack switching")
 	}
 	if config.PanicUnwind() == "explicit" && !config.SupportsExplicitUnwind() {
 		return nil, fmt.Errorf("explicit panic unwinding is not supported on %s", config.Triple())
 	}
-	if config.PanicUnwind() == "explicit" && (config.Scheduler() == "threads" || config.Scheduler() == "workers") {
-		return nil, errors.New("explicit panic unwinding is not supported with the " + config.Scheduler() + " scheduler")
+	if config.PanicUnwind() == "explicit" && config.ExecutionMode() == "workers" {
+		return nil, errors.New("explicit panic unwinding is not supported with the workers execution mode")
 	}
 	return config, nil
 }

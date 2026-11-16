@@ -15,7 +15,7 @@ import (
 // This file implements the VirtIO RISC-V interface implemented in QEMU, which
 // is an interface designed for emulation.
 
-const numCPU = 4
+const maxCPU = 4
 
 //export main
 func main() {
@@ -33,7 +33,7 @@ func main() {
 		// Wait until we get the signal this hart is ready to start.
 		// Note that interrupts are disabled, which means that the interrupt
 		// isn't actually taken. But we can still wait for it using wfi.
-		// If the cores scheduler is not used, we'll stay in this state forever.
+		// Without multicore execution, we'll stay in this state forever.
 		for riscv.MIP.Get()&riscv.MIP_MSIP == 0 {
 			riscv.Asm("wfi")
 		}
@@ -74,7 +74,7 @@ func main() {
 
 	// Set all MTIMECMP registers to a value that clears the MTIP bit in MIP.
 	// If we don't do this, the wfi instruction won't work as expected.
-	for i := 0; i < numCPU; i++ {
+	for i := 0; i < maxCPU; i++ {
 		aclintMTIMECMP[i].Set(0xffff_ffff_ffff_ffff)
 	}
 
@@ -144,10 +144,10 @@ func handleInterrupt() {
 
 var (
 	// State used to request a GC pause on each hart.
-	gcPauseRequest [numCPU]atomic.Uint32
+	gcPauseRequest [maxCPU]atomic.Uint32
 
 	// State used to signal the next GC phase to each paused hart.
-	gcSignalWait [numCPU]atomic.Uint32
+	gcSignalWait [maxCPU]atomic.Uint32
 )
 
 // The GC interrupted this core for the stop-the-world phase.
@@ -431,10 +431,10 @@ func startSecondaryCores() {
 var sleepingHarts uint8
 
 // Checkpoints for cores waiting for runnable tasks.
-var schedulerWaitCheckpoints [numCPU]interrupt.Checkpoint
+var schedulerWaitCheckpoints [maxCPU]interrupt.Checkpoint
 
 // State used to distinguish scheduler wakeups from other software interrupts.
-var schedulerWakePending [numCPU]atomic.Uint32
+var schedulerWakePending [maxCPU]atomic.Uint32
 
 // Put the scheduler to sleep, since there are no tasks to run.
 // This will unlock the scheduler lock, and must be called with the scheduler
@@ -449,7 +449,7 @@ func schedulerUnlockAndWait() {
 	// deadlocked.
 	// We can do this check since this is not baremetal: there won't be any
 	// external interrupts that might unblock a goroutine.
-	if sleepingHarts == (1<<numCPU)-1 {
+	if sleepingHarts == uint8((1<<numCPU)-1) {
 		runtimeFatal("all cores are sleeping - deadlock!")
 	}
 

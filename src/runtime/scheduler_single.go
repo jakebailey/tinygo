@@ -1,4 +1,4 @@
-//go:build scheduler.tasks || scheduler.asyncify
+//go:build scheduler.unified && (exec.single || exec.asyncify)
 
 package runtime
 

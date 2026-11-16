@@ -1,4 +1,4 @@
-//go:build scheduler.cores || scheduler.workers
+//go:build scheduler.unified && (exec.multicore || exec.workers)
 
 package runtime
 

@@ -1,4 +1,4 @@
-//go:build (tinygo.unwind.explicit || tinygo.unwind.asyncify) && !scheduler.cores && !scheduler.threads
+//go:build (tinygo.unwind.explicit || tinygo.unwind.asyncify) && !exec.multicore
 
 package runtime
 

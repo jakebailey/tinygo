@@ -12,7 +12,7 @@ var (
 	validBuildModeOptions     = []string{"default", "c-shared", "wasi-legacy"}
 	validLibcOptions          = []string{"musl", "glibc"}
 	validGCOptions            = []string{"none", "leaking", "conservative", "custom", "precise", "boehm"}
-	validSchedulerOptions     = []string{"none", "tasks", "asyncify", "threads", "cores", "unified"}
+	validSchedulerOptions     = []string{"none", "unified", "tasks", "asyncify", "threads", "cores"}
 	validSerialOptions        = []string{"none", "uart", "usb", "rtt"}
 	validPrintSizeOptions     = []string{"none", "short", "full", "html"}
 	validPanicStrategyOptions = []string{"print", "trap"}
@@ -39,6 +39,7 @@ type Options struct {
 	PanicStrategy           string
 	PanicUnwind             string
 	Scheduler               string
+	Cores                   int
 	StackSize               uint64 // goroutine stack size (if none could be automatically determined)
 	Serial                  string
 	Work                    bool // -work flag to print temporary build directory
@@ -108,6 +109,10 @@ func (o *Options) Verify() error {
 				o.Scheduler,
 				strings.Join(validSchedulerOptions, ", "))
 		}
+	}
+
+	if o.Cores < 0 {
+		return fmt.Errorf("invalid -cores=%d: must be zero or a positive number", o.Cores)
 	}
 
 	if o.Serial != "" {
