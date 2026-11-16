@@ -51,7 +51,7 @@ func main() {
 
 		// Now start running the scheduler on this core.
 		schedulerLock.Lock()
-		scheduler(false)
+		schedule(false)
 
 		// The scheduler exited, which means main returned and the program
 		// should exit immediately.

@@ -85,6 +85,12 @@ func runtime_alloc(size uintptr, layout unsafe.Pointer) unsafe.Pointer
 //go:linkname runtime_freeTaskStack runtime.freeTaskStack
 func runtime_freeTaskStack(ptr uintptr)
 
+//go:linkname lockScheduler runtime.lockScheduler
+func lockScheduler()
+
+//go:linkname unlockScheduler runtime.unlockScheduler
+func unlockScheduler()
+
 //go:linkname scheduleTask runtime.scheduleTask
 func scheduleTask(*Task)
 

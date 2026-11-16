@@ -1,6 +1,6 @@
-//go:build scheduler.tasks
+//go:build scheduler.tasks || scheduler.cores || scheduler.workers
 
 package task
 
-// MarkFinishing does nothing for scheduler.tasks because it does not use asyncify heap stacks.
+// MarkFinishing does nothing because goroutine stacks are not asyncify heap stacks.
 func MarkFinishing() {}

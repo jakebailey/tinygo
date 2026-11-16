@@ -457,7 +457,12 @@ func TestBuild(t *testing.T) {
 	if !testing.Short() {
 		t.Run("EmulatedCortexM3", func(t *testing.T) {
 			t.Parallel()
-			runPlatTests(optionsFromTarget("cortex-m-qemu", sema), tests, t)
+			opts := optionsFromTarget("cortex-m-qemu", sema)
+			runPlatTests(opts, tests, t)
+			t.Run("sleep-overflow.go", func(t *testing.T) {
+				t.Parallel()
+				runTest("sleep-overflow.go", opts, t, nil, nil)
+			})
 		})
 
 		t.Run("EmulatedRISCV", func(t *testing.T) {
