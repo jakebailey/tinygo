@@ -250,13 +250,21 @@ func (b *builder) createRawSyscall(call *ssa.CallCommon) (llvm.Value, error) {
 }
 
 // createSyscall emits instructions for the syscall.Syscall* family of
-// functions, depending on the target OS/arch.
-func (b *builder) createSyscall(call *ssa.CallCommon) (llvm.Value, error) {
+// functions, depending on the target OS/arch. If blocking is set, the
+// scheduler may run other goroutines while the system call is in progress.
+func (b *builder) createSyscall(call *ssa.CallCommon, blocking bool) (llvm.Value, error) {
 	switch b.GOOS {
 	case "linux":
+		blocking = blocking && b.Scheduler == "workers"
+		if blocking {
+			b.createRuntimeCall("entersyscall", nil, "")
+		}
 		syscallResult, err := b.createRawSyscall(call)
 		if err != nil {
 			return syscallResult, err
+		}
+		if blocking {
+			b.createRuntimeCall("exitsyscall", nil, "")
 		}
 		// Return values: r0, r1 uintptr, err Errno
 		// Pseudocode:
