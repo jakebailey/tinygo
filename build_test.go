@@ -467,6 +467,10 @@ func TestBuild(t *testing.T) {
 				t.Parallel()
 				runTest("sleep-overflow.go", opts, t, nil, nil)
 			})
+			t.Run("gcstacks-exit.go", func(t *testing.T) {
+				t.Parallel()
+				runTest("gcstacks-exit.go", opts, t, nil, nil)
+			})
 		})
 
 		t.Run("EmulatedRISCV", func(t *testing.T) {
