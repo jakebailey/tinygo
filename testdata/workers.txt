@@ -2,4 +2,5 @@ burst: 1999000
 blocking calls: true
 parallel GC: 8
 timers: 200
+locked goroutines obey GOMAXPROCS
 shutdown

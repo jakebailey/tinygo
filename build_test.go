@@ -253,6 +253,12 @@ func TestBuild(t *testing.T) {
 					runTest("workers.go", hostOptions, t, nil, []string{"GOMAXPROCS=" + procs})
 				})
 			}
+			if runtime.GOOS == "linux" {
+				t.Run("lockosthread.go-GOMAXPROCS=1", func(t *testing.T) {
+					t.Parallel()
+					runTest("lockosthread.go", hostOptions, t, nil, []string{"GOMAXPROCS=1"})
+				})
+			}
 		}
 
 		if runtime.GOOS == "linux" {

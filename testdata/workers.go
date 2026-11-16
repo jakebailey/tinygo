@@ -16,7 +16,38 @@ func main() {
 	blockingCalls()
 	parallelGC()
 	timers()
+	lockedParallelism()
 	shutdown()
+}
+
+func lockedParallelism() {
+	if runtime.GOMAXPROCS(0) == 1 {
+		var running atomic.Int32
+		var overlap atomic.Bool
+		var wg sync.WaitGroup
+		wg.Add(2)
+		for range 2 {
+			go func() {
+				defer wg.Done()
+				runtime.LockOSThread()
+				defer runtime.UnlockOSThread()
+				running.Add(1)
+				end := time.Now().Add(100 * time.Millisecond)
+				for time.Now().Before(end) {
+					if running.Load() > 1 {
+						overlap.Store(true)
+						break
+					}
+				}
+				running.Add(-1)
+			}()
+		}
+		wg.Wait()
+		if overlap.Load() {
+			panic("locked goroutines exceeded GOMAXPROCS")
+		}
+	}
+	println("locked goroutines obey GOMAXPROCS")
 }
 
 // Start many goroutines at once.
@@ -47,14 +78,18 @@ func blockingCalls() {
 	var total atomic.Int32
 	for i := 0; i < n; i++ {
 		wg.Add(1)
-		go func() {
+		go func(locked bool) {
 			defer wg.Done()
+			if locked {
+				runtime.LockOSThread()
+				defer runtime.UnlockOSThread()
+			}
 			var buf [1]byte
 			if _, err := r.Read(buf[:]); err != nil {
 				panic(err)
 			}
 			total.Add(int32(buf[0]))
-		}()
+		}(i == 0)
 	}
 	time.Sleep(10 * time.Millisecond)
 	go func() {
