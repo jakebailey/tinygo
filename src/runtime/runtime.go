@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"math/bits"
 	"sync/atomic"
 	"unsafe"
 )
@@ -19,6 +20,36 @@ const Compiler = "tinygo"
 // ticksToNanoseconds and nanosecondsToTicks, which need to be implemented for
 // each system as needed.
 type timeUnit int64
+
+// The multiplier and divisor must be positive, the multiplier must be smaller,
+// and their product must fit in int64.
+//
+//go:inline
+func scaleNanoseconds(ns, multiplier, divisor int64) timeUnit {
+	return timeUnit(ns/divisor*multiplier + ns%divisor*multiplier/divisor)
+}
+
+func scaleNanosecondsFrequency(ns int64, frequency uint64) timeUnit {
+	magnitude := uint64(ns)
+	limit := uint64(1<<63 - 1)
+	if ns < 0 {
+		magnitude = -magnitude
+		limit++
+	}
+	high, low := bits.Mul64(magnitude, frequency)
+	result := limit
+	// bits.Div64 panics when the high word is at least the divisor.
+	if high < 1000000000 {
+		scaled, _ := bits.Div64(high, low, 1000000000)
+		if scaled < limit {
+			result = scaled
+		}
+	}
+	if ns < 0 {
+		return timeUnit(-result)
+	}
+	return timeUnit(result)
+}
 
 // The compiler will fill this with calls to the initialization function of each
 // package.

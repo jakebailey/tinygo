@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -63,6 +65,44 @@ func main() {
 	}
 	if !strings.Contains(output.String(), "GC returned") {
 		t.Fatalf("GC did not return:\n%s", output.String())
+	}
+}
+
+func TestMicrobitSleepOverflow(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping micro:bit emulation in short mode")
+	}
+	if _, err := exec.LookPath("qemu-system-arm"); err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			t.Skip("qemu-system-arm not installed")
+		}
+		t.Fatal(err)
+	}
+	machines, err := exec.Command("qemu-system-arm", "-machine", "help").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^microbit\s`).Match(machines) {
+		t.Skip("qemu-system-arm does not support micro:bit")
+	}
+
+	options := optionsFromTarget("microbit", sema)
+	config, err := builder.NewConfig(&options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Target.Emulator = "qemu-system-arm -machine microbit -semihosting -nographic -kernel {}"
+	output := &bytes.Buffer{}
+	_, err = buildAndRun("testdata/microbit-sleep-overflow.go", config, output, nil, nil, 10*time.Second, func(cmd *exec.Cmd, result *builder.BuildResult) error {
+		cmd.Stdout = output
+		return cmd.Run()
+	})
+	if err != nil {
+		t.Fatalf("micro:bit program failed: %v\n%s", err, output)
+	}
+	if strings.TrimSpace(output.String()) != "oversized sleep stayed blocked" {
+		t.Fatalf("unexpected output:\n%s", output)
 	}
 }
 

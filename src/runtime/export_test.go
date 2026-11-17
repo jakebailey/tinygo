@@ -16,6 +16,14 @@ func TimerNextWhen(when, period, delta int64) int64 {
 	return t.nextWhen(delta)
 }
 
+func ScaleNanoseconds(ns, multiplier, divisor int64) int64 {
+	return int64(scaleNanoseconds(ns, multiplier, divisor))
+}
+
+func ScaleNanosecondsFrequency(ns int64, frequency uint64) int64 {
+	return int64(scaleNanosecondsFrequency(ns, frequency))
+}
+
 func (h *TimerHeap) Len() int {
 	return len(h.h.nodes)
 }
