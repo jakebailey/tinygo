@@ -80,7 +80,7 @@ func ticksToNanoseconds(tick timeUnit) int64 {
 }
 
 func nanosecondsToTicks(ns int64) timeUnit {
-	return timeUnit(12 * ns / 625)
+	return scaleNanoseconds(ns, 12, 625)
 }
 
 func ticks() timeUnit {

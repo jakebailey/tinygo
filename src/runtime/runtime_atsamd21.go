@@ -264,7 +264,7 @@ func nanosecondsToTicks(ns int64) timeUnit {
 	// The following calculation is actually the following, but with both sides
 	// reduced to reduce the risk of overflow:
 	//     ns * 32768 / 1e9
-	return timeUnit(ns * 64 / 1953125)
+	return scaleNanoseconds(ns, 64, 1953125)
 }
 
 // sleepTicks should sleep for d number of microseconds.
