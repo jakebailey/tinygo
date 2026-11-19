@@ -239,6 +239,12 @@ func TestBuild(t *testing.T) {
 				options.Scheduler = "tasks"
 				runTest("gcstacks-blocked.go", options, t, nil, nil)
 			})
+			t.Run("timers-scheduler=none", func(t *testing.T) {
+				t.Parallel()
+				options := compileopts.Options(hostOptions)
+				options.Scheduler = "none"
+				runTest("timers-noscheduler.go", options, t, nil, nil)
+			})
 			for _, scheduler := range []string{"threads", "none"} {
 				t.Run("finalizerinvariants.go-gc-conservative-scheduler-"+scheduler, func(t *testing.T) {
 					t.Parallel()

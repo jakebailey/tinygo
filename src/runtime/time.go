@@ -53,6 +53,11 @@ type timeTimer struct {
 
 //go:linkname newTimer time.newTimer
 func newTimer(when, period int64, f func(arg any, seq uintptr, delta int64), arg any, c unsafe.Pointer) *timeTimer {
+	if !hasScheduler && !hasParallelism {
+		runtimePanic(errTimersUnsupported)
+		return nil
+	}
+
 	bubble := currentSynctestBubble()
 	tim := &timeTimer{
 		c:         c,
@@ -74,7 +79,7 @@ func newTimer(when, period int64, f func(arg any, seq uintptr, delta int64), arg
 	node := newTimerNode()
 	node.timer = &tim.timer
 	node.callback = timerCallback
-	if c != nil && (hasScheduler || hasParallelism) {
+	if c != nil {
 		tim.timer.pausedNode = node
 	} else if bubble != nil {
 		bubble.addTimer(node)
