@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"math/bits"
 	"sync/atomic"
 	"unsafe"
 )
@@ -20,17 +21,42 @@ const Compiler = "tinygo"
 // each system as needed.
 type timeUnit int64
 
+// The multiplier and divisor must be positive, the multiplier must be smaller,
+// and their product must fit in int64.
+//
+//go:inline
+func scaleNanoseconds(ns, multiplier, divisor int64) timeUnit {
+	return timeUnit(ns/divisor*multiplier + ns%divisor*multiplier/divisor)
+}
+
+func scaleNanosecondsFrequency(ns int64, frequency uint64) timeUnit {
+	magnitude := uint64(ns)
+	limit := uint64(1<<63 - 1)
+	if ns < 0 {
+		magnitude = -magnitude
+		limit++
+	}
+	high, low := bits.Mul64(magnitude, frequency)
+	result := limit
+	// bits.Div64 panics when the high word is at least the divisor.
+	if high < 1000000000 {
+		scaled, _ := bits.Div64(high, low, 1000000000)
+		if scaled < limit {
+			result = scaled
+		}
+	}
+	if ns < 0 {
+		return timeUnit(-result)
+	}
+	return timeUnit(result)
+}
+
 // The compiler will fill this with calls to the initialization function of each
 // package.
 func initAll()
 
 //go:linkname callMain main.main
 func callMain()
-
-func GOMAXPROCS(n int) int {
-	// Note: setting GOMAXPROCS is ignored.
-	return 1
-}
 
 var goroot string // set by the builder
 
@@ -99,17 +125,6 @@ func nanotime() int64 {
 //go:linkname os_sigpipe os.sigpipe
 func os_sigpipe() {
 	runtimeFatal("too many writes on closed pipe")
-}
-
-// LockOSThread wires the calling goroutine to its current operating system thread.
-// Stub for now
-// Called by go1.18 standard library on windows, see https://github.com/golang/go/issues/49320
-func LockOSThread() {
-}
-
-// UnlockOSThread undoes an earlier call to LockOSThread.
-// Stub for now
-func UnlockOSThread() {
 }
 
 // KeepAlive makes sure the value in the interface is alive until at least the

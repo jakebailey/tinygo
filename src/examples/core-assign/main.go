@@ -1,7 +1,7 @@
 // Assign goroutines to cores with machine.AssignCore.
-// Build with -scheduler=cores.
+// Build with --cores=2.
 
-//go:build scheduler.cores && (rp2040 || rp2350 || esp32s3)
+//go:build exec.multicore && (rp2040 || rp2350 || esp32s3)
 
 package main
 

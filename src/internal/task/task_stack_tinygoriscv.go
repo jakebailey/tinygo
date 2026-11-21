@@ -1,4 +1,4 @@
-//go:build (scheduler.tasks || scheduler.cores) && tinygo.riscv
+//go:build (exec.single || exec.multicore) && tinygo.riscv
 
 package task
 

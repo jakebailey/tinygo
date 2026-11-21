@@ -1,4 +1,4 @@
-//go:build wasip1 && (scheduler.tasks || scheduler.asyncify)
+//go:build wasip1 && (exec.single || exec.asyncify)
 
 package syscall
 

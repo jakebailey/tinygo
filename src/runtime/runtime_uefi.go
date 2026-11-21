@@ -27,13 +27,11 @@ func ticks() timeUnit {
 }
 
 func nanosecondsToTicks(ns int64) timeUnit {
-	frequency := int64(uefi.TicksFrequency())
+	frequency := uefi.TicksFrequency()
 	if frequency == 0 {
 		return timeUnit(ns)
 	}
-	seconds := ns / 1000000000
-	remainder := ns % 1000000000
-	return timeUnit(seconds*frequency + (remainder*frequency)/1000000000)
+	return scaleNanosecondsFrequency(ns, frequency)
 }
 
 func ticksToNanoseconds(t timeUnit) int64 {

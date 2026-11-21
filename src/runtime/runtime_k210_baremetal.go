@@ -17,7 +17,7 @@ func ticksToNanoseconds(ticks timeUnit) int64 {
 
 // nanosecondsToTicks converts nanoseconds to CPU ticks.
 func nanosecondsToTicks(ns int64) timeUnit {
-	return timeUnit(ns * 39 / 5000)
+	return scaleNanoseconds(ns, 39, 5000)
 }
 
 func exit(code int) {

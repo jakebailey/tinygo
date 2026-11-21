@@ -68,11 +68,15 @@ endif
 	@cp -rp lib/musl/src/unistd          build/release/tinygo/lib/musl/src
 	@cp -rp lib/musl/src/process         build/release/tinygo/lib/musl/src
 	@cp -rp lib/mingw-w64/mingw-w64-crt/crt/pseudo-reloc.c          build/release/tinygo/lib/mingw-w64/mingw-w64-crt/crt
+	@cp -rp lib/mingw-w64/mingw-w64-crt/crt/tlsmcrt.c               build/release/tinygo/lib/mingw-w64/mingw-w64-crt/crt
+	@cp -rp lib/mingw-w64/mingw-w64-crt/crt/tlssup.c                build/release/tinygo/lib/mingw-w64/mingw-w64-crt/crt
+	@cp -rp lib/mingw-w64/mingw-w64-crt/crt/tlsthrd.c               build/release/tinygo/lib/mingw-w64/mingw-w64-crt/crt
 	@cp -rp lib/mingw-w64/mingw-w64-crt/def-include                 build/release/tinygo/lib/mingw-w64/mingw-w64-crt
 	@cp -rp lib/mingw-w64/mingw-w64-crt/gdtoa                       build/release/tinygo/lib/mingw-w64/mingw-w64-crt
 	@cp -rp lib/mingw-w64/mingw-w64-crt/include                     build/release/tinygo/lib/mingw-w64/mingw-w64-crt
 	@cp -rp lib/mingw-w64/mingw-w64-crt/lib-common/api-ms-win-crt-* build/release/tinygo/lib/mingw-w64/mingw-w64-crt/lib-common
 	@cp -rp lib/mingw-w64/mingw-w64-crt/lib-common/advapi32.def.in  build/release/tinygo/lib/mingw-w64/mingw-w64-crt/lib-common
+	@cp -rp lib/mingw-w64/mingw-w64-crt/lib-common/api-ms-win-core-synch-l1-2-0.def build/release/tinygo/lib/mingw-w64/mingw-w64-crt/lib-common
 	@cp -rp lib/mingw-w64/mingw-w64-crt/lib-common/kernel32.def.in  build/release/tinygo/lib/mingw-w64/mingw-w64-crt/lib-common
 	@cp -rp lib/mingw-w64/mingw-w64-crt/lib-common/msvcrt.def.in    build/release/tinygo/lib/mingw-w64/mingw-w64-crt/lib-common
 	@cp -rp lib/mingw-w64/mingw-w64-crt/math/x86                    build/release/tinygo/lib/mingw-w64/mingw-w64-crt/math

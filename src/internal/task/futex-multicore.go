@@ -1,0 +1,74 @@
+//go:build exec.multicore || exec.workers
+
+package task
+
+import "runtime/interrupt"
+
+// A futex is a way for userspace to wait with the pointer as the key, and for
+// another thread to wake one or all waiting threads keyed on the same pointer.
+//
+// A futex does not change the underlying value, it only reads it before to prevent
+// lost wake-ups.
+type Futex struct {
+	Uint32
+
+	waiters Stack
+}
+
+// Atomically check for cmp to still be equal to the futex value and if so, go
+// to sleep. Return true if we were definitely awoken by a call to Wake or
+// WakeAll, and false if we can't be sure of that.
+func (f *Futex) Wait(cmp uint32) (awoken bool) {
+	mask := lockFutex()
+
+	if f.Uint32.Load() != cmp {
+		unlockFutex(mask)
+		return false
+	}
+
+	t := Current()
+	if t == nil {
+		// Timer callbacks run in the scheduler with no current task, so they
+		// cannot sleep. Return so the caller spins and retries instead.
+		unlockFutex(mask)
+		return false
+	}
+
+	// Push the current goroutine onto the waiter stack.
+	f.waiters.Push(t)
+
+	unlockFutex(mask)
+
+	// Pause until this task is awoken by Wake/WakeAll.
+	Pause()
+
+	// We were awoken by a call to Wake or WakeAll. There is no chance for
+	// spurious wakeups.
+	return true
+}
+
+// Wake a single waiter.
+func (f *Futex) Wake() {
+	mask := lockFutex()
+	t := f.waiters.Pop()
+	unlockFutex(mask)
+	if t != nil {
+		scheduleTask(t)
+	}
+}
+
+// Wake all waiters.
+func (f *Futex) WakeAll() {
+	mask := lockFutex()
+	waiters := f.waiters.Queue()
+	unlockFutex(mask)
+	for t := waiters.Pop(); t != nil; t = waiters.Pop() {
+		scheduleTask(t)
+	}
+}
+
+//go:linkname lockFutex runtime.lockFutex
+func lockFutex() interrupt.State
+
+//go:linkname unlockFutex runtime.unlockFutex
+func unlockFutex(interrupt.State)

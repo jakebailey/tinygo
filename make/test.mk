@@ -261,7 +261,7 @@ ifeq ($(OS),Windows_NT)
 # TestWalkDir needs File.Chdir, which is a stub in src/os/file_windows.go.
 tinygo-test: TEST_OPTIONS_io/fs := -stack-size=8MB -skip='^TestWalkDir$$'
 endif
-tinygo-test: TEST_OPTIONS_internal/synctest = -skip='^(TestReflectFuncOf|TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount$(TEST_SYNCTEST_THREAD_LIMIT_SKIP))$$'
+tinygo-test: TEST_OPTIONS_internal/synctest = -skip='^(TestReflectFuncOf|TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount)$$'
 tinygo-test: TEST_OPTIONS_testing/synctest := -skip='^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$$'
 tinygo-test-fast: HOST_TEST_STACK_SKIP_FLAG = $(TEST_SKIP_FLAG)
 
@@ -282,12 +282,6 @@ define run-tinygo-tests
 $(if $(strip $(filter-out $(call test-packages-with-options,$(1)),$(1))),$(4) $(TINYGO) test $(2) $(3) $(filter-out $(call test-packages-with-options,$(1)),$(1)))
 $(foreach package,$(call test-packages-with-options,$(1)),$(call run-tinygo-test-package,$(package),$(2),$(4)))
 endef
-
-# https://go.dev/src/internal/synctest/synctest_test.go creates 100 x 100
-# goroutines, which can exceed macOS's thread limit with the threads scheduler.
-ifeq ($(uname),Darwin)
-TEST_SYNCTEST_THREAD_LIMIT_SKIP := |TestWaitGroupManyBubbles
-endif
 
 # Test known-working standard library packages.
 # TODO: parallelize, and only show failing tests (no implied -v flag).

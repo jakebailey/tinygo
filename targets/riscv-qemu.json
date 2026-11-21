@@ -8,7 +8,8 @@
 		"virt",
 		"qemu"
 	],
-	"scheduler": "cores",
+	"scheduler": "unified",
+	"max-cores": 4,
 	"default-stack-size": 16384,
 	"cflags": [
 		"-DTINYGO_CORES=4"

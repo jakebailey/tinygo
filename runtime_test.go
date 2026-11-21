@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,15 +21,15 @@ import (
 
 // TestTimerStopResetRace checks that stopping or resetting a timer while its
 // callback is running behaves correctly. It reaches into the runtime timer
-// hooks via //go:linkname and relies on the threads scheduler, which is only
-// used on these hosts.
+// hooks via //go:linkname and relies on the workers scheduler, which is the
+// default on these hosts.
 func TestTimerStopResetRace(t *testing.T) {
 	t.Parallel()
 
 	switch runtime.GOOS {
 	case "darwin", "linux":
 	default:
-		t.Skipf("host GOOS %s does not use the threads scheduler", runtime.GOOS)
+		t.Skipf("host GOOS %s does not use the workers scheduler", runtime.GOOS)
 	}
 	runTest("timer_stop_reset_race.go", optionsFromTarget("", sema), t, nil, nil)
 }
@@ -66,12 +69,76 @@ func main() {
 	}
 }
 
+func TestWorkerSleepOverflow(t *testing.T) {
+	t.Parallel()
+
+	options := optionsFromTarget("", sema)
+	options.Scheduler = "unified"
+	config, err := builder.NewConfig(&options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := config.BuildTags()
+	if !slices.Contains(tags, "scheduler.workers") && !slices.Contains(tags, "exec.workers") {
+		t.Skip("target does not use workers")
+	}
+	output := &bytes.Buffer{}
+	_, err = buildAndRun("testdata/worker-sleep-overflow.go", config, output, nil, []string{"GOMAXPROCS=2"}, 10*time.Second, func(cmd *exec.Cmd, result *builder.BuildResult) error {
+		cmd.Stdout = output
+		cmd.Stderr = output
+		return cmd.Run()
+	})
+	if err != nil {
+		t.Fatalf("worker sleep program failed: %v\n%s", err, output)
+	}
+	if strings.TrimSpace(output.String()) != "earlier timer fired" {
+		t.Fatalf("unexpected output:\n%s", output)
+	}
+}
+
+func TestMicrobitSleepOverflow(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping micro:bit emulation in short mode")
+	}
+	if _, err := exec.LookPath("qemu-system-arm"); err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			t.Skip("qemu-system-arm not installed")
+		}
+		t.Fatal(err)
+	}
+	machines, err := exec.Command("qemu-system-arm", "-machine", "help").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^microbit\s`).Match(machines) {
+		t.Skip("qemu-system-arm does not support micro:bit")
+	}
+
+	options := optionsFromTarget("microbit", sema)
+	config, err := builder.NewConfig(&options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Target.Emulator = "qemu-system-arm -machine microbit -semihosting -nographic -kernel {}"
+	output := &bytes.Buffer{}
+	_, err = buildAndRun("testdata/microbit-sleep-overflow.go", config, output, nil, nil, 10*time.Second, func(cmd *exec.Cmd, result *builder.BuildResult) error {
+		cmd.Stdout = output
+		return cmd.Run()
+	})
+	if err != nil {
+		t.Fatalf("micro:bit program failed: %v\n%s", err, output)
+	}
+	if strings.TrimSpace(output.String()) != "oversized sleep stayed blocked" {
+		t.Fatalf("unexpected output:\n%s", output)
+	}
+}
+
 // TestTimerStress runs timer and sleep stress programs. Timers fire while other
 // goroutines stop, reset and create timers, sleep, and the GC runs. It covers
-// the threads and tasks schedulers on the host, and the cores scheduler on
+// the workers and single-threaded modes on the host, and multicore execution on
 // riscv-qemu when qemu is installed. Programs that hold a timer callback in
-// flight need a second core to keep running, so only the cores scheduler runs
-// them.
+// flight need multiple cores to keep running.
 func TestTimerStress(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping timer stress tests in short mode")
@@ -93,14 +160,15 @@ func TestTimerStress(t *testing.T) {
 		name      string
 		target    string
 		scheduler string
+		cores     int
 	}
 	var configs []config
 	switch runtime.GOOS {
 	case "darwin", "linux":
-		configs = append(configs, config{"threads", "", "threads"}, config{"tasks", "", "tasks"})
+		configs = append(configs, config{"workers", "", "unified", 0}, config{"single", "", "unified", 1})
 	}
 	if _, err := exec.LookPath("qemu-system-riscv32"); err == nil {
-		configs = append(configs, config{"riscv-qemu", "riscv-qemu", ""})
+		configs = append(configs, config{"riscv-qemu", "riscv-qemu", "", 4})
 	}
 	if len(configs) == 0 {
 		t.Skip("no supported scheduler configuration on this host")
@@ -114,6 +182,7 @@ func TestTimerStress(t *testing.T) {
 			t.Run(c.name+"/"+program, func(t *testing.T) {
 				options := optionsFromTarget(c.target, sema)
 				options.Scheduler = c.scheduler
+				options.Cores = c.cores
 				if c.target == "riscv-qemu" && program == "timer_stop_reset_stress.go" {
 					// Short length still takes over 2 minutes on assert builds in CI.
 					options.GlobalValues = map[string]map[string]string{"main": {"size": "small"}}
@@ -339,6 +408,6 @@ func TestTimerChannelGC(t *testing.T) {
 	options := optionsFromTarget("", sema)
 	// Enumeration must not race runtime allocations.
 	// BDWGC is built without GC_THREADS in builder/bdwgc.go.
-	options.Scheduler = "tasks"
+	options.Cores = 1
 	runTest("timer_gc.go", options, t, nil, nil)
 }

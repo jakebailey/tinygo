@@ -43,22 +43,34 @@ func handleUART1Interrupt(interrupt.Interrupt) {
 	DefaultUART.Receive(uint8(DefaultUART.Bus.DR.Get()))
 }
 
+func uartWriteData(bus *py32.UART_Type, value uint32) {
+	bus.DR.Set(value)
+}
+
+func uartTXReady(bus *py32.UART_Type) bool {
+	return bus.SR.Get()&py32.UART_SR_TDRE != 0
+}
+
+func uartTXComplete(bus *py32.UART_Type) bool {
+	return bus.SR.Get()&py32.UART_SR_TXE != 0
+}
+
 func (uart *UART) writeByte(c byte) error {
 	retries := uart.txRetries
-	for retries > 0 && uart.Bus.SR.Get()&py32.UART_SR_TDRE == 0 {
+	for retries > 0 && !uartTXReady(uart.Bus) {
 		uartYield()
 		retries--
 	}
 	if retries <= 0 {
 		return errUARTWriteTimeout
 	}
-	uart.Bus.DR.Set(uint32(c))
+	uartWriteData(uart.Bus, uint32(c))
 	return nil
 }
 
 func (uart *UART) flush() {
 	retries := uart.txRetries
-	for retries > 0 && uart.Bus.SR.Get()&py32.UART_SR_TXE == 0 {
+	for retries > 0 && !uartTXComplete(uart.Bus) {
 		uartYield()
 		retries--
 	}

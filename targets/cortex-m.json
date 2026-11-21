@@ -3,7 +3,7 @@
 	"goos": "linux",
 	"goarch": "arm",
 	"gc": "conservative",
-	"scheduler": "tasks",
+	"scheduler": "unified",
 	"linker": "ld.lld",
 	"rtlib": "compiler-rt",
 	"libc": "picolibc",

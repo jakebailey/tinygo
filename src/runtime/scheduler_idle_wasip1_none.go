@@ -1,10 +1,10 @@
-//go:build wasip1 && !scheduler.tasks && !scheduler.asyncify
+//go:build wasip1 && !exec.single && !exec.asyncify
 
 package runtime
 
 // sleepTicks blocks the current execution context for d ticks. This is the
 // fallback used when no cooperative scheduler is configured (-scheduler=none
-// or -scheduler=threads on wasip1) and it has no FD-polling integration —
+// on wasip1) and it has no FD-polling integration —
 // see scheduler_idle_wasip1.go for the cooperative variant.
 func sleepTicks(d timeUnit) {
 	sleepTicksSubscription.u.u.timeout = uint64(d)

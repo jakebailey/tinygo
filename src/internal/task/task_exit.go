@@ -1,4 +1,4 @@
-//go:build scheduler.tasks || scheduler.asyncify || scheduler.cores
+//go:build exec.single || exec.asyncify || exec.multicore || exec.workers
 
 package task
 
@@ -44,6 +44,7 @@ func exit(goexit bool, next *Task) {
 		synctestTaskWake(next)
 	}
 	exitSynctest(t)
+	exitWorker(t)
 	remaining := atomic.AddUint32(&liveTasks, ^uint32(0))
 	if t == mainTask {
 		if goexit {

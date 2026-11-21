@@ -1,6 +1,8 @@
 {
 	"inherits": ["k210"],
 	"build-tags": ["maixbit"],
+	"scheduler": "unified",
+	"default-stack-size": 8192,
 	"serial": "uart",
 	"linkerscript": "targets/maixbit.ld",
 	"flash-command": "kflash -p {port} --noansi --verbose {bin}"

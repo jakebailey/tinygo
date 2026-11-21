@@ -6,7 +6,7 @@
   "goos": "linux",
   "goarch": "amd64",
   "gc": "leaking",
-  "scheduler": "tasks",
+  "scheduler": "unified",
   "linker": "ld.lld",
   "linker-flavor": "coff",
   "libc": "picolibc",

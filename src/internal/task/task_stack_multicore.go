@@ -1,4 +1,4 @@
-//go:build scheduler.cores
+//go:build exec.multicore || exec.workers
 
 package task
 
@@ -45,9 +45,3 @@ func (t *Task) Resume() {
 	t.state.resume()
 	t.gcData.swap()
 }
-
-//go:linkname lockScheduler runtime.lockScheduler
-func lockScheduler()
-
-//go:linkname unlockScheduler runtime.unlockScheduler
-func unlockScheduler()

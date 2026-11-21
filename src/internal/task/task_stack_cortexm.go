@@ -1,4 +1,4 @@
-//go:build (scheduler.tasks || scheduler.cores) && cortexm
+//go:build (exec.single || exec.multicore) && cortexm
 
 package task
 

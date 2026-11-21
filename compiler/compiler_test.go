@@ -563,7 +563,7 @@ func TestAggregateFunctionABI(t *testing.T) {
 		t.Run(target, func(t *testing.T) {
 			options := &compileopts.Options{Target: target}
 			if target != "wasm" {
-				options.Scheduler = "tasks"
+				options.Cores = 1
 			}
 			mod, errs := testCompilePackage(t, options, "aggregate-abi.go")
 			if len(errs) != 0 {
@@ -957,6 +957,8 @@ func testCompilePackageWithDebug(t *testing.T, options *compileopts.Options, fil
 		CodeModel:          config.CodeModel(),
 		RelocationModel:    config.RelocationModel(),
 		Scheduler:          config.Scheduler(),
+		ExecutionMode:      config.ExecutionMode(),
+		StackSwitching:     config.StackSwitching(),
 		AutomaticStackSize: config.AutomaticStackSize(),
 		DefaultStackSize:   config.StackSize(),
 		NeedsStackObjects:  config.NeedsStackObjects(),
