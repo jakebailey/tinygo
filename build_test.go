@@ -19,6 +19,65 @@ import (
 	"github.com/tinygo-org/tinygo/goenv"
 )
 
+func TestHostedCaller(t *testing.T) {
+	t.Parallel()
+	switch runtime.GOOS {
+	case "linux", "darwin":
+	default:
+		t.Skip("hosted caller metadata is unavailable")
+	}
+	switch runtime.GOARCH {
+	case "386", "amd64", "arm64":
+	default:
+		t.Skip("hosted caller metadata is unavailable")
+	}
+
+	source := `package main
+import "runtime"
+
+//go:noinline
+func check() {
+	pc, file, line, ok := runtime.Caller(0)
+	if !ok || file == "" || line != 6 {
+		println(file, line, ok)
+		panic("invalid caller location")
+	}
+	fn := runtime.FuncForPC(pc)
+	if fn == nil || fn.Name() != "main.check" || fn.Entry() == 0 || fn.Entry() > pc {
+		panic("invalid caller function")
+	}
+	var pcs [2]uintptr
+	n := runtime.Callers(0, pcs[:])
+	frames := runtime.CallersFrames(pcs[:n])
+	first, more := frames.Next()
+	second, _ := frames.Next()
+	if first.Function != "runtime.Callers" || !more || second.Function != "main.check" {
+		panic("invalid caller frames")
+	}
+}
+
+func main() {
+	check()
+}
+`
+	path := filepath.Join(t.TempDir(), "main.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	options := optionsFromOSARCH(runtime.GOOS+"/"+runtime.GOARCH, sema)
+	config, err := builder.NewConfig(&options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	_, err = buildAndRun(path, config, &output, nil, nil, 2*time.Minute, func(cmd *exec.Cmd, result *builder.BuildResult) error {
+		return cmd.Run()
+	})
+	if err != nil {
+		t.Fatalf("caller lookup failed: %v\n%s", err, output.String())
+	}
+}
+
 func TestReflectMethodReferences(t *testing.T) {
 	t.Parallel()
 

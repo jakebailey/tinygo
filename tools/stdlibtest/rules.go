@@ -2,6 +2,18 @@ package main
 
 import "slices"
 
+// Keep this in sync with the build constraint in src/runtime/callers_framepointer.go.
+func supportsCallerLocations(target targetInfo) bool {
+	if !slices.Contains(target.BuildTags, "scheduler.threads") {
+		return false
+	}
+	switch target.GOARCH {
+	case "386", "amd64", "arm64":
+		return target.GOOS == "linux" || target.GOOS == "darwin"
+	}
+	return false
+}
+
 func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	var r ruleSet
 	hasTag := func(tag string) bool { return slices.Contains(target.BuildTags, tag) }
