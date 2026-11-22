@@ -640,6 +640,9 @@ func runTestWithConfig(name string, t *testing.T, options compileopts.Options, c
 		// Strip actual time.
 		re := regexp.MustCompile(`\([0-9]\.[0-9][0-9]s\)`)
 		actual = re.ReplaceAllLiteral(actual, []byte{'(', '0', '.', '0', '0', 's', ')'})
+		// Keep the output fixture usable on targets without caller metadata.
+		location := regexp.MustCompile(`(?m)^( +)testing(?:-verbose)?\.go:[0-9]+: `)
+		actual = location.ReplaceAll(actual, []byte("${1}"))
 	}
 
 	// Check whether the command ran successfully.

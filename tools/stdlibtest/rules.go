@@ -555,12 +555,19 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	if !linux {
 		r.skipTest("internal/synctest", `^(TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount)$`)
 	}
+	if linux && target.GOARCH == "386" {
+		// The HTTP case references unimplemented socketcall symbols.
+		r.skipPackage("testing/synctest")
+	}
 	// The skip output check starts a subprocess.
 	if !linux {
 		r.skipTest("testing/synctest", `^TestSkip$`)
 	}
-	// These cases check caller locations.
-	r.skipTest("testing/synctest", `^(TestFatal|TestError|TestVerboseError|TestVerboseSkip|TestHelper)$`)
+	// These output checks need subprocesses and caller locations.
+	if !linux || !supportsCallerLocations(target) {
+		r.skipTest("testing/synctest", `^(TestFatal|TestError|TestVerboseError|TestVerboseSkip)$`)
+	}
+	r.skipTest("testing/synctest", `^TestHelper$`)
 	// The HTTP case needs Transport.DialContext and ExpectContinueTimeout.
 	r.skipTest("testing/synctest", `^TestHTTPTransport100Continue$`)
 

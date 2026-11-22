@@ -5,11 +5,30 @@
 package testing
 
 import (
+	"fmt"
 	"internal/synctest"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"time"
 )
+
+func TestLogLocation(t *T) {
+	log := func(tb TB) string {
+		_, file, line, ok := runtime.Caller(0)
+		tb.Log("first line\nsecond line")
+		if ok && file != "" && line > 0 {
+			return fmt.Sprintf("    %s:%d: first line\n        second line\n", filepath.Base(file), line+1)
+		}
+		return "    first line\n        second line\n"
+	}
+	loggerTest := &T{common: common{output: &logger{}}}
+	want := log(loggerTest)
+	if got := loggerTest.output.b.String(); got != want {
+		t.Errorf("log = %q, want %q", got, want)
+	}
+}
 
 func TestSynctestFailureOutput(t *T) {
 	parent := &T{common: common{output: &logger{}, name: "parent"}}

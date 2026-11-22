@@ -281,17 +281,40 @@ func (c *common) FailNow() {
 
 // log generates the output.
 func (c *common) log(s string) {
-	// This doesn't print the same as in upstream go, but works for now.
 	if len(s) != 0 && s[len(s)-1] == '\n' {
 		s = s[:len(s)-1]
 	}
 	lines := strings.Split(s, "\n")
-	// First line.
-	fmt.Fprintf(c.output, "%s    %s\n", c.indent, lines[0])
+	frame := c.logFrame()
+	if frame.File != "" && frame.Line > 0 {
+		fmt.Fprintf(c.output, "%s    %s:%d: %s\n", c.indent, filepath.Base(frame.File), frame.Line, lines[0])
+	} else {
+		fmt.Fprintf(c.output, "%s    %s\n", c.indent, lines[0])
+	}
 	// More lines.
 	for _, line := range lines[1:] {
 		fmt.Fprintf(c.output, "%s        %s\n", c.indent, line)
 	}
+}
+
+func (c *common) logFrame() runtime.Frame {
+	var pcs [2]uintptr
+	n := runtime.Callers(4, pcs[:]) // Skip Callers, logFrame, log, and the public method.
+	if n == 0 {
+		return runtime.Frame{}
+	}
+	frame, _ := nextTestFrame(runtime.CallersFrames(pcs[:n]))
+	return frame
+}
+
+func nextTestFrame(frames *runtime.Frames) (runtime.Frame, bool) {
+	frame, more := frames.Next()
+	// A promoted T or B method can add a frame without source metadata.
+	if more && frame.File == "" &&
+		(strings.HasPrefix(frame.Function, "(*testing.T).") || strings.HasPrefix(frame.Function, "(*testing.B).")) {
+		return frames.Next()
+	}
+	return frame, more
 }
 
 // Log formats its arguments using default formatting, analogous to Println,
