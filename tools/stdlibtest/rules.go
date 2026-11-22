@@ -565,9 +565,8 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	}
 	// These output checks need subprocesses and caller locations.
 	if !linux || !supportsCallerLocations(target) {
-		r.skipTest("testing/synctest", `^(TestFatal|TestError|TestVerboseError|TestVerboseSkip)$`)
+		r.skipTest("testing/synctest", `^(TestFatal|TestError|TestVerboseError|TestVerboseSkip|TestHelper)$`)
 	}
-	r.skipTest("testing/synctest", `^TestHelper$`)
 	// The HTTP case needs Transport.DialContext and ExpectContinueTimeout.
 	r.skipTest("testing/synctest", `^TestHTTPTransport100Continue$`)
 

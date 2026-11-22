@@ -85,6 +85,9 @@ type common struct {
 
 	cleanupStarted atomic.Bool
 
+	helpers    map[uintptr]struct{}
+	isSynctest bool
+
 	tempDir    string
 	tempDirErr error
 	tempDirSeq int32
@@ -233,8 +236,7 @@ var _ TB = (*B)(nil)
 // Logs are accumulated during execution and dumped to standard output when done.
 type T struct {
 	common
-	context    *testContext // For running tests and subtests.
-	isSynctest bool
+	context *testContext // For running tests and subtests.
 }
 
 // Name returns the name of the running test or benchmark.
@@ -298,13 +300,33 @@ func (c *common) log(s string) {
 }
 
 func (c *common) logFrame() runtime.Frame {
-	var pcs [2]uintptr
+	var pcs [32]uintptr
 	n := runtime.Callers(4, pcs[:]) // Skip Callers, logFrame, log, and the public method.
 	if n == 0 {
 		return runtime.Frame{}
 	}
-	frame, _ := nextTestFrame(runtime.CallersFrames(pcs[:n]))
-	return frame
+	frames := runtime.CallersFrames(pcs[:n])
+	first, more := nextTestFrame(frames)
+	frame := first
+	c = c.helperOwner()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for {
+		if _, helper := c.helpers[frame.Entry]; !helper {
+			return frame
+		}
+		if !more {
+			return first
+		}
+		next, hasNext := nextTestFrame(frames)
+		switch next.Function {
+		case "testing.tRunner", "(*testing.B).runN":
+			return frame
+		case "":
+			return first
+		}
+		frame, more = next, hasNext
+	}
 }
 
 func nextTestFrame(frames *runtime.Frames) (runtime.Frame, bool) {
@@ -395,9 +417,32 @@ func (c *common) Skipped() bool {
 	return c.skipped
 }
 
-// Helper is not implemented, it is only provided for compatibility.
+// Helper marks the calling function as a test helper.
+// Logging methods skip helper frames when choosing a file and line.
 func (c *common) Helper() {
-	// Unimplemented.
+	var pcs [2]uintptr
+	n := runtime.Callers(2, pcs[:])
+	if n == 0 {
+		return
+	}
+	frame, _ := nextTestFrame(runtime.CallersFrames(pcs[:n]))
+	if frame.Entry == 0 {
+		return
+	}
+	c = c.helperOwner()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.helpers == nil {
+		c.helpers = make(map[uintptr]struct{})
+	}
+	c.helpers[frame.Entry] = struct{}{}
+}
+
+func (c *common) helperOwner() *common {
+	if c.isSynctest {
+		return c.parent
+	}
+	return c
 }
 
 // Cleanup registers a function to be called when the test (or subtest) and all its
@@ -799,16 +844,16 @@ func testingSynctestTest(t *T, f func(*T)) bool {
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	synctestT := T{
 		common: common{
-			output:    t.output,
-			name:      t.name,
-			indent:    t.indent,
-			parent:    &t.common,
-			level:     t.level + 1,
-			ctx:       ctx,
-			cancelCtx: cancelCtx,
+			output:     t.output,
+			name:       t.name,
+			indent:     t.indent,
+			parent:     &t.common,
+			level:      t.level + 1,
+			ctx:        ctx,
+			cancelCtx:  cancelCtx,
+			isSynctest: true,
 		},
-		context:    t.context,
-		isSynctest: true,
+		context: t.context,
 	}
 
 	done := make(chan struct{})

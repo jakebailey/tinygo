@@ -30,6 +30,27 @@ func TestLogLocation(t *T) {
 	}
 }
 
+func TestHelperLogLocation(t *T) {
+	parent := &T{common: common{output: &logger{}}}
+	inner := func(tb TB) {
+		tb.Helper()
+		tb.Log("from helper")
+	}
+	outer := func(tb TB) {
+		tb.Helper()
+		inner(tb)
+	}
+	_, file, line, ok := runtime.Caller(0)
+	outer(parent)
+	want := "    from helper\n"
+	if ok && file != "" && line > 0 {
+		want = fmt.Sprintf("    %s:%d: from helper\n", filepath.Base(file), line+1)
+	}
+	if got := parent.output.b.String(); got != want {
+		t.Errorf("log = %q, want %q", got, want)
+	}
+}
+
 func TestSynctestFailureOutput(t *T) {
 	parent := &T{common: common{output: &logger{}, name: "parent"}}
 	parent.Log("before bubble")
