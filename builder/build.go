@@ -1556,6 +1556,22 @@ func addInitAllDebugInfo(mod llvm.Module, fn llvm.Value, irbuilder llvm.Builder,
 }
 
 func createCallerMetadata(mod llvm.Module) (string, []callerFunction) {
+	lineTableGlobal := mod.NamedGlobal("runtime.lineTable")
+	lineLengthGlobal := mod.NamedGlobal("runtime.lineTableLen")
+	lineBaseGlobal := mod.NamedGlobal("runtime.lineTableBase")
+	lineFilesGlobal := mod.NamedGlobal("runtime.lineFiles")
+	lineFilesLengthGlobal := mod.NamedGlobal("runtime.lineFilesLen")
+	if !lineTableGlobal.IsNil() || !lineLengthGlobal.IsNil() || !lineBaseGlobal.IsNil() ||
+		!lineFilesGlobal.IsNil() || !lineFilesLengthGlobal.IsNil() {
+		for _, global := range []llvm.Value{lineTableGlobal, lineLengthGlobal, lineBaseGlobal, lineFilesGlobal, lineFilesLengthGlobal} {
+			if global.IsNil() {
+				panic("runtime line table globals must be defined together")
+			}
+			global.SetInitializer(llvm.ConstNull(global.GlobalValueType()))
+			global.SetGlobalConstant(true)
+		}
+	}
+
 	tableGlobal := mod.NamedGlobal("runtime.funcTable")
 	lengthGlobal := mod.NamedGlobal("runtime.funcTableLen")
 	sortedGlobal := mod.NamedGlobal("runtime.funcTableSorted")
@@ -1582,8 +1598,8 @@ func createCallerMetadata(mod llvm.Module) (string, []callerFunction) {
 	})
 
 	setCallerFunctions(mod, functions, 0)
-	if len(functions) == 0 {
-		return "", nil
+	if len(functions) == 0 || lineBaseGlobal.IsNil() {
+		return "", functions
 	}
 
 	anchor := mod.NamedFunction("runtime.Callers")
@@ -1594,31 +1610,7 @@ func createCallerMetadata(mod llvm.Module) (string, []callerFunction) {
 		anchor = functions[0].fn
 	}
 
-	lineTableGlobal := mod.NamedGlobal("runtime.lineTable")
-	lineLengthGlobal := mod.NamedGlobal("runtime.lineTableLen")
-	lineBaseGlobal := mod.NamedGlobal("runtime.lineTableBase")
-	lineFilesGlobal := mod.NamedGlobal("runtime.lineFiles")
-	lineFilesLengthGlobal := mod.NamedGlobal("runtime.lineFilesLen")
-	if lineTableGlobal.IsNil() && lineLengthGlobal.IsNil() && lineBaseGlobal.IsNil() &&
-		lineFilesGlobal.IsNil() && lineFilesLengthGlobal.IsNil() {
-		return "", functions
-	}
-	if lineTableGlobal.IsNil() || lineLengthGlobal.IsNil() || lineBaseGlobal.IsNil() ||
-		lineFilesGlobal.IsNil() || lineFilesLengthGlobal.IsNil() {
-		panic("runtime line table globals must be defined together")
-	}
-	ptrType := tableGlobal.GlobalValueType()
-	uintptrType := lengthGlobal.GlobalValueType()
-	lineTableGlobal.SetInitializer(llvm.ConstPointerNull(ptrType))
-	lineTableGlobal.SetGlobalConstant(true)
-	lineLengthGlobal.SetInitializer(llvm.ConstInt(uintptrType, 0, false))
-	lineLengthGlobal.SetGlobalConstant(true)
-	lineFilesGlobal.SetInitializer(llvm.ConstPointerNull(ptrType))
-	lineFilesGlobal.SetGlobalConstant(true)
-	lineFilesLengthGlobal.SetInitializer(llvm.ConstInt(uintptrType, 0, false))
-	lineFilesLengthGlobal.SetGlobalConstant(true)
-	lineBaseGlobal.SetInitializer(llvm.ConstPtrToInt(anchor, uintptrType))
-	lineBaseGlobal.SetGlobalConstant(true)
+	lineBaseGlobal.SetInitializer(llvm.ConstPtrToInt(anchor, lineBaseGlobal.GlobalValueType()))
 	return anchor.Name(), functions
 }
 

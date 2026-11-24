@@ -52,6 +52,27 @@ func TestCallerMetadataWithoutNamedTypes(t *testing.T) {
 	}
 }
 
+func TestCallerMetadataWithoutFunctionTable(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	mod := ctx.NewModule("callers")
+	defer mod.Dispose()
+	ptrType := llvm.PointerType(ctx.Int8Type(), 0)
+	globals := []llvm.Value{
+		llvm.AddGlobal(mod, ptrType, "runtime.lineTable"),
+		llvm.AddGlobal(mod, ctx.Int64Type(), "runtime.lineTableLen"),
+		llvm.AddGlobal(mod, ctx.Int64Type(), "runtime.lineTableBase"),
+		llvm.AddGlobal(mod, ptrType, "runtime.lineFiles"),
+		llvm.AddGlobal(mod, ctx.Int64Type(), "runtime.lineFilesLen"),
+	}
+	createCallerMetadata(mod)
+	for _, global := range globals {
+		if init := global.Initializer(); init.IsNil() || !init.IsNull() {
+			t.Errorf("%s must have a zero initializer", global.Name())
+		}
+	}
+}
+
 func TestBuildRejectsUnsupportedFirmwareExtension(t *testing.T) {
 	for _, targetName := range []string{"pico", "pico2"} {
 		t.Run(targetName, func(t *testing.T) {
