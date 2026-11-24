@@ -68,10 +68,6 @@ func TestRead0(t *testing.T) {
 
 // ReadAt with length 0 should not return EOF.
 func TestReadAt0(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Log("TODO: implement Pread for Windows")
-		return
-	}
 	f := newFile("TestReadAt0", t)
 	defer Remove(f.Name())
 	defer f.Close()
@@ -160,10 +156,6 @@ func TestSeek(t *testing.T) {
 }
 
 func TestReadAt(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Log("TODO: implement Pread for Windows")
-		return
-	}
 	f := newFile("TestReadAt", t)
 	defer Remove(f.Name())
 	defer f.Close()
@@ -186,10 +178,6 @@ func TestReadAt(t *testing.T) {
 // the pread syscall, where the channel offset was erroneously updated after
 // calling pread on a file.
 func TestReadAtOffset(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Log("TODO: implement Pread for Windows")
-		return
-	}
 	f := newFile("TestReadAtOffset", t)
 	defer Remove(f.Name())
 	defer f.Close()
@@ -223,10 +211,6 @@ func TestReadAtOffset(t *testing.T) {
 
 // Verify that ReadAt doesn't allow negative offset.
 func TestReadAtNegativeOffset(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Log("TODO: implement Pread for Windows")
-		return
-	}
 	f := newFile("TestReadAtNegativeOffset", t)
 	defer Remove(f.Name())
 	defer f.Close()
@@ -250,10 +234,6 @@ func TestReadAtNegativeOffset(t *testing.T) {
 }
 
 func TestReadAtEOF(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Log("TODO: implement Pread for Windows")
-		return
-	}
 	f := newFile("TestReadAtEOF", t)
 	defer Remove(f.Name())
 	defer f.Close()

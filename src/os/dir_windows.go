@@ -24,7 +24,7 @@ func (f *File) readdir(n int, mode readdirMode) ([]string, []DirEntry, []FileInf
 	if f.handle == nil {
 		return nil, nil, nil, &PathError{Op: "readdir", Path: f.name, Err: ErrClosed}
 	}
-	h := syscallFd(f.handle.(unixFileHandle))
+	h := syscall.Handle(f.Fd())
 	if f.dirinfo == nil {
 		f.dirinfo = &dirInfo{class: windows.FileFullDirectoryRestartInfo}
 	}

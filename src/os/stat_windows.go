@@ -21,7 +21,8 @@ func (file *File) Stat() (FileInfo, error) {
 		return &devNullStat, nil
 	}
 
-	ft, err := syscall.GetFileType(syscallFd(file.handle.(unixFileHandle)))
+	h := syscall.Handle(file.Fd())
+	ft, err := syscall.GetFileType(h)
 	if err != nil {
 		return nil, &PathError{Op: "GetFileType", Path: file.name, Err: err}
 	}
@@ -30,7 +31,7 @@ func (file *File) Stat() (FileInfo, error) {
 		return &fileStat{name: basename(file.name), filetype: ft}, nil
 	}
 
-	fs, err := newFileStatFromGetFileInformationByHandle(file.name, syscallFd(file.handle.(unixFileHandle)))
+	fs, err := newFileStatFromGetFileInformationByHandle(file.name, h)
 	if err != nil {
 		return nil, err
 	}

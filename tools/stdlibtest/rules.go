@@ -143,7 +143,7 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	if !hosted && !wasi {
 		r.skipPackage("internal/testenv")
 	}
-	if !linux && !darwin && !wasi {
+	if !hosted && !wasi {
 		r.skipPackage("internal/xcoff")
 	}
 	if (!hosted && !wasi) || (hostOS == "windows" && wasi) {
@@ -230,14 +230,11 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 			r.skipPackage("strings")
 		}
 		r.skipPackage("crypto/mldsa")
-		if !wasi {
+		if !wasi && !windows {
 			r.skipPackage("debug/dwarf")
 		}
 		if !windows && !wasi {
 			r.skipPackage("debug/elf")
-		}
-		if windows {
-			r.skipPackage("debug/pe")
 		}
 		r.skipPackage("go/parser")
 		r.skipPackage("net")
@@ -247,18 +244,18 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 		}
 		r.skipPackage("path/filepath")
 
-		if !wasi {
-			// Windows File.ReadAt is a stub.
-			r.skipPackage("archive/zip")
+		if !windows && !wasi {
 			r.skipPackage("debug/plan9obj")
 		}
 		r.skipPackage("time") // Takes more than 25 minutes on Windows.
 	}
-
-	if windows {
-		r.skipPackage("debug/elf")
-		r.skipPackage("mime/multipart") // File.ReadAt is a stub.
+	if !linux && !darwin && !windows && !wasi {
+		r.skipPackage("archive/zip")
 	}
+	if windows && !opts.bench {
+		r.short("archive/zip")
+	}
+
 	if !hosted && !wasi {
 		r.skipPackage("mime/multipart")
 	}
@@ -550,10 +547,6 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	if !linux && !darwin {
 		r.skipTest("html/template", `^TestMaxExecDepth$`)
 		r.skipTest("text/template", `^TestMaxExecDepth$`)
-	}
-	// The ZIP filesystem needs File.ReadAt, a stub on Windows.
-	if windows {
-		r.skipTest("html/template", `^TestParseZipFS$`)
 	}
 	// The Windows host volume mounted as the WASI root lacks /dev/null.
 	if hostOS == "windows" && (wasip1 || wasip2) {

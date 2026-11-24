@@ -208,7 +208,6 @@ func (f *File) chdir() error {
 // ReadAt reads up to len(b) bytes from the File starting at the given absolute offset.
 // It returns the number of bytes read and any error encountered, possibly io.EOF.
 // At end of file, Pread returns 0, io.EOF.
-// TODO: move to file_anyos once ReadAt is implemented for windows
 func (f unixFileHandle) ReadAt(b []byte, offset int64) (n int, err error) {
 	n, err = syscall.Pread(syscallFd(f), b, offset)
 	if n < 0 {

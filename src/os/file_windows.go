@@ -8,6 +8,9 @@ package os
 
 import (
 	"internal/syscall/windows"
+	"io"
+	"runtime"
+	"sync"
 	"syscall"
 	"unicode/utf16"
 )
@@ -47,7 +50,12 @@ func (f *file) close() error {
 }
 
 func NewFile(fd uintptr, name string) *File {
-	return &File{&file{handle: unixFileHandle(fd), name: name}}
+	h := unixFileHandle(fd)
+	var handle FileHandle = h
+	if kind, err := syscall.GetFileType(syscall.Handle(fd)); err == nil && kind == syscall.FILE_TYPE_DISK {
+		handle = &windowsDiskFile{unixFileHandle: h}
+	}
+	return &File{&file{handle: handle, name: name}}
 }
 
 func Pipe() (r *File, w *File, err error) {
@@ -89,12 +97,94 @@ func tempDir() string {
 	}
 }
 
-// ReadAt reads up to len(b) bytes from the File starting at the given absolute offset.
-// It returns the number of bytes read and any error encountered, possibly io.EOF.
-// At end of file, Pread returns 0, io.EOF.
-// TODO: move to file_anyos once ReadAt is implemented for windows
-func (f unixFileHandle) ReadAt(b []byte, offset int64) (n int, err error) {
-	return -1, ErrNotImplemented
+func (f unixFileHandle) ReadAt(b []byte, offset int64) (int, error) {
+	if _, err := syscall.GetFileType(syscallFd(f)); err != nil {
+		return 0, handleSyscallError(err)
+	}
+	return 0, syscall.ESPIPE
+}
+
+type windowsDiskFile struct {
+	unixFileHandle
+	mu sync.Mutex
+}
+
+func (f *windowsDiskFile) Read(b []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.unixFileHandle.Read(b)
+}
+
+func (f *windowsDiskFile) Write(b []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.unixFileHandle.Write(b)
+}
+
+func (f *windowsDiskFile) Seek(offset int64, whence int) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.unixFileHandle.Seek(offset, whence)
+}
+
+func (f *windowsDiskFile) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.unixFileHandle.Close()
+}
+
+func (f *windowsDiskFile) ReadAt(b []byte, offset int64) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	fd := syscallFd(f.unixFileHandle)
+	nonblocking, err := windows.IsNonblock(fd)
+	if err != nil {
+		return 0, err
+	}
+	const maxRead = 1 << 30
+	if len(b) > maxRead {
+		b = b[:maxRead]
+	}
+
+	if !nonblocking {
+		// Synchronous handles update the file pointer during ReadFile.
+		// https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-readfile
+		current, err := f.unixFileHandle.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := f.unixFileHandle.Seek(offset, io.SeekStart); err != nil {
+			return 0, err
+		}
+		n, err := f.unixFileHandle.Read(b)
+		_, seekErr := f.unixFileHandle.Seek(current, io.SeekStart)
+		if seekErr != nil && (err == nil || err == io.EOF) {
+			err = seekErr
+		}
+		return n, err
+	}
+
+	event, err := windows.CreateEvent(nil, 1, 0, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer syscall.CloseHandle(event)
+	overlapped := syscall.Overlapped{
+		Offset:     uint32(offset),
+		OffsetHigh: uint32(offset >> 32),
+		HEvent:     event | 1, // Suppress notification to any external completion port.
+	}
+	var n uint32
+	err = syscall.ReadFile(fd, b, &n, &overlapped)
+	if err == syscall.ERROR_IO_PENDING {
+		err = windows.GetOverlappedResult(fd, &overlapped, &n, true)
+	}
+	runtime.KeepAlive(b)
+	if err == syscall.ERROR_HANDLE_EOF || err == nil && n == 0 && len(b) != 0 {
+		return int(n), io.EOF
+	}
+	return int(n), handleSyscallError(err)
 }
 
 // WriteAt writes len(b) bytes to the File starting at byte offset off.
