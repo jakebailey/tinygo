@@ -29,6 +29,7 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	callerLocations := hosted && supportsCallerLocations(target)
 	darwin := hosted && target.GOOS == "darwin"
 	windows := hosted && target.GOOS == "windows"
+	subprocesses := linux || darwin
 
 	// Package exclusions
 	// Requires Unix sockets or socket-to-file conversion.
@@ -514,7 +515,7 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 		r.skipTest("internal/zstd", `TestAlloc|TestLarge|TestFileSamples`)
 	} else {
 		r.skipTest("internal/zstd", `^TestAlloc$`)
-		if !linux {
+		if !subprocesses {
 			r.skipTest("internal/zstd", `^TestLarge$`)
 		}
 		if browser {
@@ -550,13 +551,8 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	// Boehm does not reclaim unreachable timers and tickers in this test.
 	r.skipTest("time", `^TestTimerGC$`)
 
-	// macOS startProcess is a stub.
+	// Timer and goroutine stress tests can exhaust macOS threads.
 	if darwin {
-		r.skipTest("flag", `^TestExitCode$`)
-		r.skipTest("log", `^TestCallDepth$`)
-		r.skipTest("log/slog", `^TestCallDepthConnection$`)
-		r.skipTest("math/rand", `^TestDefaultRace$`)
-		// Timer and goroutine stress tests can exhaust macOS threads.
 		r.skipTest("internal/singleflight", `^TestDoAndForgetUnsharedRace$`)
 		r.skipTest("time", `^(TestStopResult|TestResetResult|TestLongAdjustTimers)$|^TestZeroTimer$/^impl=(func|cache)$`)
 	}
@@ -567,7 +563,7 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	// Concurrent FuncOf and StructOf creation times out.
 	r.skipTest("internal/synctest", `^TestReflectFuncOf$`)
 	// Bubble ownership checks start subprocesses.
-	if !linux {
+	if !subprocesses {
 		r.skipTest("internal/synctest", `^(TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount)$`)
 	}
 	if linux && target.GOARCH == "386" {
@@ -575,11 +571,11 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 		r.skipPackage("testing/synctest")
 	}
 	// The skip output check starts a subprocess.
-	if !linux {
+	if !subprocesses {
 		r.skipTest("testing/synctest", `^TestSkip$`)
 	}
 	// These output checks need subprocesses and caller locations.
-	if !linux || !supportsCallerLocations(target) {
+	if !subprocesses || !callerLocations {
 		r.skipTest("testing/synctest", `^(TestFatal|TestError|TestVerboseError|TestVerboseSkip|TestHelper)$`)
 	}
 	// The HTTP case needs Transport.DialContext and ExpectContinueTimeout.
