@@ -33,7 +33,7 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	r.skipPackage("go/build")
 	// go/build rejects TinyGo as a source importer compiler.
 	r.skipPackage("go/internal/srcimporter")
-	if !linux && !darwin {
+	if !linux && !darwin && !windows {
 		r.skipTest("go/internal/gccgoimporter", `^TestGoxImporter$`)
 	}
 	// importer.Default does not provide a TinyGo importer.
