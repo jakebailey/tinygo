@@ -5,10 +5,93 @@
 package testing
 
 import (
+	"fmt"
 	"internal/synctest"
+	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"time"
 )
+
+func TestLogLocation(t *T) {
+	log := func(tb TB) string {
+		_, file, line, ok := runtime.Caller(0)
+		tb.Log("first line\nsecond line")
+		if ok && file != "" && line > 0 {
+			return fmt.Sprintf("    %s:%d: first line\n        second line\n", filepath.Base(file), line+1)
+		}
+		return "    first line\n        second line\n"
+	}
+	loggerTest := &T{common: common{output: &logger{}}}
+	want := log(loggerTest)
+	if got := loggerTest.output.b.String(); got != want {
+		t.Errorf("log = %q, want %q", got, want)
+	}
+}
+
+func TestHelperLogLocation(t *T) {
+	parent := &T{common: common{output: &logger{}}}
+	inner := func(tb TB) {
+		tb.Helper()
+		tb.Log("from helper")
+	}
+	outer := func(tb TB) {
+		tb.Helper()
+		inner(tb)
+	}
+	_, file, line, ok := runtime.Caller(0)
+	outer(parent)
+	want := "    from helper\n"
+	if ok && file != "" && line > 0 {
+		want = fmt.Sprintf("    %s:%d: from helper\n", filepath.Base(file), line+1)
+	}
+	if got := parent.output.b.String(); got != want {
+		t.Errorf("log = %q, want %q", got, want)
+	}
+}
+
+func TestSynctestFailureOutput(t *T) {
+	parent := &T{common: common{output: &logger{}, name: "parent"}}
+	parent.Log("before bubble")
+	ok := testingSynctestTest(parent, func(t *T) {
+		t.Error("inside bubble")
+	})
+	parent.Log("after bubble")
+
+	if ok || !parent.Failed() {
+		t.Fatalf("bubble success = %v, parent failed = %v", ok, parent.Failed())
+	}
+	output := parent.output.b.String()
+	before := strings.Index(output, "before bubble")
+	inside := strings.Index(output, "inside bubble")
+	after := strings.Index(output, "after bubble")
+	if strings.Contains(output, "--- FAIL:") ||
+		before < 0 || inside <= before || after <= inside ||
+		strings.Count(output, "inside bubble") != 1 {
+		t.Errorf("unexpected parent log:\n%s", output)
+	}
+}
+
+func TestSynctestBubbleSkip(t *T) {
+	if !supportsRecover() {
+		t.Skip("requires runtime.Goexit")
+		return
+	}
+	parent := &T{common: common{output: &logger{}, name: "parent"}}
+	ok := testingSynctestTest(parent, func(t *T) {
+		t.Skip("skip bubble")
+	})
+
+	if !ok || parent.Failed() || parent.Skipped() {
+		t.Fatalf("bubble success = %v, parent failed = %v, parent skipped = %v",
+			ok, parent.Failed(), parent.Skipped())
+	}
+	output := parent.output.b.String()
+	if !strings.Contains(output, "skip bubble") || strings.Contains(output, "--- ") {
+		t.Errorf("unexpected parent log:\n%s", output)
+	}
+}
 
 func TestSynctestDuringCleanup(t *T) {
 	parent := &T{}

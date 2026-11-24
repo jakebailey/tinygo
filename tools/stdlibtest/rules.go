@@ -2,6 +2,18 @@ package main
 
 import "slices"
 
+// Keep this in sync with the build constraint in src/runtime/callers_framepointer.go.
+func supportsCallerLocations(target targetInfo) bool {
+	if !slices.Contains(target.BuildTags, "scheduler.threads") {
+		return false
+	}
+	switch target.GOARCH {
+	case "386", "amd64", "arm64":
+		return target.GOOS == "linux" || target.GOOS == "darwin"
+	}
+	return false
+}
+
 func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	var r ruleSet
 	hasTag := func(tag string) bool { return slices.Contains(target.BuildTags, tag) }
@@ -14,6 +26,7 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	wasip2 := hasTag("wasip2")
 	hosted := !wasm && !baremetal
 	linux := hosted && target.GOOS == "linux"
+	callerLocations := hosted && supportsCallerLocations(target)
 	darwin := hosted && target.GOOS == "darwin"
 	windows := hosted && target.GOOS == "windows"
 
@@ -41,15 +54,27 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	r.skipPackage("internal/types/errors")
 	// OID encoding and self-signed certificate tests fail.
 	r.skipPackage("crypto/x509")
-	if wasi {
-		r.skipTest("io", `^(TestMultiReaderFlatten|TestMultiWriterSingleChainFlatten|TestMultiReaderFreesExhaustedReaders|TestMultiWriter_WriteStringSingleAlloc|TestPipeAllocations)$`)
+	// The io and logging suites need caller locations or frame depth.
+	if callerLocations {
+		// Finalizing an exhausted reader can time out.
+		r.skipTest("io", `^TestMultiReaderFreesExhaustedReaders$`)
+		// TinyGo exceeds the allocation budgets for these tests.
+		r.skipTest("log", `^TestDiscard$`)
+		r.skipTest("log/slog", `^(TestJSONAllocs|TestTextHandlerAlloc)$|^TestAlloc$/^(2_pairs|2_pairs_disabled_inline|9_kvs|pairs|attrs6|attrs9)$`)
+		if target.GOARCH == "386" {
+			// LLVM reports a base pointer and frame pointer conflict at link time.
+			r.skipPackage("log/slog")
+		}
 	} else {
-		r.skipPackage("io")
+		if wasi {
+			r.skipTest("io", `^(TestMultiReaderFlatten|TestMultiWriterSingleChainFlatten|TestMultiReaderFreesExhaustedReaders|TestMultiWriter_WriteStringSingleAlloc|TestPipeAllocations)$`)
+		} else {
+			r.skipPackage("io")
+		}
+		r.skipPackage("log")
+		r.skipPackage("log/slog")
+		r.skipPackage("testing/slogtest")
 	}
-	// The logging tests check the caller's file and line.
-	r.skipPackage("log")
-	r.skipPackage("log/slog")
-	r.skipPackage("testing/slogtest")
 	// Signal tests need signal_ignored and runtime_doAllThreadsSyscall.
 	r.skipPackage("os/signal")
 	// The plugin test programs fail to link libdl.
@@ -519,15 +544,17 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	// The warning for late flag definitions needs the caller's file and line.
 	if qemu {
 		r.skipTest("flag", `TestExitCode|TestDefineAfterSet`)
-	} else {
+	} else if !callerLocations {
 		r.skipTest("flag", `^TestDefineAfterSet$`)
 	}
 	// Boehm does not reclaim unreachable timers and tickers in this test.
 	r.skipTest("time", `^TestTimerGC$`)
 
-	// Both tests start subprocesses. macOS startProcess is a stub.
+	// macOS startProcess is a stub.
 	if darwin {
 		r.skipTest("flag", `^TestExitCode$`)
+		r.skipTest("log", `^TestCallDepth$`)
+		r.skipTest("log/slog", `^TestCallDepthConnection$`)
 		r.skipTest("math/rand", `^TestDefaultRace$`)
 		// Timer and goroutine stress tests can exhaust macOS threads.
 		r.skipTest("internal/singleflight", `^TestDoAndForgetUnsharedRace$`)
@@ -543,9 +570,20 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	if !linux {
 		r.skipTest("internal/synctest", `^(TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount)$`)
 	}
-	// The output cases need bubble result propagation and caller/helper locations.
+	if linux && target.GOARCH == "386" {
+		// The HTTP case references unimplemented socketcall symbols.
+		r.skipPackage("testing/synctest")
+	}
+	// The skip output check starts a subprocess.
+	if !linux {
+		r.skipTest("testing/synctest", `^TestSkip$`)
+	}
+	// These output checks need subprocesses and caller locations.
+	if !linux || !supportsCallerLocations(target) {
+		r.skipTest("testing/synctest", `^(TestFatal|TestError|TestVerboseError|TestVerboseSkip|TestHelper)$`)
+	}
 	// The HTTP case needs Transport.DialContext and ExpectContinueTimeout.
-	r.skipTest("testing/synctest", `^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$`)
+	r.skipTest("testing/synctest", `^TestHTTPTransport100Continue$`)
 
 	// Template depth checks run with larger stacks on Linux and macOS.
 	if !linux && !darwin {
