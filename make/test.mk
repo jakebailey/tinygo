@@ -19,6 +19,7 @@ stdlib-test-sum = $(if $(filter -plan -packages,$(STDLIB_TEST_FLAGS)),,gotestsum
 	$(call stdlib-test,-json -mode=$(1),-target=wasip2 -x -work)
 
 .PHONY: tinygo-test tinygo-test-plan tinygo-test-fast tinygo-test-wasm
+.PHONY: tinygo-test-maphash-upstream
 .PHONY: tinygo-test-wasi tinygo-test-wasip1 tinygo-test-wasip1-fast
 .PHONY: tinygo-test-wasip2-slow tinygo-test-wasip2-fast tinygo-test-wasip2-sum-slow tinygo-test-wasip2-sum-fast
 .PHONY: tinygo-test-baremetal tinygo-bench tinygo-bench-fast
@@ -27,6 +28,26 @@ stdlib-test-sum = $(if $(filter -plan -packages,$(STDLIB_TEST_FLAGS)),,gotestsum
 
 tinygo-test:
 	$(call stdlib-test)
+# TSip uses a 64-bit seed on every target. The upstream allocation test also
+# counts string concatenation, which TinyGo allocates separately from hashing.
+tinygo-test-maphash-upstream: ## Run Go's maphash tests against TinyGo (requires GNU cp)
+	@set -eu; \
+	root=$$(mktemp -d "$${TMPDIR:-/tmp}/tinygo-maphash.XXXXXX"); \
+	trap 'rm -rf "$$root"' EXIT; \
+	cp -as "$(CURDIR)/src" "$$root/src"; \
+	for entry in lib targets; do ln -s "$(CURDIR)/$$entry" "$$root/$$entry"; done; \
+	pkg="$$root/src/hash/maphash"; \
+	upstream="$$($(GO) env GOROOT)/src/hash/maphash"; \
+	mv "$$pkg/maphash_test.go" "$$pkg/tinygo_maphash_test.go"; \
+	for test in "$$upstream"/*_test.go; do \
+		case "$$test" in */smhasher_test.go) continue;; esac; \
+		ln -s "$$test" "$$pkg/"; \
+	done; \
+	sed -e '/"internal\/runtime\/maps"/d' -e '/if !maps.Use64BitHash {/,/^[[:space:]]*}/d' \
+		"$$upstream/smhasher_test.go" > "$$pkg/smhasher_test.go"; \
+	printf 'package maphash\nconst purego = false\n' > "$$pkg/tinygo_testconfig_test.go"; \
+	TINYGOROOT="$$root" $(MAKE) tinygo-test STDLIB_TEST_FLAGS="-match '^hash/maphash'" \
+		TEST_ADDITIONAL_FLAGS="$(TEST_ADDITIONAL_FLAGS) -stack-size=16MB -skip=TestComparableAllocations"
 tinygo-test-plan:
 	$(call stdlib-test,-plan)
 tinygo-test-fast:

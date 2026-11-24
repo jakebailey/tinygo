@@ -31,14 +31,14 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	r.skipPackage("net/rpc")
 	// Tests assume runtime.Compiler is gc or gccgo, or pass it to the go command.
 	r.skipPackage("go/build")
-	// Go's map implementation needs internal/abi.MapType.
-	r.skipPackage("go/importer")
-	r.skipPackage("go/internal/gccgoimporter")
-	r.skipPackage("go/internal/gcimporter")
+	// go/build rejects TinyGo as a source importer compiler.
 	r.skipPackage("go/internal/srcimporter")
+	if !linux && !darwin {
+		r.skipTest("go/internal/gccgoimporter", `^TestGoxImporter$`)
+	}
+	// importer.Default does not provide a TinyGo importer.
 	r.skipPackage("go/types")
-	r.skipPackage("hash/maphash")
-	r.skipPackage("internal/types/errors")
+	r.skipTest("internal/types/errors", `^TestErrorCodeExamples$`)
 	// OID encoding and self-signed certificate tests fail.
 	r.skipPackage("crypto/x509")
 	if wasi {
@@ -86,8 +86,9 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	r.skipPackage("internal/poll")
 	// The stock runtime tests need Go's atomic entry points and internal ABI types.
 	r.skipPackage("internal/runtime/atomic")
-	r.skipPackage("internal/runtime/maps")
 	r.skipPackage("internal/sync")
+	// Tests for Go's Swiss-table implementation.
+	r.skipPackage("internal/runtime/maps")
 	// The stock Linux syscall tests need Go's Syscall6 assembly.
 	r.skipPackage("internal/runtime/syscall/linux")
 	// Contains only cgo benchmarks.
@@ -335,6 +336,10 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 		r.skipPackage("go/doc")
 		r.skipPackage("go/doc/comment")
 		r.skipPackage("go/format")
+		r.skipPackage("go/importer")
+		r.skipPackage("go/internal/gccgoimporter")
+		r.skipPackage("go/internal/gcimporter")
+		r.skipPackage("internal/types/errors")
 		r.skipPackage("html/template")
 		r.skipPackage("image")
 		r.skipPackage("internal/diff")
