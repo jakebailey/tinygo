@@ -141,7 +141,8 @@ func (f *File) ReadAt(b []byte, offset int64) (n int, err error) {
 	}
 
 	for len(b) > 0 {
-		m, e := f.handle.ReadAt(b, offset)
+		m, e := fixCount(f.handle.ReadAt(b, offset))
+		n += m
 		if e != nil {
 			// TODO: want to always wrap, like upstream, but TestReadAtEOF compares against exactly io.EOF?
 			if e != io.EOF {
@@ -151,7 +152,6 @@ func (f *File) ReadAt(b []byte, offset int64) (n int, err error) {
 			}
 			break
 		}
-		n += m
 		b = b[m:]
 		offset += int64(m)
 	}
