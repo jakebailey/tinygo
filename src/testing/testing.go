@@ -38,6 +38,7 @@ var (
 	flagShuffle    string
 	flagCount      int
 	flagParallel   int
+	flagTimeout    time.Duration
 )
 
 var initRan bool
@@ -57,6 +58,7 @@ func Init() {
 
 	flag.IntVar(&flagCount, "test.count", 1, "run each test or benchmark `count` times")
 	flag.IntVar(&flagParallel, "test.parallel", runtime.NumCPU(), "run at most `n` tests in parallel")
+	flag.DurationVar(&flagTimeout, "test.timeout", 0, "panic test binary after duration `d` (default 0, timeout disabled)")
 
 	initBenchmarkFlags()
 }
@@ -82,6 +84,9 @@ type common struct {
 	duration time.Duration
 
 	cleanupStarted atomic.Bool
+
+	helpers    map[uintptr]struct{}
+	isSynctest bool
 
 	tempDir    string
 	tempDirErr error
@@ -231,8 +236,7 @@ var _ TB = (*B)(nil)
 // Logs are accumulated during execution and dumped to standard output when done.
 type T struct {
 	common
-	context    *testContext // For running tests and subtests.
-	isSynctest bool
+	context *testContext // For running tests and subtests.
 }
 
 // Name returns the name of the running test or benchmark.
@@ -279,17 +283,60 @@ func (c *common) FailNow() {
 
 // log generates the output.
 func (c *common) log(s string) {
-	// This doesn't print the same as in upstream go, but works for now.
 	if len(s) != 0 && s[len(s)-1] == '\n' {
 		s = s[:len(s)-1]
 	}
 	lines := strings.Split(s, "\n")
-	// First line.
-	fmt.Fprintf(c.output, "%s    %s\n", c.indent, lines[0])
+	frame := c.logFrame()
+	if frame.File != "" && frame.Line > 0 {
+		fmt.Fprintf(c.output, "%s    %s:%d: %s\n", c.indent, filepath.Base(frame.File), frame.Line, lines[0])
+	} else {
+		fmt.Fprintf(c.output, "%s    %s\n", c.indent, lines[0])
+	}
 	// More lines.
 	for _, line := range lines[1:] {
 		fmt.Fprintf(c.output, "%s        %s\n", c.indent, line)
 	}
+}
+
+func (c *common) logFrame() runtime.Frame {
+	var pcs [32]uintptr
+	n := runtime.Callers(4, pcs[:]) // Skip Callers, logFrame, log, and the public method.
+	if n == 0 {
+		return runtime.Frame{}
+	}
+	frames := runtime.CallersFrames(pcs[:n])
+	first, more := nextTestFrame(frames)
+	frame := first
+	c = c.helperOwner()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for {
+		if _, helper := c.helpers[frame.Entry]; !helper {
+			return frame
+		}
+		if !more {
+			return first
+		}
+		next, hasNext := nextTestFrame(frames)
+		switch next.Function {
+		case "testing.tRunner", "(*testing.B).runN":
+			return frame
+		case "":
+			return first
+		}
+		frame, more = next, hasNext
+	}
+}
+
+func nextTestFrame(frames *runtime.Frames) (runtime.Frame, bool) {
+	frame, more := frames.Next()
+	// A promoted T or B method can add a frame without source metadata.
+	if more && frame.File == "" &&
+		(strings.HasPrefix(frame.Function, "(*testing.T).") || strings.HasPrefix(frame.Function, "(*testing.B).")) {
+		return frames.Next()
+	}
+	return frame, more
 }
 
 // Log formats its arguments using default formatting, analogous to Println,
@@ -370,9 +417,32 @@ func (c *common) Skipped() bool {
 	return c.skipped
 }
 
-// Helper is not implemented, it is only provided for compatibility.
+// Helper marks the calling function as a test helper.
+// Logging methods skip helper frames when choosing a file and line.
 func (c *common) Helper() {
-	// Unimplemented.
+	var pcs [2]uintptr
+	n := runtime.Callers(2, pcs[:])
+	if n == 0 {
+		return
+	}
+	frame, _ := nextTestFrame(runtime.CallersFrames(pcs[:n]))
+	if frame.Entry == 0 {
+		return
+	}
+	c = c.helperOwner()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.helpers == nil {
+		c.helpers = make(map[uintptr]struct{})
+	}
+	c.helpers[frame.Entry] = struct{}{}
+}
+
+func (c *common) helperOwner() *common {
+	if c.isSynctest {
+		return c.parent
+	}
+	return c
 }
 
 // Cleanup registers a function to be called when the test (or subtest) and all its
@@ -774,15 +844,16 @@ func testingSynctestTest(t *T, f func(*T)) bool {
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	synctestT := T{
 		common: common{
-			output:    &logger{logToStdout: flagVerbose},
-			name:      t.name,
-			parent:    &t.common,
-			level:     t.level + 1,
-			ctx:       ctx,
-			cancelCtx: cancelCtx,
+			output:     t.output,
+			name:       t.name,
+			indent:     t.indent,
+			parent:     &t.common,
+			level:      t.level + 1,
+			ctx:        ctx,
+			cancelCtx:  cancelCtx,
+			isSynctest: true,
 		},
-		context:    t.context,
-		isSynctest: true,
+		context: t.context,
 	}
 
 	done := make(chan struct{})
@@ -864,9 +935,10 @@ type testContext struct {
 	parallelSem chan struct{}
 }
 
-func newTestContext(m *matcher) *testContext {
+func newTestContext(m *matcher, deadline time.Time) *testContext {
 	return &testContext{
 		match:       m,
+		deadline:    deadline,
 		parallelSem: make(chan struct{}, flagParallel),
 	}
 }
@@ -885,11 +957,29 @@ type M struct {
 	Tests      []InternalTest
 	Benchmarks []InternalBenchmark
 
-	deps testDeps
+	deps  testDeps
+	timer *time.Timer
 
 	// value to pass to os.Exit, the outer test func main
 	// harness calls os.Exit with this code. See #34129.
 	exitCode int
+}
+
+func (m *M) startAlarm() time.Time {
+	if flagTimeout <= 0 {
+		return time.Time{}
+	}
+	deadline := time.Now().Add(flagTimeout)
+	m.timer = time.AfterFunc(flagTimeout, func() {
+		panic(fmt.Sprintf("test timed out after %v", flagTimeout))
+	})
+	return deadline
+}
+
+func (m *M) stopAlarm() {
+	if m.timer != nil {
+		m.timer.Stop()
+	}
 }
 
 type testDeps interface {
@@ -939,7 +1029,10 @@ func (m *M) Run() (code int) {
 		}
 	}
 
-	testRan, testOk := runTests(m.deps.MatchString, m.Tests)
+	deadline := m.startAlarm()
+	defer m.stopAlarm()
+
+	testRan, testOk := runTests(m.deps.MatchString, m.Tests, deadline)
 	if !testRan && *matchBenchmarks == "" {
 		fmt.Fprintln(os.Stderr, "testing: warning: no tests to run")
 	}
@@ -953,11 +1046,11 @@ func (m *M) Run() (code int) {
 	return
 }
 
-func runTests(matchString func(pat, str string) (bool, error), tests []InternalTest) (ran, ok bool) {
+func runTests(matchString func(pat, str string) (bool, error), tests []InternalTest, deadline time.Time) (ran, ok bool) {
 	ok = true
 
 	for i := 0; i < flagCount; i++ {
-		ctx := newTestContext(newMatcher(matchString, flagRunRegexp, "-test.run", flagSkipRegexp))
+		ctx := newTestContext(newMatcher(matchString, flagRunRegexp, "-test.run", flagSkipRegexp), deadline)
 		runCtx, cancelCtx := context.WithCancel(context.Background())
 		t := &T{
 			common: common{
@@ -982,12 +1075,16 @@ func runTests(matchString func(pat, str string) (bool, error), tests []InternalT
 }
 
 func (t *T) report() {
+	failed := t.Failed()
+	if failed && t.parent != nil {
+		t.parent.Fail()
+	}
+	if t.isSynctest {
+		return
+	}
 	dstr := fmtDuration(t.duration)
 	format := t.indent + "--- %s: %s (%s)\n"
-	if t.Failed() {
-		if t.parent != nil {
-			t.parent.Fail()
-		}
+	if failed {
 		t.flushToParent(t.name, format, "FAIL", t.name, dstr)
 	} else if flagVerbose {
 		if t.Skipped() {

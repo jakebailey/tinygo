@@ -14,31 +14,31 @@ import (
 func makeDarwinLibSystemJob(config *compileopts.Config, tmpdir string) *compileJob {
 	return &compileJob{
 		description: "compile Darwin libSystem.dylib",
-		run: func(job *compileJob) (err error) {
+		run: func(job *compileJob) error {
 			arch, _, _ := strings.Cut(config.Triple(), "-")
 			job.result = filepath.Join(tmpdir, "libSystem.dylib")
-			objpath := filepath.Join(tmpdir, "libSystem.o")
-			inpath := filepath.Join(goenv.Get("TINYGOROOT"), "lib/macos-minimal-sdk/src", arch, "libSystem.s")
+			root := goenv.Get("TINYGOROOT")
+			sources := []string{
+				filepath.Join(root, "lib/macos-minimal-sdk/src", arch, "libSystem.s"),
+				filepath.Join(root, "src/runtime/libsystem_spawn.S"),
+			}
 
-			// Compile assembly file to object file.
-			flags := []string{
-				"-nostdlib",
-				"--target=" + config.Triple(),
-				"-c",
-				"-o", objpath,
-				inpath,
-			}
-			if config.Options.PrintCommands != nil {
-				config.Options.PrintCommands("clang", flags...)
-			}
-			err = runCCompiler(flags...)
-			if err != nil {
-				return err
+			var objects []string
+			for _, source := range sources {
+				obj := filepath.Join(tmpdir, filepath.Base(source)+".o")
+				flags := []string{"-nostdlib", "--target=" + config.Triple(), "-c", "-o", obj, source}
+				if config.Options.PrintCommands != nil {
+					config.Options.PrintCommands("clang", flags...)
+				}
+				if err := runCCompiler(flags...); err != nil {
+					return err
+				}
+				objects = append(objects, obj)
 			}
 
 			// Link object file to dynamic library.
 			platformVersion := strings.TrimPrefix(strings.Split(config.Triple(), "-")[2], "macosx")
-			flags = []string{
+			flags := []string{
 				"-flavor", "darwin",
 				"-demangle",
 				"-dynamic",
@@ -47,8 +47,8 @@ func makeDarwinLibSystemJob(config *compileopts.Config, tmpdir string) *compileJ
 				"-platform_version", "macos", platformVersion, platformVersion,
 				"-install_name", "/usr/lib/libSystem.B.dylib",
 				"-o", job.result,
-				objpath,
 			}
+			flags = append(flags, objects...)
 			if config.Options.PrintCommands != nil {
 				config.Options.PrintCommands("ld.lld", flags...)
 			}

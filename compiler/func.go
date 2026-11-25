@@ -290,6 +290,10 @@ func (c *context) getLLVMFunctionType(typ *types.Signature) llvm.Type {
 	} else {
 		abi = c.getFunctionABI(typ, false)
 	}
+	return c.getLLVMFunctionTypeForABI(abi)
+}
+
+func (c *context) getLLVMFunctionTypeForABI(abi functionABI) llvm.Type {
 	returnType := abi.resultType
 
 	// Get the parameter types.

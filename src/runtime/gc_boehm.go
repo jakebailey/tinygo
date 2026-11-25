@@ -39,11 +39,15 @@ var (
 )
 
 type boehmFinalizer struct {
-	next   *boehmFinalizer
-	offset uintptr
-	fn     interface{}
-	ptr    unsafe.Pointer // keeps the object alive after Boehm dequeues its callback
+	next      *boehmFinalizer
+	offset    uintptr
+	fn        interface{}
+	cleanup   func()
+	ptr       unsafe.Pointer // keeps the object alive after Boehm dequeues its callback
+	isCleanup bool
 }
+
+type cleanupEntry = boehmFinalizer
 
 var (
 	finalizerPending       *boehmFinalizer
@@ -224,7 +228,9 @@ var gcMemStats libgc_prof_stats
 func ReadMemStats(m *MemStats) {
 	gcLock.Lock()
 
-	libgc_get_prof_stats(&gcMemStats, unsafe.Sizeof(gcMemStats))
+	if libgc_get_prof_stats(&gcMemStats, unsafe.Sizeof(gcMemStats)) != unsafe.Sizeof(gcMemStats) {
+		runtimeFatal("gc: collector does not provide object counts")
+	}
 
 	// Fill in MemStats as well as we can, given the information that bdwgc
 	// provides to us.
@@ -234,8 +240,10 @@ func ReadMemStats(m *MemStats) {
 	m.HeapSys = uint64(gcMemStats.heapsize_full)
 	m.GCSys = 0 // not provided by bdwgc
 	m.TotalAlloc = uint64(gcMemStats.allocd_bytes_before_gc + gcMemStats.bytes_allocd_since_gc)
-	m.Mallocs = gcMallocs
-	m.Frees = 0 // not provided by bdwgc
+	// Object and byte counts include Boehm's internal heap allocations.
+	m.Mallocs = gcMemStats.objects_allocd
+	m.Frees = gcMemStats.objects_freed
+	m.HeapObjects = gcMemStats.objects_in_use
 	m.Sys = uint64(gcMemStats.obtained_from_os_bytes)
 	m.NumGC = uint32(gcMemStats.gc_no)
 
@@ -288,6 +296,10 @@ func SetFinalizer(obj interface{}, finalizer interface{}) {
 	replaced := false
 	var prev *boehmFinalizer
 	for n := head; n != nil; n = n.next {
+		if n.isCleanup {
+			prev = n
+			continue
+		}
 		if n.offset == offset {
 			if prev == nil {
 				head = n.next
@@ -392,16 +404,26 @@ func drainFinalizers() {
 	for {
 		gcLock.Lock()
 		n := finalizerPending
+		var ptr unsafe.Pointer
+		var fn interface{}
+		var cleanup func()
+		var isCleanup bool
 		if n != nil {
 			finalizerPending = n.next
+			ptr, fn, cleanup, isCleanup = n.ptr, n.fn, n.cleanup, n.isCleanup
+			*n = boehmFinalizer{}
 		}
 		gcLock.Unlock()
 		if n == nil {
 			break
 		}
-		ptr, fn := n.ptr, n.fn
-		*n = boehmFinalizer{}
-		callFinalizer(ptr, fn)
+		if isCleanup {
+			if cleanup != nil {
+				cleanup()
+			}
+		} else {
+			callFinalizer(ptr, fn)
+		}
 	}
 	finalizerDraining = false
 }
@@ -421,6 +443,47 @@ func finalizerRunner() {
 
 //export tinygo_runtime_bdwgc_register_finalizer
 func libgc_register_finalizer(uintptr, uintptr) uintptr
+
+//export GC_general_register_disappearing_link
+func libgc_register_disappearing_link(unsafe.Pointer, uintptr) int32
+
+func registerCleanup(ptr unsafe.Pointer, fn func()) Cleanup {
+	entry := &boehmFinalizer{cleanup: fn, isCleanup: true}
+	gcLock.Lock()
+	base := libgc_base(uintptr(ptr))
+	if base == 0 {
+		gcLock.Unlock()
+		return Cleanup{}
+	}
+	old := libgc_register_finalizer(base, uintptr(unsafe.Pointer(entry)))
+	if old == ^uintptr(0) {
+		runtimeFatal("gc: cannot register cleanup")
+	}
+	entry.next = (*boehmFinalizer)(unsafe.Pointer(old))
+	numFinalizers++
+	finalizersSinceGC++
+	initFinalizerScheduler()
+	gcResumeWorld()
+	gcLock.Unlock()
+	KeepAlive(ptr)
+	return Cleanup{entry: entry}
+}
+
+func stopCleanup(entry *boehmFinalizer) {
+	gcLock.Lock()
+	entry.cleanup = nil
+	gcLock.Unlock()
+}
+
+func registerWeakHandle(h *weakHandle, ptr unsafe.Pointer) {
+	gcLock.Lock()
+	base := libgc_base(uintptr(ptr))
+	if base != 0 {
+		libgc_register_disappearing_link(unsafe.Pointer(&h.ptr), base)
+	}
+	gcResumeWorld()
+	gcLock.Unlock()
+}
 
 //export GC_should_invoke_finalizers
 func libgc_should_invoke_finalizers() int32
@@ -486,6 +549,9 @@ type libgc_prof_stats struct {
 	reclaimed_bytes_before_gc uintptr
 	expl_freed_bytes_since_gc uintptr
 	obtained_from_os_bytes    uintptr
+	objects_allocd            uint64
+	objects_freed             uint64
+	objects_in_use            uint64
 }
 
 //export GC_get_gc_no

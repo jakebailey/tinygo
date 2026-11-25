@@ -129,6 +129,9 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 			return []error{fmt.Errorf("could not build pass pipeline: %w", err)}
 		}
 
+		if err := mod.RunPasses("always-inline,function-attrs", llvm.TargetMachine{}, po); err != nil {
+			return []error{fmt.Errorf("could not inline before escape analysis: %w", err)}
+		}
 		// Run TinyGo-specific interprocedural optimizations.
 		if config.Options.PrintAllocs != nil && config.Options.PrintAllocsCover {
 			// The go coverage tool expects this header before any blocks.
@@ -185,6 +188,8 @@ func Optimize(mod llvm.Module, config *compileopts.Config) []error {
 
 	// After TinyGo-specific transforms have finished, undo exporting these functions.
 	exported.restore()
+
+	preserveCallerFrames(mod, config)
 
 	// Run the ThinLTO pre-link passes, meant to be run on each individual
 	// module. This saves compilation time compared to "default<#>" and is meant

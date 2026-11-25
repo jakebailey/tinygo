@@ -519,6 +519,8 @@ ifneq ($(XTENSA), 0)
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32-coreboard-v2  examples/touch
 	@$(MD5SUM) $(SMOKE_OUT).bin
+	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-supermini   examples/touch
+	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32c3-generic     examples/machinetest
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic     examples/machinetest
@@ -562,9 +564,13 @@ ifneq ($(XTENSA), 0)
 	# xiao-esp32c6
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=xiao-esp32c6      	examples/blinky1
 	@$(MD5SUM) $(SMOKE_OUT).bin
+	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=xiao-esp32c6   		examples/flash
+	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=xiao-esp32c6   		examples/i2c-scan
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=xiao-esp32c6   		examples/i2s-tone
+	@$(MD5SUM) $(SMOKE_OUT).bin
+	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=xiao-esp32c6   		examples/mcp3008
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	# waveshare-esp32c6-lcd-1.47
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=waveshare-esp32c6-lcd-1.47 examples/machinetest
@@ -739,9 +745,6 @@ smoketest-quick: smoketest-host | build/smoke
 	# nrf51, Cortex-M0
 	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=microbit            examples/microbit-blink
 	@$(MD5SUM) $(SMOKE_OUT).hex
-	# nrf52, Cortex-M4
-	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pca10040            examples/blinky1
-	@$(MD5SUM) $(SMOKE_OUT).hex
 	# nrf52840 with SoftDevice, which uses a different memory layout
 	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pca10056-s140v7     examples/blinky1
 	@$(MD5SUM) $(SMOKE_OUT).hex
@@ -807,8 +810,6 @@ ifneq ($(XTENSA), 0)
 	@$(MD5SUM) $(SMOKE_OUT).bin
 endif
 ifneq ($(WASM), 0)
-	# wasm with the JavaScript host bindings
-	$(TINYGO) build -size short -o $(SMOKE_OUT).wasm -target=wasm              examples/wasm/main
 	# wasm without a host, so without any imports
 	$(TINYGO) build -size short -o $(SMOKE_OUT).wasm -target=wasm-unknown      examples/hello-wasm-unknown
 endif

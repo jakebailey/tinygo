@@ -2,6 +2,18 @@ package main
 
 import "slices"
 
+// Keep this in sync with the build constraint in src/runtime/callers_framepointer.go.
+func supportsCallerLocations(target targetInfo) bool {
+	if !slices.Contains(target.BuildTags, "scheduler.threads") {
+		return false
+	}
+	switch target.GOARCH {
+	case "386", "amd64", "arm64":
+		return target.GOOS == "linux" || target.GOOS == "darwin"
+	}
+	return false
+}
+
 func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	var r ruleSet
 	hasTag := func(tag string) bool { return slices.Contains(target.BuildTags, tag) }
@@ -14,8 +26,10 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	wasip2 := hasTag("wasip2")
 	hosted := !wasm && !baremetal
 	linux := hosted && target.GOOS == "linux"
+	callerLocations := hosted && supportsCallerLocations(target)
 	darwin := hosted && target.GOOS == "darwin"
 	windows := hosted && target.GOOS == "windows"
+	subprocesses := linux || darwin
 
 	// Package exclusions
 	// Requires Unix sockets or socket-to-file conversion.
@@ -31,30 +45,49 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	r.skipPackage("net/rpc")
 	// Tests assume runtime.Compiler is gc or gccgo, or pass it to the go command.
 	r.skipPackage("go/build")
-	// Go's map implementation needs internal/abi.MapType.
-	r.skipPackage("go/importer")
-	r.skipPackage("go/internal/gccgoimporter")
-	r.skipPackage("go/internal/gcimporter")
+	// go/build rejects TinyGo as a source importer compiler.
 	r.skipPackage("go/internal/srcimporter")
+	if !linux && !darwin && !windows {
+		r.skipTest("go/internal/gccgoimporter", `^TestGoxImporter$`)
+	}
+	// importer.Default does not provide a TinyGo importer.
 	r.skipPackage("go/types")
-	r.skipPackage("hash/maphash")
-	r.skipPackage("internal/types/errors")
+	r.skipTest("internal/types/errors", `^TestErrorCodeExamples$`)
 	// OID encoding and self-signed certificate tests fail.
 	r.skipPackage("crypto/x509")
-	if wasi {
-		r.skipTest("io", `^(TestMultiReaderFlatten|TestMultiWriterSingleChainFlatten|TestMultiReaderFreesExhaustedReaders|TestMultiWriter_WriteStringSingleAlloc|TestPipeAllocations)$`)
+	// The io and logging suites need caller locations or frame depth.
+	if callerLocations {
+		// Finalizing an exhausted reader can time out.
+		r.skipTest("io", `^TestMultiReaderFreesExhaustedReaders$`)
+		// TinyGo exceeds the allocation budgets for these tests.
+		r.skipTest("log", `^TestDiscard$`)
+		r.skipTest("log/slog", `^(TestJSONAllocs|TestTextHandlerAlloc)$|^TestAlloc$/^(2_pairs|2_pairs_disabled_inline|9_kvs|pairs|attrs6|attrs9)$`)
+		if target.GOARCH == "386" {
+			// LLVM reports a base pointer and frame pointer conflict at link time.
+			r.skipPackage("log/slog")
+		}
 	} else {
-		r.skipPackage("io")
+		if wasi {
+			r.skipTest("io", `^(TestMultiReaderFlatten|TestMultiWriterSingleChainFlatten|TestMultiReaderFreesExhaustedReaders|TestMultiWriter_WriteStringSingleAlloc|TestPipeAllocations)$`)
+		} else {
+			r.skipPackage("io")
+		}
+		r.skipPackage("log")
+		r.skipPackage("log/slog")
+		r.skipPackage("testing/slogtest")
 	}
-	// The logging tests check the caller's file and line.
-	r.skipPackage("log")
-	r.skipPackage("log/slog")
-	r.skipPackage("testing/slogtest")
-	// Signal tests need signal_ignored and runtime_doAllThreadsSyscall.
-	r.skipPackage("os/signal")
+	// Unix signal runtime support is enabled for Linux stdlib tests.
+	if !linux {
+		r.skipPackage("os/signal")
+	} else {
+		// TestStop and TestNohup expect Go's default SIGUSR1 handler to ignore
+		// uncaught SIGUSR1; TestSignalTrace needs runtime/trace;
+		// TestTerminalSignal needs SysProcAttr.Setctty.
+		r.skipTest("os/signal", `^(TestStop|TestNohup|TestSignalTrace|TestTerminalSignal)$`)
+	}
 	// The plugin test programs fail to link libdl.
 	r.skipPackage("plugin")
-	// Weak pointers stay non-nil after GC and after a finalizer is enqueued.
+	// Conservative stack scanning keeps test pointers live across runtime.GC.
 	r.skipPackage("weak")
 	// TinyGo's build tags leave no runnable Linux tests.
 	r.skipPackage("embed")
@@ -82,12 +115,17 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	} else {
 		r.skipPackage("internal/godebug")
 	}
-	// The polling tests reach an unimplemented semacquire path.
-	r.skipPackage("internal/poll")
+	if linux {
+		// TestSplicePipePool waits for GC to drain sync.Pool and finalize pipes.
+		r.skipTest("internal/poll", `^TestSplicePipePool$`)
+	} else {
+		r.skipPackage("internal/poll")
+	}
 	// The stock runtime tests need Go's atomic entry points and internal ABI types.
 	r.skipPackage("internal/runtime/atomic")
-	r.skipPackage("internal/runtime/maps")
 	r.skipPackage("internal/sync")
+	// Tests for Go's Swiss-table implementation.
+	r.skipPackage("internal/runtime/maps")
 	// The stock Linux syscall tests need Go's Syscall6 assembly.
 	r.skipPackage("internal/runtime/syscall/linux")
 	// Contains only cgo benchmarks.
@@ -143,7 +181,7 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	if !hosted && !wasi {
 		r.skipPackage("internal/testenv")
 	}
-	if !linux && !darwin && !wasi {
+	if !hosted && !wasi {
 		r.skipPackage("internal/xcoff")
 	}
 	if (!hosted && !wasi) || (hostOS == "windows" && wasi) {
@@ -230,14 +268,11 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 			r.skipPackage("strings")
 		}
 		r.skipPackage("crypto/mldsa")
-		if !wasi {
+		if !wasi && !windows {
 			r.skipPackage("debug/dwarf")
 		}
 		if !windows && !wasi {
 			r.skipPackage("debug/elf")
-		}
-		if windows {
-			r.skipPackage("debug/pe")
 		}
 		r.skipPackage("go/parser")
 		r.skipPackage("net")
@@ -247,18 +282,18 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 		}
 		r.skipPackage("path/filepath")
 
-		if !wasi {
-			// Windows File.ReadAt is a stub.
-			r.skipPackage("archive/zip")
+		if !windows && !wasi {
 			r.skipPackage("debug/plan9obj")
 		}
 		r.skipPackage("time") // Takes more than 25 minutes on Windows.
 	}
-
-	if windows {
-		r.skipPackage("debug/elf")
-		r.skipPackage("mime/multipart") // File.ReadAt is a stub.
+	if !linux && !darwin && !windows && !wasi {
+		r.skipPackage("archive/zip")
 	}
+	if windows && !opts.bench {
+		r.short("archive/zip")
+	}
+
 	if !hosted && !wasi {
 		r.skipPackage("mime/multipart")
 	}
@@ -335,6 +370,10 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 		r.skipPackage("go/doc")
 		r.skipPackage("go/doc/comment")
 		r.skipPackage("go/format")
+		r.skipPackage("go/importer")
+		r.skipPackage("go/internal/gccgoimporter")
+		r.skipPackage("go/internal/gcimporter")
+		r.skipPackage("internal/types/errors")
 		r.skipPackage("html/template")
 		r.skipPackage("image")
 		r.skipPackage("internal/diff")
@@ -390,8 +429,11 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 		}
 	}
 
-	if (opts.mode == modeFull || wasi) && !opts.bench {
+	if wasi && !opts.bench {
 		r.short("archive/zip")
+	}
+	if hosted && !opts.bench && (opts.mode == modeFull || opts.mode == modeFast) {
+		r.parallel("archive/zip", 1)
 	}
 	if !opts.bench {
 		if wasi {
@@ -401,9 +443,6 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 		r.short("crypto/mldsa")
 		r.short("crypto/rsa")
 		r.short("encoding/xml")
-	}
-	if hosted && !opts.bench {
-		r.short("index/suffixarray")
 	}
 
 	if linux {
@@ -442,7 +481,6 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 
 	// TinyGo exceeds the upstream allocation budgets for these operations.
 	r.skipTest("bufio", `^TestReadStringAllocs$`)
-	r.skipTest("bytes", `^TestNewBufferShallow$`)
 	r.skipTest("crypto/ed25519", `^TestAllocations$`)
 	r.skipTest("crypto/rsa", `^TestAllocations$`)
 	r.skipTest("crypto/sha256", `^(TestAllocations|TestAllocatonsWithTypeAsserts)$`)
@@ -489,7 +527,7 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 		r.skipTest("internal/zstd", `TestAlloc|TestLarge|TestFileSamples`)
 	} else {
 		r.skipTest("internal/zstd", `^TestAlloc$`)
-		if !linux {
+		if !subprocesses {
 			r.skipTest("internal/zstd", `^TestLarge$`)
 		}
 		if browser {
@@ -519,41 +557,41 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	// The warning for late flag definitions needs the caller's file and line.
 	if qemu {
 		r.skipTest("flag", `TestExitCode|TestDefineAfterSet`)
-	} else {
+	} else if !callerLocations {
 		r.skipTest("flag", `^TestDefineAfterSet$`)
 	}
-	// Boehm does not reclaim unreachable timers and tickers in this test.
-	r.skipTest("time", `^TestTimerGC$`)
-
-	// Both tests start subprocesses. macOS startProcess is a stub.
+	// Timer and goroutine stress tests can exhaust macOS threads.
 	if darwin {
-		r.skipTest("flag", `^TestExitCode$`)
-		r.skipTest("math/rand", `^TestDefaultRace$`)
-		// Timer stress tests can exhaust macOS threads.
+		r.skipTest("internal/singleflight", `^TestDoAndForgetUnsharedRace$`)
 		r.skipTest("time", `^(TestStopResult|TestResetResult|TestLongAdjustTimers)$|^TestZeroTimer$/^impl=(func|cache)$`)
 	}
 	// This test can exhaust Boehm's mark stack or Darwin's thread limit.
 	if hasTag("gc.boehm") || darwin {
 		r.skipTest("internal/synctest", `^TestWaitGroupManyBubbles$`)
 	}
-	// Concurrent FuncOf and StructOf creation times out.
-	r.skipTest("internal/synctest", `^TestReflectFuncOf$`)
 	// Bubble ownership checks start subprocesses.
-	if !linux {
+	if !subprocesses {
 		r.skipTest("internal/synctest", `^(TestChannelMovedOutOfBubble|TestTimerFromInsideBubble|TestWaitGroupMovedIntoBubble|TestWaitGroupMovedOutOfBubble|TestWaitGroupMovedBetweenBubblesWithNonZeroCount)$`)
 	}
-	// The output cases need bubble result propagation and caller/helper locations.
+	if linux && target.GOARCH == "386" {
+		// The HTTP case references unimplemented socketcall symbols.
+		r.skipPackage("testing/synctest")
+	}
+	// The skip output check starts a subprocess.
+	if !subprocesses {
+		r.skipTest("testing/synctest", `^TestSkip$`)
+	}
+	// These output checks need subprocesses and caller locations.
+	if !subprocesses || !callerLocations {
+		r.skipTest("testing/synctest", `^(TestFatal|TestError|TestVerboseError|TestVerboseSkip|TestHelper)$`)
+	}
 	// The HTTP case needs Transport.DialContext and ExpectContinueTimeout.
-	r.skipTest("testing/synctest", `^(TestFatal|TestError|TestVerboseError|TestSkip|TestVerboseSkip|TestHelper|TestHTTPTransport100Continue)$`)
+	r.skipTest("testing/synctest", `^TestHTTPTransport100Continue$`)
 
 	// Template depth checks run with larger stacks on Linux and macOS.
 	if !linux && !darwin {
 		r.skipTest("html/template", `^TestMaxExecDepth$`)
 		r.skipTest("text/template", `^TestMaxExecDepth$`)
-	}
-	// The ZIP filesystem needs File.ReadAt, a stub on Windows.
-	if windows {
-		r.skipTest("html/template", `^TestParseZipFS$`)
 	}
 	// The Windows host volume mounted as the WASI root lacks /dev/null.
 	if hostOS == "windows" && (wasip1 || wasip2) {

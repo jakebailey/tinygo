@@ -50,6 +50,7 @@ type Config struct {
 	BuildMode       string
 	CodeModel       string
 	RelocationModel string
+	SpeedLevel      int
 	SizeLevel       int
 	TinyGoVersion   string // for llvm.ident
 	TrimPath        bool
@@ -106,6 +107,8 @@ type context struct {
 	indirectCatchers            map[llvm.Type]llvm.Value
 	asyncifyReplays             map[llvm.Type]llvm.Value
 	functionABIs                map[functionABIKey]functionABI
+	inlineCosts                 map[*ssa.Function]inlineCost
+	inlineCycles                map[*ssa.Function]bool
 	astComments                 map[string]astGlobalInfo
 	cgoImportDynamic            map[string]string // //go:cgo_import_dynamic local name -> remote symbol
 	embedGlobals                map[string][]*loader.EmbedFile
@@ -135,6 +138,8 @@ func newContext(moduleName string, machine llvm.TargetMachine, config *Config, d
 		indirectCatchers: map[llvm.Type]llvm.Value{},
 		asyncifyReplays:  map[llvm.Type]llvm.Value{},
 		functionABIs:     map[functionABIKey]functionABI{},
+		inlineCosts:      map[*ssa.Function]inlineCost{},
+		inlineCycles:     map[*ssa.Function]bool{},
 		astComments:      map[string]astGlobalInfo{},
 		cgoImportDynamic: map[string]string{},
 	}
@@ -1475,7 +1480,7 @@ func (b *builder) createFunction() {
 				expr := b.dibuilder.CreateExpression(nil)
 				var value llvm.Value
 				ptr, indirect := b.indirectValues[instr.X]
-				if unop, ok := instr.X.(*ssa.UnOp); indirect && ok && canUseDereferencePointer(unop) {
+				if unop, ok := instr.X.(*ssa.UnOp); indirect && ok && b.canUseDereferencePointer(unop) {
 					// ptr is the source of the dereference, which can change later.
 					indirect = false
 				}
@@ -1740,6 +1745,13 @@ func (b *builder) markReflectMethodUseFor(call *ssa.CallCommon, target llvm.Valu
 		return
 	}
 	switch method.Name() {
+	case "StructOf":
+		if !call.IsInvoke() && method.Pkg().Path() == "reflect" {
+			target.AddFunctionAttr(b.ctx.CreateStringAttribute("tinygo-reflect-structof", ""))
+			target.AddFunctionAttr(b.ctx.CreateStringAttribute("tinygo-reflect-makefunc", ""))
+			target.AddFunctionAttr(b.ctx.CreateStringAttribute("tinygo-reflect-method", ""))
+		}
+		return
 	case "Method", "MethodByName", "Methods":
 	default:
 		return
@@ -1887,6 +1899,13 @@ func isMemequalArrayComparison(expr *ssa.BinOp) bool {
 		(expr.Op == token.EQL || expr.Op == token.NEQ)
 }
 
+func (b *builder) isPointerComparison(expr *ssa.BinOp) bool {
+	if expr.Op != token.EQL && expr.Op != token.NEQ {
+		return false
+	}
+	return isMemequalArrayComparison(expr) || b.isOversizedAggregate(expr.X.Type())
+}
+
 // isRangeLoopCompare returns whether expr is the (index + 1) < len(slice) test
 // of rangeIndexed in golang.org/x/tools/go/ssa. Neither side is ever negative.
 func isRangeLoopCompare(expr *ssa.BinOp) bool {
@@ -1911,12 +1930,24 @@ func isRangeLoopCompare(expr *ssa.BinOp) bool {
 	return ok && one.Int64() == 1
 }
 
-func canUseDereferencePointer(unop *ssa.UnOp) bool {
+func (b *builder) canUseDereferencePointer(unop *ssa.UnOp) bool {
 	if !isDereference(unop) {
 		return false
 	}
 	comparison := adjacentComparison(unop, isDereference)
-	return comparison != nil && isMemequalArrayComparison(comparison)
+	if comparison == nil || !b.isPointerComparison(comparison) {
+		return false
+	}
+	if b.isOversizedAggregate(unop.Type()) {
+		for _, referrer := range *unop.Referrers() {
+			if dbg, ok := referrer.(*ssa.DebugRef); ok && !dbg.IsAddr {
+				if _, ok := dbg.Object().(*types.Var); ok {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 func isDereference(value ssa.Value) bool {
@@ -2640,7 +2671,10 @@ func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) 
 			result := b.createIndirectStorage(abi.resultType, "call.result")
 			params = append([]llvm.Value{result}, params...)
 			params = append(params, context)
-			b.createInvoke(calleeType, callee, params, "", instr)
+			call := b.createInvoke(calleeType, callee, params, "", instr)
+			if fn := instr.StaticCallee(); fn != nil {
+				b.addInlineCallSiteAttribute(call, fn)
+			}
 			return result, nil
 		}
 		// This function takes a context parameter.
@@ -2648,7 +2682,11 @@ func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) 
 		params = append(params, context)
 	}
 
-	return b.createInvoke(calleeType, callee, params, "", instr), nil
+	call := b.createInvoke(calleeType, callee, params, "", instr)
+	if fn := instr.StaticCallee(); fn != nil {
+		b.addInlineCallSiteAttribute(call, fn)
+	}
+	return call, nil
 }
 
 // getValue returns the LLVM value of a constant, function value, global, or
@@ -2852,12 +2890,28 @@ func (b *builder) createExpr(expr ssa.Value) (llvm.Value, error) {
 			return buf, nil
 		}
 	case *ssa.BinOp:
-		if isMemequalArrayComparison(expr) {
-			typ := expr.X.Type().Underlying().(*types.Array)
-			x := b.getValuePointer(expr.X)
-			y := b.getValuePointer(expr.Y)
-			size := llvm.ConstInt(b.uintptrType, b.targetData.TypeAllocSize(b.getLLVMType(typ)), false)
-			result := b.createRuntimeCall("memequal", []llvm.Value{x, y, size}, "arraycmp")
+		if b.isPointerComparison(expr) {
+			var result llvm.Value
+			var err error
+			xZero := isZeroConst(expr.X)
+			yZero := isZeroConst(expr.Y)
+			switch {
+			case xZero && yZero:
+				result = b.i1True
+			case yZero:
+				xPtr := b.getValuePointer(expr.X)
+				result, err = b.createIndirectAggregateEqual(expr.X.Type(), xPtr, llvm.Value{}, expr.Pos())
+			case xZero:
+				yPtr := b.getValuePointer(expr.Y)
+				result, err = b.createIndirectAggregateEqual(expr.Y.Type(), yPtr, llvm.Value{}, expr.Pos())
+			default:
+				xPtr := b.getValuePointer(expr.X)
+				yPtr := b.getValuePointer(expr.Y)
+				result, err = b.createIndirectAggregateEqual(expr.X.Type(), xPtr, yPtr, expr.Pos())
+			}
+			if err != nil {
+				return llvm.Value{}, err
+			}
 			if expr.Op == token.NEQ {
 				result = b.CreateNot(result, "")
 			}
@@ -3834,6 +3888,127 @@ func (b *builder) createBinOp(op token.Token, typ, ytyp types.Type, x, y llvm.Va
 	}
 }
 
+func (b *builder) createIndirectAggregateEqual(typ types.Type, xPtr, yPtr llvm.Value, pos token.Pos) (llvm.Value, error) {
+	llvmType := b.getLLVMType(typ)
+	if b.targetData.TypeAllocSize(llvmType) == 0 {
+		return b.i1True, nil
+	}
+	switch t := typ.Underlying().(type) {
+	case *types.Array:
+		if t.Len() == 0 {
+			return b.i1True, nil
+		}
+		if isBinaryComparable(t.Elem()) && (t.Len() > hashArrayUnrollLimit || b.isOversizedAggregate(typ)) {
+			size := llvm.ConstInt(b.uintptrType, b.targetData.TypeAllocSize(llvmType), false)
+			if yPtr.IsNil() {
+				return b.createRuntimeCall("memiszero", []llvm.Value{xPtr, size}, "arraycmp"), nil
+			}
+			return b.createRuntimeCall("memequal", []llvm.Value{xPtr, yPtr, size}, "arraycmp"), nil
+		}
+		if b.isOversizedAggregate(typ) {
+			loopEntry := b.GetInsertBlock()
+			loopDone := b.insertBasicBlock("arraycmp.done")
+			loopBody := b.insertBasicBlock("arraycmp.body")
+
+			b.CreateBr(loopBody)
+			b.SetInsertPointAtEnd(loopBody)
+
+			phiI := b.CreatePHI(b.uintptrType, "i")
+			zero := llvm.ConstInt(b.i32, 0, false)
+			xElemPtr := b.CreateInBoundsGEP(llvmType, xPtr, []llvm.Value{zero, phiI}, "")
+			var yElemPtr llvm.Value
+			if !yPtr.IsNil() {
+				yElemPtr = b.CreateInBoundsGEP(llvmType, yPtr, []llvm.Value{zero, phiI}, "")
+			}
+			elemEq, err := b.createIndirectAggregateEqual(t.Elem(), xElemPtr, yElemPtr, pos)
+			if err != nil {
+				return llvm.Value{}, err
+			}
+
+			nextI := b.CreateAdd(phiI, llvm.ConstInt(b.uintptrType, 1, false), "")
+			atEnd := b.CreateICmp(llvm.IntUGE, nextI, llvm.ConstInt(b.uintptrType, uint64(t.Len()), false), "")
+			exitLoop := b.CreateOr(atEnd, b.CreateNot(elemEq, ""), "")
+			bodyEnd := b.GetInsertBlock()
+			b.CreateCondBr(exitLoop, loopDone, loopBody)
+
+			phiI.AddIncoming([]llvm.Value{b.uintptrZero, nextI}, []llvm.BasicBlock{loopEntry, bodyEnd})
+			b.SetInsertPointAtEnd(loopDone)
+			if b.currentBlockInfo != nil {
+				b.currentBlockInfo.exit = loopDone
+			}
+			return elemEq, nil
+		}
+	case *types.Struct:
+		if b.isOversizedAggregate(typ) {
+			var fields []int
+			for i := 0; i < t.NumFields(); i++ {
+				if t.Field(i).Name() == "_" {
+					continue
+				}
+				if b.targetData.TypeAllocSize(b.getLLVMType(t.Field(i).Type())) == 0 {
+					continue
+				}
+				fields = append(fields, i)
+			}
+			if len(fields) == 0 {
+				return b.i1True, nil
+			}
+			if len(fields) == 1 {
+				i := fields[0]
+				xFieldPtr := b.CreateStructGEP(llvmType, xPtr, i, "")
+				var yFieldPtr llvm.Value
+				if !yPtr.IsNil() {
+					yFieldPtr = b.CreateStructGEP(llvmType, yPtr, i, "")
+				}
+				return b.createIndirectAggregateEqual(t.Field(i).Type(), xFieldPtr, yFieldPtr, pos)
+			}
+
+			doneBlock := b.insertBasicBlock("structcmp.done")
+			incomingVals := make([]llvm.Value, 0, len(fields))
+			incomingBlocks := make([]llvm.BasicBlock, 0, len(fields))
+			for idx, i := range fields {
+				xFieldPtr := b.CreateStructGEP(llvmType, xPtr, i, "")
+				var yFieldPtr llvm.Value
+				if !yPtr.IsNil() {
+					yFieldPtr = b.CreateStructGEP(llvmType, yPtr, i, "")
+				}
+				fieldEq, err := b.createIndirectAggregateEqual(t.Field(i).Type(), xFieldPtr, yFieldPtr, pos)
+				if err != nil {
+					return llvm.Value{}, err
+				}
+				curBlock := b.GetInsertBlock()
+				if idx == len(fields)-1 {
+					b.CreateBr(doneBlock)
+					incomingVals = append(incomingVals, fieldEq)
+					incomingBlocks = append(incomingBlocks, curBlock)
+				} else {
+					nextBlock := b.insertBasicBlock("structcmp.next")
+					b.CreateCondBr(fieldEq, nextBlock, doneBlock)
+					incomingVals = append(incomingVals, b.i1False)
+					incomingBlocks = append(incomingBlocks, curBlock)
+					b.SetInsertPointAtEnd(nextBlock)
+				}
+			}
+			b.SetInsertPointAtEnd(doneBlock)
+			if b.currentBlockInfo != nil {
+				b.currentBlockInfo.exit = doneBlock
+			}
+			result := b.CreatePHI(b.i1, "structcmp")
+			result.AddIncoming(incomingVals, incomingBlocks)
+			return result, nil
+		}
+	}
+
+	x := b.CreateLoad(llvmType, xPtr, "")
+	var y llvm.Value
+	if yPtr.IsNil() {
+		y = llvm.ConstNull(llvmType)
+	} else {
+		y = b.CreateLoad(llvmType, yPtr, "")
+	}
+	return b.createBinOp(token.EQL, typ, typ, x, y, pos)
+}
+
 // createConst creates a LLVM constant value from a Go constant.
 func (c *context) createConst(expr *ssa.Const, pos token.Pos) llvm.Value {
 	switch typ := expr.Type().Underlying().(type) {
@@ -4261,7 +4436,7 @@ func (b *builder) createUnOp(unop *ssa.UnOp) (llvm.Value, error) {
 			return llvm.ConstNull(valueType), nil
 		} else {
 			b.createNilCheck(unop.X, x, "deref")
-			if canUseDereferencePointer(unop) {
+			if b.canUseDereferencePointer(unop) {
 				return x, nil
 			}
 			return b.loadFromStorage(x, unop.Type(), ""), nil

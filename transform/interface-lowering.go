@@ -119,6 +119,7 @@ type lowerInterfacesPass struct {
 	interfaces      map[string]*interfaceInfo
 	keepMethodNames bool
 	methodFuncNames map[string]struct{} // nil keeps all exported method functions
+	dynamicMethods  bool
 }
 
 // LowerInterfaces lowers all intermediate interface calls and globals that are
@@ -232,6 +233,8 @@ func (p *lowerInterfacesPass) run() error {
 			interfaceInvokeFunctions = append(interfaceInvokeFunctions, fn)
 		}
 	}
+
+	p.dynamicMethods = p.usesReflectStructOf()
 
 	// runtime.composeInterface can make an interface value from any typecode,
 	// for example the element typecode that reflect reads from a chan type.
@@ -399,6 +402,9 @@ func (p *lowerInterfacesPass) run() error {
 	}
 
 	usage := analyzeReflection(p.mod, afterInterfaceLowering)
+	if p.dynamicMethods {
+		usage.methodNames, usage.methods = nil, true
+	}
 	keepAllMethods := usage.methods
 	if keepAllMethods {
 		stripMethodSets = false
@@ -610,29 +616,6 @@ func (p *lowerInterfacesPass) pruneUnusedMethodMetadata() error {
 	return nil
 }
 
-// isBoxable reports whether the program can put a value with this typecode
-// into an interface. This is true when the typecode has a use outside other
-// typecodes. A typecode that is only the element of a different typecode (for
-// example chan T or *T) is not boxable.
-func isBoxable(value llvm.Value) bool {
-	for use := range llvmutil.Uses(value) {
-		if !use.IsAGlobalVariable().IsNil() {
-			if !strings.HasPrefix(use.Name(), "reflect/types.type:") {
-				return true
-			}
-			continue
-		}
-		if !use.IsAConstant().IsNil() {
-			if isBoxable(use) {
-				return true
-			}
-			continue
-		}
-		return true
-	}
-	return false
-}
-
 type reflectionUsage struct {
 	methods     bool
 	methodNames map[string]struct{} // nil selects all exported methods
@@ -790,6 +773,16 @@ func analyzeReflection(mod llvm.Module, stage interfaceLoweringStage) reflection
 	return usage
 }
 
+func (p *lowerInterfacesPass) usesReflectStructOf() bool {
+	for fn := range llvmutil.Functions(p.mod) {
+		attr := fn.GetStringAttributeAtIndex(-1, "tinygo-reflect-structof")
+		if !attr.IsNil() && (fn.Linkage() != llvm.InternalLinkage || hasUses(fn)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *lowerInterfacesPass) createReflectTypeLinks(typeNames []string) {
 	for _, spec := range []struct {
 		prefix string
@@ -910,6 +903,7 @@ func pruneUnusedReflectMakeFunc(mod llvm.Module) {
 		}
 		global.SetInitializer(mod.Context().ConstStruct(fields, false))
 	}
+	p.eraseGlobalsWithPrefix("reflect/dynamicmethod.link:")
 	p.internalizeFunctionsWithPrefix("reflect/makefunc:")
 }
 
@@ -920,6 +914,7 @@ func (p *lowerInterfacesPass) createReflectMakeFuncLinks(typeNames []string) {
 	adaptersGlobal := p.mod.NamedGlobal("internal/reflectlite.makeFuncAdapters")
 	lengthGlobal := p.mod.NamedGlobal("internal/reflectlite.makeFuncLinksLen")
 	if typesGlobal.IsNil() && adaptersGlobal.IsNil() && lengthGlobal.IsNil() {
+		p.eraseGlobalsWithPrefix("reflect/dynamicmethod.link:")
 		p.internalizeFunctionsWithPrefix("reflect/makefunc:")
 		return
 	}
@@ -927,6 +922,7 @@ func (p *lowerInterfacesPass) createReflectMakeFuncLinks(typeNames []string) {
 		panic("reflect MakeFunc link globals must be defined together")
 	}
 	if !used {
+		p.eraseGlobalsWithPrefix("reflect/dynamicmethod.link:")
 		p.internalizeFunctionsWithPrefix("reflect/makefunc:")
 		lengthGlobal.SetInitializer(llvm.ConstInt(p.uintptrType, 0, false))
 		lengthGlobal.SetGlobalConstant(true)
@@ -949,6 +945,7 @@ func (p *lowerInterfacesPass) createReflectMakeFuncLinks(typeNames []string) {
 		typeCodes = append(typeCodes, typ.typecode)
 		adapters = append(adapters, llvm.ConstIntToPtr(typ.makeFuncAdapter, p.ptrType))
 	}
+	p.eraseGlobalsWithPrefix("reflect/dynamicmethod.link:")
 	p.internalizeFunctionsWithPrefix("reflect/makefunc:")
 
 	lengthGlobal.SetInitializer(llvm.ConstInt(p.uintptrType, uint64(len(typeCodes)), false))
@@ -976,12 +973,45 @@ func (p *lowerInterfacesPass) createReflectMakeFuncLinks(typeNames []string) {
 	}
 }
 
+func (p *lowerInterfacesPass) eraseGlobalsWithPrefix(prefix string) {
+	for global := p.mod.FirstGlobal(); !global.IsNil(); {
+		next := llvm.NextGlobal(global)
+		if strings.HasPrefix(global.Name(), prefix) {
+			global.EraseFromParentAsGlobal()
+		}
+		global = next
+	}
+}
+
 func (p *lowerInterfacesPass) internalizeFunctionsWithPrefix(prefix string) {
 	for fn := p.mod.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
 		if strings.HasPrefix(fn.Name(), prefix) {
 			fn.SetLinkage(llvm.InternalLinkage)
 		}
 	}
+}
+
+// isBoxable reports whether the program can put a value with this typecode
+// into an interface. This is true when the typecode has a use outside other
+// typecodes. A typecode that is only the element of a different typecode (for
+// example chan T or *T) is not boxable.
+func isBoxable(value llvm.Value) bool {
+	for _, use := range getUses(value) {
+		if !use.IsAGlobalVariable().IsNil() {
+			if !strings.HasPrefix(use.Name(), "reflect/types.type:") {
+				return true
+			}
+			continue
+		}
+		if !use.IsAConstant().IsNil() {
+			if isBoxable(use) {
+				return true
+			}
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // addTypeMethods reads the method set of the given type info struct. It
@@ -1134,19 +1164,49 @@ func (p *lowerInterfacesPass) defineInterfaceMethodFunc(fn llvm.Value, itf *inte
 		p.builder.CreateCondBr(cmp, callBlock(typ), next)
 		p.builder.SetInsertPointAtEnd(next)
 	}
-	p.builder.CreateBr(panicBlock)
 
-	// The only other possible value remaining is nil for nil interfaces. We
-	// could panic with a different message here such as "nil interface" but
-	// that would increase code size and "nil panic" is close enough. Most
-	// importantly, it avoids undefined behavior when accidentally calling a
-	// method on a nil interface.
+	fallback := p.builder.GetInsertBlock()
 	p.builder.SetInsertPointAtEnd(panicBlock)
 	nilPanic := p.mod.NamedFunction("runtime.nilPanic")
 	p.builder.CreateCall(nilPanic.GlobalValueType(), nilPanic, []llvm.Value{
 		llvm.Undef(p.ptrType),
 	}, "")
 	p.builder.CreateUnreachable()
+	p.builder.SetInsertPointAtEnd(fallback)
+
+	if p.dynamicMethods {
+		adapter := p.dynamicMethodAdapter(signature)
+		helper := p.mod.NamedFunction("internal/reflectlite.dynamicMethodContext")
+		signatureGlobal := p.dynamicMethodSignature(signature)
+		if !adapter.IsNil() && !helper.IsNil() && !signatureGlobal.IsNil() {
+			dispatch := p.ctx.AddBasicBlock(fn, "dynamic")
+			isNil := p.builder.CreateIsNull(actualType, "")
+			p.builder.CreateCondBr(isNil, panicBlock, dispatch)
+			p.builder.SetInsertPointAtEnd(dispatch)
+			dynamicContext := p.builder.CreateCall(helper.GlobalValueType(), helper, []llvm.Value{
+				actualType,
+				receiver,
+				signatureGlobal,
+				llvm.Undef(p.ptrType),
+			}, "")
+			callParams := make([]llvm.Value, 0, fn.ParamsCount()-2)
+			if resultOffset != 0 {
+				callParams = append(callParams, fn.FirstParam())
+			}
+			for i := 1 + resultOffset; i < fn.ParamsCount()-2; i++ {
+				callParams = append(callParams, fn.Param(i))
+			}
+			callParams = append(callParams, dynamicContext)
+			retval := p.builder.CreateCall(adapter.GlobalValueType(), adapter, callParams, "")
+			if retval.Type().TypeKind() == llvm.VoidTypeKind {
+				p.builder.CreateRetVoid()
+			} else {
+				p.builder.CreateRet(retval)
+			}
+			return
+		}
+	}
+	p.builder.CreateBr(panicBlock)
 }
 
 // typeIDSwitchThreshold is the number of implementers above which a thunk
@@ -1297,6 +1357,35 @@ func (p *lowerInterfacesPass) defineInterfaceAssertFunc(fn llvm.Value, itf *inte
 		cmp := p.builder.CreateICmp(llvm.IntEQ, actualType, typ.typecodeGEP, typ.name+".icmp")
 		result = p.builder.CreateOr(result, cmp, "")
 	}
+	helper := p.mod.NamedFunction("internal/reflectlite.dynamicTypeHasMethod")
+	if p.dynamicMethods && !helper.IsNil() && len(itf.signatures) != 0 {
+		dynamicResult := llvm.ConstInt(p.ctx.Int1Type(), 1, false)
+		signatureNames := make([]string, 0, len(itf.signatures))
+		for name := range itf.signatures {
+			signatureNames = append(signatureNames, name)
+		}
+		sort.Strings(signatureNames)
+		for _, name := range signatureNames {
+			signature := itf.signatures[name]
+			adapter := p.dynamicMethodAdapter(signature)
+			signatureGlobal := p.dynamicMethodSignature(signature)
+			if adapter.IsNil() {
+				dynamicResult = llvm.ConstInt(p.ctx.Int1Type(), 0, false)
+				break
+			}
+			if signatureGlobal.IsNil() {
+				dynamicResult = llvm.ConstInt(p.ctx.Int1Type(), 0, false)
+				break
+			}
+			hasMethod := p.builder.CreateCall(helper.GlobalValueType(), helper, []llvm.Value{
+				actualType,
+				signatureGlobal,
+				llvm.Undef(p.ptrType),
+			}, "")
+			dynamicResult = p.builder.CreateAnd(dynamicResult, hasMethod, "")
+		}
+		result = p.builder.CreateOr(result, dynamicResult, "")
+	}
 	p.builder.CreateRet(result)
 
 	if !hasUses(trueBlock.AsValue()) {
@@ -1312,6 +1401,26 @@ func (p *lowerInterfacesPass) defineInterfaceAssertFunc(fn llvm.Value, itf *inte
 	meta := p.builder.CreateLoad(p.ctx.Int8Type(), actualType, "meta")
 	kind := p.builder.CreateAnd(meta, llvm.ConstInt(p.ctx.Int8Type(), kindMask|flagNamed, false), "")
 	p.builder.CreateRet(p.builder.CreateICmp(llvm.IntNE, kind, llvm.ConstInt(p.ctx.Int8Type(), kindFunc, false), ""))
+}
+
+func (p *lowerInterfacesPass) dynamicMethodAdapter(signature *signatureInfo) llvm.Value {
+	index := strings.Index(signature.name, ":func:")
+	if index < 0 {
+		return llvm.Value{}
+	}
+	typeName := signature.name[index+1:]
+	if adapter := p.mod.NamedFunction("reflect/makefunc:interface:" + typeName); !adapter.IsNil() {
+		return adapter
+	}
+	return p.mod.NamedFunction("reflect/makefunc:" + typeName)
+}
+
+func (p *lowerInterfacesPass) dynamicMethodSignature(signature *signatureInfo) llvm.Value {
+	const prefix = "reflect/methods."
+	if !strings.HasPrefix(signature.name, prefix) {
+		return llvm.Value{}
+	}
+	return p.mod.NamedGlobal("reflect/types.signature:" + strings.TrimPrefix(signature.name, prefix))
 }
 
 func (p *lowerInterfacesPass) isMethodSetType(ty llvm.Type) bool {

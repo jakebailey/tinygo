@@ -5943,6 +5943,8 @@ func TestStructOfDirectIface(t *testing.T) {
 	}
 }
 
+*/
+
 type StructI int
 
 func (i StructI) Get() int { return int(i) }
@@ -6143,12 +6145,12 @@ func TestStructOfWithInterface(t *testing.T) {
 			Type:      StructOf(nil),
 		},
 	}
-	// With the current implementation this is expected to panic.
-	// Ideally it should work and we should be able to call the
-	// Set and Get methods.
-	shouldPanic("", func() {
-		StructOf(fields)
-	})
+	// Go rejects this layout because of its direct-interface representation.
+	// See https://go.dev/src/reflect/type.go.
+	rt = StructOf(fields)
+	if rt.NumField() != len(fields) || rt.Field(0).Type != fields[0].Type {
+		t.Errorf("StructOf returned incorrect fields: %v", rt)
+	}
 }
 
 func TestStructOfTooManyFields(t *testing.T) {
@@ -6161,8 +6163,6 @@ func TestStructOfTooManyFields(t *testing.T) {
 		t.Errorf("Expected method `After` to be found")
 	}
 }
-
-*/
 
 func TestStructOfDifferentPkgPath(t *testing.T) {
 	fields := []StructField{
@@ -7928,6 +7928,115 @@ func TestMapIterDelete1(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Errorf("iterator returned wrong number of elements: got %d, want 1", len(got))
+	}
+}
+
+func TestTinyMapIterSetAllocations(t *testing.T) {
+	m := ValueOf(map[int]int{1: 2, 3: 4})
+	iter := m.MapRange()
+	key, value := 0, 0
+	k, v := ValueOf(&key).Elem(), ValueOf(&value).Elem()
+	if got := testing.AllocsPerRun(10, func() {
+		iter.Reset(m)
+		for iter.Next() {
+			k.SetIterKey(iter)
+			v.SetIterValue(iter)
+		}
+	}); got != 0 {
+		t.Errorf("reusing a map iterator allocated %g times, want 0", got)
+	}
+}
+
+func TestTinyMapIterSnapshots(t *testing.T) {
+	m := map[string][3]int{"one": {1, 2, 3}, "two": {4, 5, 6}, "three": {7, 8, 9}}
+	type entry struct {
+		key, value Value
+		want       [3]int
+	}
+	var entries []entry
+	iter := ValueOf(m).MapRange()
+	for iter.Next() {
+		key, value := iter.Key(), iter.Value()
+		if key.CanAddr() || value.CanAddr() {
+			t.Fatal("iterator snapshots are addressable")
+		}
+		entries = append(entries, entry{key, value, m[key.String()]})
+	}
+	for key := range m {
+		m[key] = [3]int{-1, -1, -1}
+		delete(m, key)
+	}
+	iter.Reset(Value{})
+	runtime.GC()
+	for _, entry := range entries {
+		if got := entry.value.Interface().([3]int); got != entry.want {
+			t.Errorf("retained value for %q = %v, want %v", entry.key.String(), got, entry.want)
+		}
+	}
+}
+
+func TestTinyMapIterGrow(t *testing.T) {
+	m := make(map[int]int)
+	for i := 0; i < 32; i++ {
+		m[i] = i
+	}
+	iter := ValueOf(m).MapRange()
+	if !iter.Next() {
+		t.Fatal("empty iterator")
+	}
+	first := int(iter.Key().Int())
+	for i := 32; i < 512; i++ {
+		m[i] = i
+	}
+	for i := 0; i < 512; i++ {
+		m[i] = -i
+	}
+	deleted := (first + 1) % 32
+	delete(m, deleted)
+	seen := map[int]bool{first: true}
+	for iter.Next() {
+		key, value := int(iter.Key().Int()), int(iter.Value().Int())
+		if seen[key] {
+			t.Fatalf("duplicate key %d after growth", key)
+		}
+		if want, ok := m[key]; !ok || value != want {
+			t.Fatalf("entry (%d, %d) after growth, want (%d, %d), present %v", key, value, key, want, ok)
+		}
+		seen[key] = true
+	}
+	for i := 0; i < 32; i++ {
+		if i != deleted && !seen[i] {
+			t.Errorf("missed original key %d after growth", i)
+		}
+	}
+}
+
+func TestTinyMapIterIndirectEntries(t *testing.T) {
+	var key, value [256]byte
+	key[0], key[255] = 1, 2
+	value[0], value[255] = 3, 4
+	m := map[[256]byte][256]byte{key: value}
+	iter := ValueOf(m).MapRange()
+	var gotKey, gotValue [256]byte
+	k, v := ValueOf(&gotKey).Elem(), ValueOf(&gotValue).Elem()
+	if !iter.Next() {
+		t.Fatal("empty iterator")
+	}
+	k.SetIterKey(iter)
+	v.SetIterValue(iter)
+	if gotKey != key || gotValue != value {
+		t.Fatal("incorrect indirect entry")
+	}
+	snapshotKey, snapshotValue := iter.Key(), iter.Value()
+	delete(m, key)
+	iter.Reset(Value{})
+	runtime.GC()
+	if snapshotKey.Interface().([256]byte) != key || snapshotValue.Interface().([256]byte) != value {
+		t.Fatal("indirect snapshots changed")
+	}
+	empty := ValueOf(map[struct{}]struct{}{{}: {}}).MapRange()
+	if !empty.Next() || empty.Key().Interface() != (struct{}{}) || empty.Value().Interface() != (struct{}{}) || empty.Next() {
+		t.Fatal("incorrect zero-sized entry")
 	}
 }
 

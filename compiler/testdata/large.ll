@@ -681,12 +681,11 @@ entry:
 ; Function Attrs: nounwind
 define hidden i1 @main.isZeroLargeValue(ptr readonly dereferenceable_or_null(1025) %value, ptr %context) unnamed_addr #1 {
 entry:
-  %stackalloc = alloca i8, align 1
-  %"main.largeValue{}:main.largeValue" = call align 1 dereferenceable(1025) ptr @runtime.alloc(i32 1025, ptr nonnull inttoptr (i32 3 to ptr), ptr undef) #14
-  call void @runtime.trackPointer(ptr nonnull %"main.largeValue{}:main.largeValue", ptr nonnull %stackalloc, ptr undef) #14
-  %arraycmp = call i1 @runtime.memequal(ptr %value, ptr nonnull %"main.largeValue{}:main.largeValue", i32 1025, ptr undef) #14
+  %arraycmp = call i1 @runtime.memiszero(ptr %value, i32 1025, ptr undef) #14
   ret i1 %arraycmp
 }
+
+declare i1 @runtime.memiszero(ptr, i32, ptr) #0
 
 ; Function Attrs: nounwind
 define hidden i8 @main.indexZeroLargeValue(i32 %i, ptr %context) unnamed_addr #1 {
