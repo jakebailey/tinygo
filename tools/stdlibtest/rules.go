@@ -50,8 +50,15 @@ func rulesFor(target targetInfo, opts options, hostOS string) ruleSet {
 	r.skipPackage("log")
 	r.skipPackage("log/slog")
 	r.skipPackage("testing/slogtest")
-	// Signal tests need signal_ignored and runtime_doAllThreadsSyscall.
-	r.skipPackage("os/signal")
+	// Unix signal runtime support is enabled for Linux stdlib tests.
+	if !linux {
+		r.skipPackage("os/signal")
+	} else {
+		// TestStop and TestNohup expect Go's default SIGUSR1 handler to ignore
+		// uncaught SIGUSR1; TestSignalTrace needs runtime/trace;
+		// TestTerminalSignal needs SysProcAttr.Setctty.
+		r.skipTest("os/signal", `^(TestStop|TestNohup|TestSignalTrace|TestTerminalSignal)$`)
+	}
 	// The plugin test programs fail to link libdl.
 	r.skipPackage("plugin")
 	// Weak pointers stay non-nil after GC and after a finalizer is enqueued.

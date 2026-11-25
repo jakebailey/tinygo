@@ -384,16 +384,25 @@ var hasSignals bool
 // signals are checked.
 var signalFutex futex.Futex
 
+const maxSignals = 3 * 32
+
 // Mask of signals that have been received. The signal handler atomically ORs
-// signals into this value.
-var receivedSignals atomic.Uint32
+// signals into this array.
+var receivedSignals [3]atomic.Uint32
+
+func hasReceivedSignal() bool {
+	for i := range receivedSignals {
+		if receivedSignals[i].Load() != 0 {
+			return true
+		}
+	}
+	return false
+}
 
 //go:linkname signal_enable os/signal.signal_enable
 func signal_enable(s uint32) {
-	if s >= 32 {
-		// TODO: to support higher signal numbers, we need to turn
-		// receivedSignals into a uint32 array.
-		runtimePanicAt(returnAddress(0), errUnsupportedSignal)
+	if s >= maxSignals {
+		return
 	}
 
 	// Non-atomic on purpose. Only waitForEvents reads hasSignals, and the
@@ -434,28 +443,32 @@ func signalWatcher() {
 
 //go:linkname signal_ignore os/signal.signal_ignore
 func signal_ignore(s uint32) {
-	if s >= 32 {
-		// TODO: to support higher signal numbers, we need to turn
-		// receivedSignals into a uint32 array.
-		runtimePanicAt(returnAddress(0), errUnsupportedSignal)
+	if s >= maxSignals {
+		return
 	}
 	tinygo_signal_ignore(s)
 }
 
 //go:linkname signal_disable os/signal.signal_disable
 func signal_disable(s uint32) {
-	if s >= 32 {
-		// TODO: to support higher signal numbers, we need to turn
-		// receivedSignals into a uint32 array.
-		runtimePanicAt(returnAddress(0), errUnsupportedSignal)
+	if s >= maxSignals {
+		return
 	}
 	tinygo_signal_disable(s)
+}
+
+//go:linkname signal_ignored os/signal.signal_ignored
+func signal_ignored(s uint32) bool {
+	if s >= maxSignals {
+		return false
+	}
+	return tinygo_signal_ignored(s) != 0
 }
 
 //go:linkname signal_waitUntilIdle os/signal.signalWaitUntilIdle
 func signal_waitUntilIdle() {
 	// Wait until signal_recv has processed all signals.
-	for receivedSignals.Load() != 0 {
+	for hasReceivedSignal() {
 		Gosched()
 	}
 }
@@ -469,11 +482,17 @@ func tinygo_signal_ignore(s uint32)
 //export tinygo_signal_disable
 func tinygo_signal_disable(s uint32)
 
+//export tinygo_signal_ignored
+func tinygo_signal_ignored(s uint32) int32
+
 // void tinygo_signal_handler(int sig);
 //
 //export tinygo_signal_handler
 func tinygo_signal_handler(s int32) {
-	receivedSignals.Or(uint32(1) << uint32(s))
+	if s < 0 || uint32(s) >= maxSignals {
+		return
+	}
+	receivedSignals[uint32(s)/32].Or(uint32(1) << (uint32(s) % 32))
 
 	// Notify the main thread that there was a signal.
 	// This will exit the call to Wait or WaitUntil early.
@@ -493,29 +512,25 @@ var signalRecvWaiter atomic.Pointer[task.Task]
 func signal_recv() uint32 {
 	// Function called from os/signal to get the next received signal.
 	for {
-		val := receivedSignals.Load()
-		if val == 0 {
-			// There are no signals to receive. Sleep until there are.
-			if signalRecvWaiter.Swap(task.Current()) != nil {
-				// We expect only a single goroutine to call signal_recv.
-				runtimeFatal("signal_recv called concurrently")
+		for i := range receivedSignals {
+			if val := receivedSignals[i].Load(); val != 0 {
+				bit := uint32(bits.TrailingZeros32(val))
+				receivedSignals[i].And(^(uint32(1) << bit))
+				return uint32(i)*32 + bit
 			}
-			// A signal that arrived before the waiter was published found no waiter.
-			// Take the waiter back and loop, unless checkSignals already took it.
-			if receivedSignals.Load() != 0 && signalRecvWaiter.Swap(nil) != nil {
-				continue
-			}
-			task.Pause()
-			continue
 		}
 
-		// Extract the lowest numbered signal number from receivedSignals.
-		num := uint32(bits.TrailingZeros32(val))
-
-		// Atomically clear the signal number from receivedSignals.
-		receivedSignals.And(^(uint32(1) << num))
-
-		return num
+		// There are no signals to receive. Sleep until there are.
+		if signalRecvWaiter.Swap(task.Current()) != nil {
+			// We expect only a single goroutine to call signal_recv.
+			runtimeFatal("signal_recv called concurrently")
+		}
+		// A signal that arrived before the waiter was published found no waiter.
+		// Take the waiter back and loop, unless checkSignals already took it.
+		if hasReceivedSignal() && signalRecvWaiter.Swap(nil) != nil {
+			continue
+		}
+		task.Pause()
 	}
 }
 
@@ -523,7 +538,7 @@ func signal_recv() uint32 {
 // Return true if it was reactivated (and therefore the scheduler should run
 // again), and false otherwise.
 func checkSignals() bool {
-	if receivedSignals.Load() != 0 {
+	if hasReceivedSignal() {
 		if waiter := signalRecvWaiter.Swap(nil); waiter != nil {
 			scheduleTask(waiter)
 			return true
