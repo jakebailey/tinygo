@@ -119,3 +119,77 @@ func TestWeakPointerFinalizer(t *testing.T) {
 		t.Fatal("weak pointer non-nil after finalizer ran")
 	}
 }
+
+//go:noinline
+func makeDroppedCleanup(count *atomic.Int32, gotArg *atomic.Int32, stoppedCount *atomic.Int32, sawNil *atomic.Bool) weak.Pointer[weakTestObj] {
+	obj := &weakTestObj{a: 5, b: 6}
+	wp := weak.Make(obj)
+	runtime.AddCleanup(obj, func(v int32) {
+		if wp.Value() == nil {
+			sawNil.Store(true)
+		}
+		gotArg.Store(v)
+		count.Add(1)
+	}, int32(42))
+	runtime.AddCleanup(obj, func(v int32) {
+		count.Add(v)
+	}, int32(10))
+	c := runtime.AddCleanup(obj, func(v int32) {
+		stoppedCount.Add(v)
+	}, int32(1))
+	c.Stop()
+	return wp
+}
+
+func TestAddCleanup(t *testing.T) {
+	var zero runtime.Cleanup
+	zero.Stop()
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("AddCleanup(nil, ...) did not panic")
+			}
+		}()
+		runtime.AddCleanup((*weakTestObj)(nil), func(int) {}, 0)
+	}()
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("AddCleanup(p, ..., p) did not panic")
+			}
+		}()
+		p := &weakTestObj{a: 1}
+		runtime.AddCleanup(p, func(*weakTestObj) {}, p)
+	}()
+
+	var count, gotArg, stoppedCount atomic.Int32
+	var sawNil atomic.Bool
+	wp := makeDroppedCleanup(&count, &gotArg, &stoppedCount, &sawNil)
+
+	scrubWeakStack(16)
+	runtime.GC()
+	runtime.GC()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for count.Load() < 11 && time.Now().Before(deadline) {
+		runtime.Gosched()
+		time.Sleep(time.Millisecond)
+	}
+	if count.Load() != 11 {
+		t.Fatalf("cleanup count = %d, want 11", count.Load())
+	}
+	if gotArg.Load() != 42 {
+		t.Fatalf("cleanup arg = %d, want 42", gotArg.Load())
+	}
+	if stoppedCount.Load() != 0 {
+		t.Fatalf("stopped cleanup ran %d times", stoppedCount.Load())
+	}
+	if !sawNil.Load() {
+		t.Fatal("weak pointer was non-nil inside cleanup")
+	}
+	if wp.Value() != nil {
+		t.Fatal("weak pointer non-nil after cleanup ran")
+	}
+}

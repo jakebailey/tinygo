@@ -310,6 +310,87 @@ func scanFinalizers() {
 	}
 }
 
+type cleanupEntry struct {
+	next *cleanupEntry
+	obj  uintptr
+	fn   func()
+}
+
+var (
+	cleanups       *cleanupEntry
+	cleanupPending *cleanupEntry
+	hasCleanups    bool
+)
+
+func registerCleanup(ptr unsafe.Pointer, fn func()) Cleanup {
+	addr := uintptr(ptr)
+	entry := &cleanupEntry{
+		obj: encodeFinalizerPtr(addr),
+		fn:  fn,
+	}
+	gcLock.Lock()
+	if !isOnHeap(addr) {
+		gcLock.Unlock()
+		return Cleanup{}
+	}
+	hasCleanups = true
+	entry.next = cleanups
+	cleanups = entry
+	finalizersSinceGC++
+	spawn := !finalizerRunnerStarted
+	finalizerRunnerStarted = true
+	gcLock.Unlock()
+	if spawn {
+		spawnFinalizerRunner()
+	}
+	KeepAlive(ptr)
+	return Cleanup{entry: entry}
+}
+
+func stopCleanup(entry *cleanupEntry) {
+	gcLock.Lock()
+	entry.fn = nil
+	gcLock.Unlock()
+}
+
+func scanCleanups() {
+	if !hasCleanups {
+		return
+	}
+	prev := &cleanups
+	for n := *prev; n != nil; {
+		next := n.next
+		if n.fn == nil {
+			*prev = next
+			n.next = nil
+		} else if blockFromAddr(decodeFinalizerPtr(n.obj)).findHead().state() != blockStateMark {
+			*prev = next
+			n.next = cleanupPending
+			cleanupPending = n
+			finalizersQueued = true
+		} else {
+			prev = &n.next
+		}
+		n = next
+	}
+}
+
+func dequeueCleanup() (func(), bool) {
+	gcLock.Lock()
+	for cleanupPending != nil {
+		n := cleanupPending
+		cleanupPending = n.next
+		fn := n.fn
+		*n = cleanupEntry{}
+		if fn != nil {
+			gcLock.Unlock()
+			return fn, true
+		}
+	}
+	gcLock.Unlock()
+	return nil, false
+}
+
 // drainFinalizers runs every queued finalizer, with gcLock released so the
 // finalizers may allocate.
 func drainFinalizers() {
@@ -322,10 +403,15 @@ func drainFinalizers() {
 	finalizerDraining = true
 	for {
 		n, objPtr := dequeueFinalizer()
-		if n == nil {
-			break
+		if n != nil {
+			callFinalizer(objPtr, n.fn)
+			continue
 		}
-		callFinalizer(objPtr, n.fn)
+		if fn, ok := dequeueCleanup(); ok {
+			fn()
+			continue
+		}
+		break
 	}
 	finalizerDraining = false
 }
