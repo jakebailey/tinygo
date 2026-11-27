@@ -90,6 +90,16 @@ func memequal(x, y unsafe.Pointer, n uintptr) bool {
 	return true
 }
 
+// Report whether all n bytes starting at p are zero.
+func memiszero(p unsafe.Pointer, n uintptr) bool {
+	for i := uintptr(0); i < n; i++ {
+		if *(*uint8)(unsafe.Add(p, i)) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func nanotime() int64 {
 	return ticksToNanoseconds(ticks())
 }

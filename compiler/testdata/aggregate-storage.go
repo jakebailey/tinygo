@@ -5,6 +5,12 @@ type storageValue struct {
 	ptr  *byte
 }
 
+type storageWithBlank struct {
+	data  [4096]byte
+	_     [16]byte
+	score float64
+}
+
 func resetStorage(value *storageValue) {
 	*value = storageValue{}
 }
@@ -32,4 +38,28 @@ func compareArray(src, other *[4096]byte) bool {
 
 func passStorage(value storageValue) byte {
 	return value.data[0]
+}
+
+func compareStorage(x, y *storageValue) bool {
+	return *x == *y
+}
+
+func compareZeroStorage(x *storageValue) bool {
+	return *x == storageValue{}
+}
+
+func compareStorageWithBlank(x, y *storageWithBlank) bool {
+	return *x == *y
+}
+
+func compareNonBinaryArray(x, y *[1025]float64) bool {
+	return *x == *y
+}
+
+func compareStoragePhi(x, y *storageValue, flag bool) bool {
+	return *x == *y && flag
+}
+
+func compareNonBinaryArrayPhi(x, y *[1025]float64, flag bool) bool {
+	return *x == *y && flag
 }

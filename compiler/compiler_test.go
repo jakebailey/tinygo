@@ -501,6 +501,38 @@ func TestLargeAggregateDebugValue(t *testing.T) {
 	}
 }
 
+func TestLargeAggregateCompare(t *testing.T) {
+	mod, errs := testCompilePackage(t, &compileopts.Options{Target: "wasm"}, "aggregate-storage.go")
+	defer mod.Dispose()
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	if err := llvm.VerifyModule(mod, llvm.ReturnStatusAction); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"main.compareStorage", "main.compareZeroStorage", "main.compareStorageWithBlank", "main.compareNonBinaryArray"} {
+		ir := mod.NamedFunction(name).String()
+		if strings.Contains(ir, "load %main.storageValue") || strings.Contains(ir, "load %main.storageWithBlank") || strings.Contains(ir, "load [4096 x i8]") || strings.Contains(ir, "load [1025 x double]") {
+			t.Errorf("%s loads a full aggregate:\n%s", name, ir)
+		}
+		if strings.Contains(ir, "@runtime.alloc(") {
+			t.Errorf("%s allocates memory for comparison:\n%s", name, ir)
+		}
+	}
+	if ir := mod.NamedFunction("main.compareStorage").String(); !strings.Contains(ir, "@runtime.memequal(") {
+		t.Errorf("compareStorage does not use memequal:\n%s", ir)
+	}
+	if ir := mod.NamedFunction("main.compareZeroStorage").String(); !strings.Contains(ir, "@runtime.memiszero(") {
+		t.Errorf("compareZeroStorage does not use memiszero:\n%s", ir)
+	}
+	if ir := mod.NamedFunction("main.compareStorageWithBlank").String(); strings.Contains(ir, "i32 16,") {
+		t.Errorf("compareStorageWithBlank compares the blank field:\n%s", ir)
+	}
+	if ir := mod.NamedFunction("main.compareNonBinaryArray").String(); !strings.Contains(ir, "fcmp oeq double") {
+		t.Errorf("compareNonBinaryArray does not compare elements with fcmp oeq:\n%s", ir)
+	}
+}
+
 func TestLargeSliceElement(t *testing.T) {
 	options := &compileopts.Options{GOOS: "linux", GOARCH: "amd64"}
 	mod, errs := testCompilePackage(t, options, "slice-large-element.go")
