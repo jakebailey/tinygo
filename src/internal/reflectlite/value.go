@@ -1692,19 +1692,17 @@ func convertOp(src Value, typ Type) (Value, bool) {
 				}
 			}
 		case String:
-			if !src.typecode.elem().isNamed() {
-				switch src.Type().Elem().Kind() {
-				case Uint8:
-					return cvtBytesString(src, rtype), true
-				case Int32:
-					return cvtRunesString(src, rtype), true
-				}
+			switch src.Type().Elem().Kind() {
+			case Uint8:
+				return cvtBytesString(src, rtype), true
+			case Int32:
+				return cvtRunesString(src, rtype), true
 			}
 		}
 
 	case String:
 		rtype := typ.(*RawType)
-		if typ.Kind() == Slice && !rtype.elem().isNamed() {
+		if typ.Kind() == Slice {
 			switch typ.Elem().Kind() {
 			case Uint8:
 				return cvtStringBytes(src, rtype), true

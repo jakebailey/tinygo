@@ -1120,7 +1120,7 @@ func (r *RawType) ConvertibleTo(u *RawType) bool {
 
 		case String:
 			// bytes or runes
-			if !r.elem().isNamed() && (r.elem().Kind() == Uint8 || r.elem().Kind() == Int32) {
+			if r.elem().Kind() == Uint8 || r.elem().Kind() == Int32 {
 				return true
 			}
 
@@ -1128,7 +1128,7 @@ func (r *RawType) ConvertibleTo(u *RawType) bool {
 
 	case String:
 		// bytes or runes
-		if u.Kind() == Slice && !u.elem().isNamed() && (u.elem().Kind() == Uint8 || u.elem().Kind() == Int32) {
+		if u.Kind() == Slice && (u.elem().Kind() == Uint8 || u.elem().Kind() == Int32) {
 			return true
 		}
 

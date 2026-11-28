@@ -910,10 +910,21 @@ func TestConvertBasic(t *testing.T) {
 	}
 
 	type namedString string
+	type namedByte byte
+	type namedRune rune
 
 	c = v.Convert(TypeOf(namedString("")))
 	if c.Type().Kind() != String || c.Type().Name() != "namedString" {
 		t.Errorf("Convert(string -> namedString")
+	}
+
+	b := v.Convert(TypeFor[[]namedByte]())
+	if got := b.Convert(TypeFor[string]()).String(); got != "hello" {
+		t.Errorf("Convert(string -> []namedByte -> string) = %q, want %q", got, "hello")
+	}
+	r := v.Convert(TypeFor[[]namedRune]())
+	if got := r.Convert(TypeFor[string]()).String(); got != "hello" {
+		t.Errorf("Convert(string -> []namedRune -> string) = %q, want %q", got, "hello")
 	}
 }
 
