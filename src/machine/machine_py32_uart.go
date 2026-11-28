@@ -74,20 +74,20 @@ var usart1RX *UART
 
 func (uart *UART) writeByte(c byte) error {
 	retries := uart.txRetries
-	for retries > 0 && !usartTXReady(uart.Bus) {
+	for retries > 0 && !uartTXReady(uart.Bus) {
 		uartYield()
 		retries--
 	}
 	if retries <= 0 {
 		return errUARTWriteTimeout
 	}
-	writeUSARTData(uart.Bus, uint32(c))
+	uartWriteData(uart.Bus, uint32(c))
 	return nil
 }
 
 func (uart *UART) flush() {
 	retries := uart.txRetries
-	for retries > 0 && !usartTXComplete(uart.Bus) {
+	for retries > 0 && !uartTXComplete(uart.Bus) {
 		uartYield()
 		retries--
 	}

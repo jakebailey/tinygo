@@ -1,4 +1,4 @@
-//go:build baremetal && !(cortexm && qemu) && !attiny && !avrtiny && !gameboyadvance && !mk66f18 && !mimxrt1062 && !virt && !uefi
+//go:build baremetal && !(cortexm && qemu) && !attiny && !avrtiny && !gameboyadvance && !mk66f18 && !mimxrt1062 && !py32 && !virt && !uefi
 
 package runtime
 

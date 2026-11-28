@@ -83,6 +83,10 @@ func schedulerRunQueue() *task.Queue {
 }
 
 func scheduler(returnAtDeadlock bool) {
+	schedule(returnAtDeadlock)
+}
+
+func schedule(returnAtDeadlock bool) {
 	// The scheduler should never be run when using -scheduler=none. Meaning,
 	// this code should be unreachable.
 	runtimeFatal("unreachable: scheduler must not be called with the 'none' scheduler")

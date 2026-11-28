@@ -2,8 +2,8 @@
     "inherits": [
         "cortex-m0plus"
     ],
-    "scheduler": "none",
-    "gc": "none",
+    "scheduler": "unified",
+    "gc": "conservative",
     "serial": "uart",
     "build-tags": [
         "py32",

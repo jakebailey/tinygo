@@ -1,0 +1,8 @@
+main stays on the main thread
+locked syscall keeps its thread
+locked syscall waits for a slot
+locked goroutines share scheduler
+locked goroutine yields to timer
+locked goroutines: 499500
+exited locked threads were distinct: true
+ok

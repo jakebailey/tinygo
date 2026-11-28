@@ -1,4 +1,4 @@
-//go:build esp32s3 && scheduler.cores
+//go:build esp32s3 && exec.multicore
 
 package runtime
 
@@ -47,7 +47,7 @@ const (
 
 var (
 	flashSafeLock     spinLock
-	flashPauseRequest [numCPU]atomic.Uint32
+	flashPauseRequest [maxCPU]atomic.Uint32
 	flashParkState    uint32
 )
 

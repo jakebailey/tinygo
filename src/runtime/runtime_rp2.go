@@ -18,7 +18,8 @@ const (
 	rp2SIOFIFOCommandFlashSafe
 )
 
-const numCPU = 2
+const maxCPU = 2
+
 const numSpinlocks = 32
 
 // machineTicks is provided by package machine.
@@ -59,6 +60,10 @@ func sleepTicks(d timeUnit) {
 // Start the secondary cores for this chip.
 // On the RP2040/RP2350, there is only one other core to start.
 func startSecondaryCores() {
+	if numCPU < 2 {
+		return
+	}
+
 	// Start the second core of the RP2040/RP2350.
 	// See sections 2.8.2 and 5.3 in the datasheets for RP2040 and RP2350 respectively.
 	seq := 0
@@ -120,7 +125,7 @@ func runCore1() {
 
 	// Now start running the scheduler on this core.
 	schedulerLock.Lock()
-	scheduler(false)
+	schedule(false)
 	schedulerLock.Unlock()
 
 	// The main function returned.

@@ -1,4 +1,4 @@
-//go:build scheduler.cores && !rp2040 && !rp2350
+//go:build exec.multicore && !rp2040 && !rp2350
 
 package runtime
 
@@ -6,13 +6,13 @@ import "sync/atomic"
 
 var (
 	// Set to 1 by interruptSleepTicksMulticore to end a sleep in sleepTicks.
-	sleepWake [numCPU]atomic.Uint32
+	sleepWake [maxCPU]atomic.Uint32
 
 	// Set to 1 while a core waits or sleeps with no goroutine to run.
-	coreIdle [numCPU]atomic.Uint32
+	coreIdle [maxCPU]atomic.Uint32
 
 	// Set to 1 by schedulerEndWait to end a wait in schedulerUnlockAndWait.
-	schedulerWakePending [numCPU]atomic.Uint32
+	schedulerWakePending [maxCPU]atomic.Uint32
 )
 
 // Put the scheduler to sleep, since there are no tasks to run.

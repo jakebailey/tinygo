@@ -1,4 +1,4 @@
-//go:build (esp32 || esp32s3) && scheduler.cores
+//go:build (esp32 || esp32s3) && exec.multicore
 
 package runtime
 
@@ -94,7 +94,7 @@ func runCore1() {
 	waitForSecondaryCoresReady()
 
 	schedulerLock.Lock()
-	scheduler(false)
+	schedule(false)
 	schedulerLock.Unlock()
 
 	exit(0)

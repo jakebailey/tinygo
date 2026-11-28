@@ -250,13 +250,21 @@ func (b *builder) createRawSyscall(call *ssa.CallCommon) (llvm.Value, error) {
 }
 
 // createSyscall emits instructions for the syscall.Syscall* family of
-// functions, depending on the target OS/arch.
-func (b *builder) createSyscall(call *ssa.CallCommon) (llvm.Value, error) {
+// functions, depending on the target OS/arch. If blocking is set, the
+// scheduler may run other goroutines while the system call is in progress.
+func (b *builder) createSyscall(call *ssa.CallCommon, blocking bool) (llvm.Value, error) {
 	switch b.GOOS {
 	case "linux":
+		blocking = blocking && b.ExecutionMode == "workers"
+		if blocking {
+			b.createRuntimeCall("entersyscall", nil, "")
+		}
 		syscallResult, err := b.createRawSyscall(call)
 		if err != nil {
 			return syscallResult, err
+		}
+		if blocking {
+			b.createRuntimeCall("exitsyscall", nil, "")
 		}
 		// Return values: r0, r1 uintptr, err Errno
 		// Pseudocode:
@@ -326,6 +334,10 @@ func (b *builder) createSyscall(call *ssa.CallCommon) (llvm.Value, error) {
 		// On windows/386, we also need to save/restore the stack pointer. I'm
 		// not entirely sure why this is needed, but without it these calls
 		// change the stack pointer leading to a crash soon after.
+		blocking = blocking && b.ExecutionMode == "workers"
+		if blocking {
+			b.createRuntimeCall("entersyscall", nil, "")
+		}
 		setLastErrorCall := b.CreateCall(setLastError.GlobalValueType(), setLastError, []llvm.Value{llvm.ConstNull(b.i32)}, "")
 		var sp llvm.Value
 		if isI386 {
@@ -343,6 +355,9 @@ func (b *builder) createSyscall(call *ssa.CallCommon) (llvm.Value, error) {
 		}
 		if b.uintptrType != b.i32 {
 			errResult = b.CreateZExt(errResult, b.uintptrType, "err.uintptr")
+		}
+		if blocking {
+			b.createRuntimeCall("exitsyscall", nil, "")
 		}
 
 		// Return r1, 0, err
@@ -470,6 +485,12 @@ func (b *builder) createSyscalln(call *ssa.CallCommon) (llvm.Value, error) {
 
 	retType := b.ctx.StructType([]llvm.Type{b.uintptrType, b.uintptrType, b.uintptrType}, false)
 
+	// Other goroutines may run while the call blocks.
+	blocking := b.ExecutionMode == "workers"
+	if blocking {
+		b.createRuntimeCall("entersyscall", nil, "")
+	}
+
 	// Create the merge block where all cases converge.
 	mergeBB := b.insertBasicBlock("syscalln.merge")
 
@@ -544,6 +565,9 @@ func (b *builder) createSyscalln(call *ssa.CallCommon) (llvm.Value, error) {
 	b.SetInsertPointAtEnd(mergeBB)
 	phi := b.CreatePHI(retType, "syscalln.result")
 	phi.AddIncoming(incomingVals, incomingBlocks)
+	if blocking {
+		b.createRuntimeCall("exitsyscall", nil, "")
+	}
 	return phi, nil
 }
 

@@ -1,4 +1,4 @@
-//go:build tinygo.riscv && virt && !scheduler.cores
+//go:build tinygo.riscv && virt && !exec.multicore
 
 package runtime
 

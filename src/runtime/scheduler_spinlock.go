@@ -1,4 +1,4 @@
-//go:build scheduler.cores || rp2040 || rp2350 || (tinygo.riscv && virt)
+//go:build exec.multicore || rp2040 || rp2350 || (tinygo.riscv && virt)
 
 package runtime
 

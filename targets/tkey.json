@@ -8,7 +8,7 @@
 	"features": "+32bit,+c,+zmmul,-relax",
 	"arch": "rv32iczmmul",
 	"linkerscript": "targets/tkey.ld",
-	"scheduler": "none",
+	"scheduler": "unified",
 	"gc": "conservative",
 	"flash-command": "tkey-runapp {bin}",
 	"serial": "uart"

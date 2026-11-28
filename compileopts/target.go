@@ -38,6 +38,8 @@ type TargetSpec struct {
 	GC               string   `json:"gc,omitempty"`
 	PanicUnwind      string   `json:"panic-unwind,omitempty"`
 	Scheduler        string   `json:"scheduler,omitempty"`
+	StackSwitching   string   `json:"stack-switching,omitempty"`
+	MaxCores         uint32   `json:"max-cores,omitempty"`
 	Serial           string   `json:"serial,omitempty"` // which serial output to use (uart, usb, none)
 	Linker           string   `json:"linker,omitempty"`
 	LinkerFlavor     string   `json:"linker-flavor,omitempty"` // how to drive the configured linker (for example: gnu, coff, darwin)
@@ -253,10 +255,6 @@ func loadTarget(options *Options) (*TargetSpec, error) {
 		if strings.HasPrefix(flag, "-march=") {
 			return nil, fmt.Errorf("%s: use the arch property instead of %s in cflags", options.Target, flag)
 		}
-	}
-
-	if spec.Scheduler == "asyncify" {
-		spec.ExtraFiles = append(spec.ExtraFiles, "src/internal/task/task_asyncify_wasm.S")
 	}
 
 	return spec, nil
@@ -480,7 +478,7 @@ func defaultTarget(options *Options) (*TargetSpec, error) {
 			platformVersion = "11.0.0" // first macosx platform with arm64 support
 		}
 		llvmvendor = "apple"
-		spec.Scheduler = "threads"
+		spec.Scheduler = "unified"
 		spec.Linker = "ld.lld"
 		spec.Libc = "darwin-libSystem"
 		// Use macosx* instead of darwin, otherwise darwin/arm64 will refer to
@@ -494,13 +492,13 @@ func defaultTarget(options *Options) (*TargetSpec, error) {
 		)
 		spec.ExtraFiles = append(spec.ExtraFiles,
 			"src/internal/futex/futex_darwin.c",
-			"src/internal/task/task_threads.c",
 			"src/runtime/os_darwin.c",
 			"src/runtime/runtime_unix.c",
+			"src/runtime/scheduler_workers.c",
 			"src/runtime/signal.c")
 	case "linux":
 		spec.GC = "boehm"
-		spec.Scheduler = "threads"
+		spec.Scheduler = "unified"
 		spec.Linker = "ld.lld"
 		spec.RTLib = "compiler-rt"
 		spec.Libc = "musl"
@@ -537,12 +535,12 @@ func defaultTarget(options *Options) (*TargetSpec, error) {
 		}
 		spec.ExtraFiles = append(spec.ExtraFiles,
 			"src/internal/futex/futex_linux.c",
-			"src/internal/task/task_threads.c",
 			"src/runtime/runtime_unix.c",
+			"src/runtime/scheduler_workers.c",
 			"src/runtime/signal.c")
 	case "windows":
 		spec.GC = "boehm"
-		spec.Scheduler = "tasks"
+		spec.Scheduler = "unified"
 		spec.Linker = "ld.lld"
 		spec.Libc = "mingw-w64"
 		switch options.GOARCH {
@@ -580,6 +578,14 @@ func defaultTarget(options *Options) (*TargetSpec, error) {
 		)
 		spec.ExtraFiles = append(spec.ExtraFiles,
 			"src/runtime/runtime_windows.c")
+		if options.GOARCH != "386" {
+			// The mingw TLS directory is only pulled in after LTO, which is
+			// too late for lld to keep it as a GC root.
+			spec.LDFlags = append(spec.LDFlags, "--undefined=_tls_used")
+			spec.ExtraFiles = append(spec.ExtraFiles,
+				"src/internal/futex/futex_windows.c",
+				"src/runtime/scheduler_workers_windows.c")
+		}
 	case "wasm", "wasip1", "wasip2":
 		return nil, fmt.Errorf("GOOS=%s but GOARCH is unset. Please set GOARCH to wasm", options.GOOS)
 	default:

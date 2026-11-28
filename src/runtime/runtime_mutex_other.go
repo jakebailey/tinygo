@@ -1,4 +1,4 @@
-//go:build !scheduler.cores
+//go:build !exec.multicore && !exec.workers
 
 package runtime
 

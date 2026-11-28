@@ -1,4 +1,4 @@
-//go:build (esp32 || esp32s3 || esp32p4) && scheduler.cores
+//go:build (esp32 || esp32s3 || esp32p4) && exec.multicore
 
 package runtime
 
@@ -9,10 +9,12 @@ import (
 	"unsafe"
 )
 
+const maxCPU = 2
+
 var (
 	core1Started   atomic.Uint32
-	gcPauseRequest [numCPU]atomic.Uint32
-	gcSignalWait   [numCPU]atomic.Uint32
+	gcPauseRequest [maxCPU]atomic.Uint32
+	gcSignalWait   [maxCPU]atomic.Uint32
 )
 
 func spinLoopWait() {

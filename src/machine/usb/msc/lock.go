@@ -6,7 +6,7 @@ import (
 )
 
 // spinLock guards state shared by the USB interrupt and processTasks, also when
-// processTasks runs on the other core with scheduler=cores.
+// processTasks runs on the other core with -cores=2.
 type spinLock struct {
 	held atomic.Uint32
 }

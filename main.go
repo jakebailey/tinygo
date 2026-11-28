@@ -1861,7 +1861,8 @@ func main() {
 	libc := flag.String("libc", "", "libc to use on linux (musl, glibc)")
 	panicStrategy := flag.String("panic", "print", "panic strategy (print, trap)")
 	panicUnwind := flag.String("panic-unwind", "", "panic unwind strategy (auto, explicit, none)")
-	scheduler := flag.String("scheduler", "", "which scheduler to use (none, tasks, cores, threads, asyncify)")
+	scheduler := flag.String("scheduler", "", "which scheduler to use (none, unified; deprecated aliases: tasks, asyncify, cores, threads)")
+	cores := flag.Int("cores", 0, "number of embedded CPU cores to use (default 1)")
 	serial := flag.String("serial", "", "which serial output to use (none, uart, usb, rtt)")
 	work := flag.Bool("work", false, "print the name of the temporary build directory and do not delete this directory on exit")
 	interpTimeout := flag.Duration("interp-timeout", 180*time.Second, "interp optimization pass timeout")
@@ -2026,6 +2027,7 @@ func main() {
 		PanicStrategy:           *panicStrategy,
 		PanicUnwind:             *panicUnwind,
 		Scheduler:               *scheduler,
+		Cores:                   *cores,
 		Serial:                  *serial,
 		Work:                    *work,
 		InterpTimeout:           *interpTimeout,
@@ -2066,6 +2068,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, err.Error())
 		usage(command)
 		os.Exit(1)
+	}
+	switch options.Scheduler {
+	case "cores":
+		fmt.Fprintln(os.Stderr, "warning: -scheduler=cores is deprecated; use -scheduler=unified -cores=N")
+	case "tasks", "asyncify", "threads":
+		fmt.Fprintf(os.Stderr, "warning: -scheduler=%s is deprecated; use -scheduler=unified\n", options.Scheduler)
 	}
 
 	if *cpuprofile != "" {

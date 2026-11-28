@@ -397,10 +397,11 @@ func signal_enable(s uint32) {
 	}
 
 	// Non-atomic on purpose. Only waitForEvents reads hasSignals, and the
-	// threads scheduler never calls it, so the watcher does not depend on it.
+	// parallel schedulers never call it, so the watcher does not depend on it.
 	hasSignals = true
 
-	// Under the threads scheduler only sleepTicks reaches checkSignals.
+	// The parallel schedulers don't call waitForEvents, so they need a
+	// goroutine that waits for signals.
 	startSignalWatcher()
 
 	// It's easier to implement this function in C.
@@ -410,9 +411,10 @@ func signal_enable(s uint32) {
 // signalWatcherStarted is never cleared, the watcher never exits.
 var signalWatcherStarted atomic.Bool
 
-// startSignalWatcher starts the watcher once, under the threads scheduler only.
+// startSignalWatcher starts the watcher once, under the parallel schedulers
+// only.
 func startSignalWatcher() {
-	if hasScheduler || !hasParallelism {
+	if !hasParallelism {
 		return
 	}
 	if !signalWatcherStarted.Swap(true) {
@@ -425,7 +427,9 @@ func startSignalWatcher() {
 func signalWatcher() {
 	for {
 		// Block until the signal handler bumps the futex from 0 to 1.
+		entersyscall()
 		signalFutex.Wait(0)
+		exitsyscall()
 		if signalFutex.Swap(0) != 0 {
 			checkSignals()
 		}

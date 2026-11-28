@@ -56,6 +56,8 @@ type Config struct {
 
 	// Various compiler options that determine how code is generated.
 	Scheduler          string
+	ExecutionMode      string
+	StackSwitching     string
 	AutomaticStackSize bool
 	DefaultStackSize   uint64
 	MaxStackAlloc      uint64
@@ -2533,7 +2535,8 @@ func (b *builder) createFunctionCall(instr *ssa.CallCommon) (llvm.Value, error) 
 				return val, err
 			}
 		case (strings.HasPrefix(name, "syscall.Syscall") || strings.HasPrefix(name, "syscall.RawSyscall") || strings.HasPrefix(name, "golang.org/x/sys/unix.Syscall") || strings.HasPrefix(name, "golang.org/x/sys/unix.RawSyscall")) && name != "syscall.SyscallN":
-			return b.createSyscall(instr)
+			blocking := !strings.Contains(name, "RawSyscall")
+			return b.createSyscall(instr, blocking)
 		case name == "syscall.syscalln":
 			if b.GOOS == "windows" {
 				return b.createSyscalln(instr)

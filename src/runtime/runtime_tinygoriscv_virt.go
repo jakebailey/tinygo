@@ -13,7 +13,7 @@ import (
 // This file implements the VirtIO RISC-V interface implemented in QEMU, which
 // is an interface designed for emulation.
 
-const numCPU = 4
+const maxCPU = 4
 
 //export main
 func main() {
@@ -31,7 +31,7 @@ func main() {
 		// Wait until we get the signal this hart is ready to start.
 		// Note that interrupts are disabled, which means that the interrupt
 		// isn't actually taken. But we can still wait for it using wfi.
-		// If the cores scheduler is not used, we'll stay in this state forever.
+		// Without multicore execution, we'll stay in this state forever.
 		for riscv.MIP.Get()&riscv.MIP_MSIP == 0 {
 			riscv.Asm("wfi")
 		}
@@ -46,7 +46,7 @@ func main() {
 
 		// Now start running the scheduler on this core.
 		schedulerLock.Lock()
-		scheduler(false)
+		schedule(false)
 
 		// The scheduler exited, which means main returned and the program
 		// should exit immediately.
@@ -114,10 +114,10 @@ func handleInterrupt() {
 
 var (
 	// State used to request a GC pause on each hart.
-	gcPauseRequest [numCPU]atomic.Uint32
+	gcPauseRequest [maxCPU]atomic.Uint32
 
 	// State used to signal the next GC phase to each paused hart.
-	gcSignalWait [numCPU]atomic.Uint32
+	gcSignalWait [maxCPU]atomic.Uint32
 )
 
 // The GC interrupted this core for the stop-the-world phase.

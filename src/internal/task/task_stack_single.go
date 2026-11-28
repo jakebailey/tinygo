@@ -1,4 +1,4 @@
-//go:build scheduler.tasks
+//go:build exec.single
 
 package task
 
@@ -15,6 +15,13 @@ func Current() *Task {
 // Pause suspends the current task and returns to the scheduler.
 // This function may only be called when running on a goroutine stack, not when running on the system stack or in an interrupt.
 func Pause() {
+	lockScheduler()
+	PauseLocked()
+}
+
+// PauseLocked is the same as Pause, but must be called with the scheduler lock
+// already taken.
+func PauseLocked() {
 	// Check whether the canary (the lowest address of the stack) is still
 	// valid. If it is not, a stack overflow has occurred.
 	if *currentTask.state.canaryPtr != stackCanary {

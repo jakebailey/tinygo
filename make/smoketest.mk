@@ -289,9 +289,9 @@ smoketest-rp2xxx: | build/smoke
 	@$(MD5SUM) $(SMOKE_OUT).hex
 	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico -gc=leaking    examples/blinky1
 	@$(MD5SUM) $(SMOKE_OUT).hex
-	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico -scheduler=cores examples/core-assign
+	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico -scheduler=unified -cores=2 examples/core-assign
 	@$(MD5SUM) $(SMOKE_OUT).hex
-	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico2 -scheduler=cores examples/core-assign
+	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico2 -scheduler=unified -cores=2 examples/core-assign
 	@$(MD5SUM) $(SMOKE_OUT).hex
 	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico-w              examples/blinky1
 	@$(MD5SUM) $(SMOKE_OUT).hex
@@ -483,7 +483,7 @@ smoketest-avr: | build/smoke
 	@$(MD5SUM) $(SMOKE_OUT).hex
 	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=arduino-uno         examples/pwm
 	@$(MD5SUM) $(SMOKE_OUT).hex
-	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=arduino-uno -scheduler=tasks  examples/blinky1
+	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=arduino-uno -scheduler=unified -cores=1  examples/blinky1
 	@$(MD5SUM) $(SMOKE_OUT).hex
 	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=arduino-mega1280    examples/blinky1
 	@$(MD5SUM) $(SMOKE_OUT).hex
@@ -525,15 +525,15 @@ ifneq ($(XTENSA), 0)
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic     examples/machinetest
 	@$(MD5SUM) $(SMOKE_OUT).bin
-	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic -scheduler=cores examples/machinetest
+	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic -scheduler=unified -cores=2 examples/machinetest
 	@$(MD5SUM) $(SMOKE_OUT).bin
-	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic -scheduler=cores examples/core-assign
+	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic -scheduler=unified -cores=2 examples/core-assign
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32c3-generic     examples/flash
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic     examples/flash
 	@$(MD5SUM) $(SMOKE_OUT).bin
-	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic -scheduler=cores examples/flash
+	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-generic -scheduler=unified -cores=2 examples/flash
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32-mini32      	examples/blinky1
 	@$(MD5SUM) $(SMOKE_OUT).bin
@@ -606,7 +606,7 @@ ifneq ($(XTENSA), 0)
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=xiao-esp32s3 -tags=usbotg examples/hid-joystick
 	@$(MD5SUM) $(SMOKE_OUT).bin
-	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=xiao-esp32s3 -tags=usbotg -scheduler=cores examples/usb-storage
+	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=xiao-esp32s3 -tags=usbotg -scheduler=unified -cores=2 examples/usb-storage
 	@$(MD5SUM) $(SMOKE_OUT).bin
 	# esp32s3-supermini
 	$(TINYGO) build -size short -o $(SMOKE_OUT).bin -target=esp32s3-supermini	    examples/blinky1
@@ -707,6 +707,12 @@ smoketest-flags: | build/smoke
 	GOOS=windows GOARCH=arm64 $(TINYGO) build -size short -o $(SMOKE_OUT).exe   ./testdata/cgo
 	GOOS=darwin GOARCH=amd64 $(TINYGO) build  -size short -o $(SMOKE_OUT)       ./testdata/cgo
 	GOOS=darwin GOARCH=arm64 $(TINYGO) build  -size short -o $(SMOKE_OUT)       ./testdata/cgo
+	# -scheduler=unified picks a different scheduler for each of these
+	GOOS=windows GOARCH=amd64 $(TINYGO) build -size short -o $(SMOKE_OUT).exe -scheduler=unified ./testdata/channel.go
+	GOOS=darwin GOARCH=arm64 $(TINYGO) build  -size short -o $(SMOKE_OUT)     -scheduler=unified ./testdata/channel.go
+	$(TINYGO) build -size short -o $(SMOKE_OUT).wasm -target=wasip1 -scheduler=unified ./testdata/channel.go
+	$(TINYGO) build -size short -o $(SMOKE_OUT).hex -target=pico2 -scheduler=unified ./testdata/channel.go
+	$(TINYGO) build -size short -o $(SMOKE_OUT)      -scheduler=unified -gc=leaking ./testdata/channel.go
 ifneq ($(OS),Windows_NT)
 	# TODO: this does not yet work on Windows. Somehow, unused functions are
 	# not garbage collected.

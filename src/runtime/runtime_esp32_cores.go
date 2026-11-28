@@ -1,4 +1,4 @@
-//go:build esp32 && scheduler.cores
+//go:build esp32 && exec.multicore
 
 package runtime
 
