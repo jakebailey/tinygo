@@ -928,6 +928,14 @@ func TestConvertBasic(t *testing.T) {
 	}
 }
 
+func TestNilInterfaceComparable(t *testing.T) {
+	var x any
+	v := ValueOf(&x).Elem()
+	if !v.Comparable() {
+		t.Error("nil interface Value.Comparable() = false, want true")
+	}
+}
+
 func TestConvertSliceToArrayOrArrayPointer(t *testing.T) {
 	s := make([]byte, 2, 4)
 	// a0 := [0]byte(s)
