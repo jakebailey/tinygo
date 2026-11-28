@@ -6,6 +6,7 @@ package runtime
 //     https://golang.org/src/runtime/map.go
 
 import (
+	hashmapstate "internal/hashmap"
 	"internal/reflectlite"
 	"tinygo"
 	"unsafe"
@@ -90,16 +91,7 @@ func hashmapSlotValueData(m *hashmap, slotValue unsafe.Pointer) unsafe.Pointer {
 	return slotValue
 }
 
-type hashmapIterator struct {
-	buckets      unsafe.Pointer // pointer to array of hashapBuckets
-	numBuckets   uintptr        // length of buckets array
-	bucketNumber uintptr        // current index into buckets array
-	startBucket  uintptr        // starting location for iterator
-	bucket       *hashmapBucket // current bucket in chain
-	bucketIndex  uint8          // current index into bucket
-	startIndex   uint8          // starting bucket index for iterator
-	wrapped      bool           // true if the iterator has wrapped
-}
+type hashmapIterator = hashmapstate.Iterator
 
 func hashmapNewIterator() unsafe.Pointer {
 	return unsafe.Pointer(new(hashmapIterator))
@@ -498,59 +490,60 @@ func hashmapNext(m *hashmap, it *hashmapIterator, key, value unsafe.Pointer) boo
 		return false
 	}
 
-	if it.buckets == nil {
+	if it.Buckets == nil {
 		// initialize iterator
-		it.buckets = m.buckets
-		it.numBuckets = uintptr(1) << m.bucketBits
-		it.startBucket = uintptr(fastrand()) & (it.numBuckets - 1)
-		it.startIndex = uint8(fastrand() & 7)
+		it.Buckets = m.buckets
+		it.NumBuckets = uintptr(1) << m.bucketBits
+		it.StartBucket = uintptr(fastrand()) & (it.NumBuckets - 1)
+		it.StartIndex = uint8(fastrand() & 7)
 
-		it.bucketNumber = it.startBucket
-		it.bucket = hashmapBucketAddr(m, it.buckets, it.bucketNumber)
-		it.bucketIndex = it.startIndex
+		it.BucketNumber = it.StartBucket
+		it.Bucket = unsafe.Pointer(hashmapBucketAddr(m, it.Buckets, it.BucketNumber))
+		it.BucketIndex = it.StartIndex
 	}
 
 	for {
 		// If we've wrapped and we're back at our starting location, terminate the iteration.
-		if it.wrapped && it.bucketNumber == it.startBucket && it.bucketIndex == it.startIndex {
+		if it.Wrapped && it.BucketNumber == it.StartBucket && it.BucketIndex == it.StartIndex {
 			return false
 		}
 
-		if it.bucketIndex >= 8 {
+		if it.BucketIndex >= 8 {
 			// end of bucket, move to the next in the chain
-			it.bucketIndex = 0
-			it.bucket = it.bucket.next
+			it.BucketIndex = 0
+			it.Bucket = unsafe.Pointer((*hashmapBucket)(it.Bucket).next)
 		}
 
-		if it.bucket == nil {
-			it.bucketNumber++ // next bucket
-			if it.bucketNumber >= it.numBuckets {
+		if it.Bucket == nil {
+			it.BucketNumber++ // next bucket
+			if it.BucketNumber >= it.NumBuckets {
 				// went through all buckets -- wrap around
-				it.bucketNumber = 0
-				it.wrapped = true
+				it.BucketNumber = 0
+				it.Wrapped = true
 			}
-			it.bucket = hashmapBucketAddr(m, it.buckets, it.bucketNumber)
+			it.Bucket = unsafe.Pointer(hashmapBucketAddr(m, it.Buckets, it.BucketNumber))
 			continue
 		}
 
-		if it.bucket.tophash[it.bucketIndex] == 0 {
+		bucket := (*hashmapBucket)(it.Bucket)
+		if bucket.tophash[it.BucketIndex] == 0 {
 			// slot is empty - move on
-			it.bucketIndex++
+			it.BucketIndex++
 			continue
 		}
 
 		// Found a key.
-		slotKey := hashmapSlotKey(m, it.bucket, it.bucketIndex)
+		slotKey := hashmapSlotKey(m, bucket, it.BucketIndex)
 		memcpy(key, hashmapSlotKeyData(m, slotKey), m.keySize)
 
-		if it.buckets == m.buckets {
+		if it.Buckets == m.buckets {
 			// Our view of the buckets is the same as the parent map.
 			// Just copy the value we have
-			slotValue := hashmapSlotValue(m, it.bucket, it.bucketIndex)
+			slotValue := hashmapSlotValue(m, bucket, it.BucketIndex)
 			memcpy(value, hashmapSlotValueData(m, slotValue), m.valueSize)
-			it.bucketIndex++
+			it.BucketIndex++
 		} else {
-			it.bucketIndex++
+			it.BucketIndex++
 
 			// Our view of the buckets doesn't match the parent map.
 			// Look up the key in the new buckets and return that value if it exists
