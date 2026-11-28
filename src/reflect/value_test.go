@@ -936,6 +936,19 @@ func TestNilInterfaceComparable(t *testing.T) {
 	}
 }
 
+func TestNilArrayPointerSeq(t *testing.T) {
+	i := int64(0)
+	for v := range ValueOf((*[3]int)(nil)).Seq() {
+		if v.Int() != i {
+			t.Fatalf("got %d, want %d", v.Int(), i)
+		}
+		i++
+	}
+	if i != 3 {
+		t.Fatalf("got %d iterations, want 3", i)
+	}
+}
+
 func TestConvertSliceToArrayOrArrayPointer(t *testing.T) {
 	s := make([]byte, 2, 4)
 	// a0 := [0]byte(s)
